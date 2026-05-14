@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<title>Zareh Homes — AI Agent</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f2f2f7;color:#1a1a1a;min-height:100vh;}
+.header{background:#1a1a1a;padding:18px 16px 14px;}
+.header h1{font-size:20px;font-weight:700;color:#fff;letter-spacing:-0.3px;}
+.header p{font-size:13px;color:rgba(255,255,255,0.5);margin-top:2px;}
+.main{padding:14px;max-width:520px;margin:0 auto;}
+.card{background:#fff;border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.07);}
+.card-title{font-size:12px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:14px;}
+label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:6px;}
+select,textarea,input[type=text]{width:100%;font-size:16px;font-family:inherit;padding:11px 13px;border:1.5px solid #e5e5e5;border-radius:11px;background:#fafafa;color:#1a1a1a;-webkit-appearance:none;outline:none;transition:border-color 0.15s;}
+select:focus,textarea:focus,input:focus{border-color:#1a1a1a;background:#fff;}
+textarea{min-height:80px;resize:vertical;line-height:1.55;}
+.source-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;}
+.src-btn{padding:11px 8px;border-radius:12px;border:2px solid #e5e5e5;background:#fafafa;font-size:13px;font-weight:600;color:#777;cursor:pointer;text-align:center;transition:all 0.15s;line-height:1.35;}
+.src-btn:active{transform:scale(0.97);}
+.src-btn.sel-fbr{border-color:#1877F2;background:#1877F2;color:#fff;}
+.src-btn.sel-fbb{border-color:#1877F2;background:#1877F2;color:#fff;}
+.src-btn.sel-liv{border-color:#185FA5;background:#185FA5;color:#fff;}
+.src-btn.sel-al{border-color:#166534;background:#166534;color:#fff;}
+.upload-wrap{position:relative;margin-bottom:4px;}
+.upload-area{border:2px dashed #d1d1d6;border-radius:12px;padding:16px;text-align:center;cursor:pointer;background:#fafafa;position:relative;overflow:hidden;transition:all 0.15s;}
+.upload-area.has-img{border-style:solid;border-color:#ccc;padding:8px;}
+.upload-area input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+.up-preview{width:100%;border-radius:8px;display:none;max-height:180px;object-fit:cover;}
+.up-icon{font-size:22px;color:#bbb;margin-bottom:4px;}
+.up-text{font-size:13px;color:#999;font-weight:600;}
+.up-sub{font-size:11px;color:#ccc;margin-top:2px;}
+.clear-img{display:none;position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.55);color:#fff;border:none;border-radius:20px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;z-index:10;}
+.divider{display:flex;align-items:center;gap:10px;margin:12px 0;}
+.divider-line{flex:1;height:1px;background:#ececec;}
+.divider-text{font-size:11px;color:#ccc;font-weight:700;}
+.ch-row{display:flex;gap:7px;}
+.ch-btn{flex:1;padding:10px 0;border-radius:10px;border:1.5px solid #e5e5e5;background:#fafafa;font-size:14px;font-weight:600;color:#999;cursor:pointer;text-align:center;transition:all 0.15s;}
+.ch-btn.on{background:#1a1a1a;color:#fff;border-color:#1a1a1a;}
+.gen-btn{width:100%;margin-top:14px;padding:15px;background:#1a1a1a;color:#fff;font-size:16px;font-weight:700;border:none;border-radius:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity 0.15s,transform 0.1s;}
+.gen-btn:active{opacity:0.82;transform:scale(0.98);}
+.loading-card{background:#fff;border-radius:16px;padding:26px 16px;text-align:center;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.07);display:none;}
+.dots{display:flex;justify-content:center;gap:6px;margin-bottom:10px;}
+.dot{width:8px;height:8px;border-radius:50%;background:#1a1a1a;animation:pulse 1.2s ease-in-out infinite;}
+.dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+@keyframes pulse{0%,80%,100%{opacity:.15}40%{opacity:1}}
+.load-text{font-size:14px;color:#888;font-weight:500;}
+.out-card{background:#fff;border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.07);display:none;}
+.out-label{font-size:11px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;}
+.summary-box{background:#f5f5f7;border-radius:10px;padding:12px;font-size:14px;line-height:1.65;color:#555;margin-bottom:14px;border-left:3px solid #1a1a1a;}
+.reply-box{background:#fafafa;border-radius:10px;padding:13px;font-size:15px;line-height:1.8;color:#1a1a1a;white-space:pre-wrap;border:1.5px solid #ececec;}
+.copy-main{width:100%;margin-top:10px;padding:12px;border-radius:10px;border:1.5px solid #e5e5e5;background:#fff;color:#555;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;}
+.section-label{font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 8px;}
+.tool-row{background:#fff;border-radius:14px;margin-bottom:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);}
+.tool-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;cursor:pointer;}
+.tool-title{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;}
+.t-icon{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+.ic-listing{background:#fef3c7;color:#92400e;}.ic-followup{background:#fce7f3;color:#9d174d;}.ic-email{background:#ede9fe;color:#5b21b6;}.ic-task{background:#d1fae5;color:#065f46;}.ic-funnel{background:#fee2e2;color:#991b1b;}
+.chev{color:#ccc;font-size:18px;transition:transform 0.2s;}
+.chev.open{transform:rotate(180deg);}
+.t-body{display:none;padding:0 16px 16px;border-top:1px solid #f2f2f7;}
+.t-body.open{display:block;}
+.t-body label{margin-top:11px;}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+.t-btn{width:100%;margin-top:13px;padding:13px;background:#1a1a1a;color:#fff;font-size:15px;font-weight:700;border:none;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;}
+.t-btn:active{opacity:0.82;transform:scale(0.98);}
+.t-out{margin-top:11px;background:#f8f8f8;border-radius:10px;padding:12px;font-size:14px;line-height:1.75;color:#1a1a1a;white-space:pre-wrap;display:none;border:1.5px solid #ececec;}
+.t-copy{display:none;width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1.5px solid #e5e5e5;background:#fff;color:#666;font-size:14px;font-weight:500;cursor:pointer;align-items:center;justify-content:center;gap:5px;}
+.t-load{display:none;align-items:center;gap:7px;margin-top:11px;color:#999;font-size:13px;}
+.sd{width:5px;height:5px;border-radius:50%;background:#bbb;animation:pulse 1.2s ease-in-out infinite;}
+.sd:nth-child(2){animation-delay:.2s}.sd:nth-child(3){animation-delay:.4s}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Zareh Homes</h1>
+  <p>AI Agent — Daniel's assistant</p>
+</div>
+
+<div class="main">
+
+  <!-- ── SMART REPLY ── -->
+  <div class="card">
+    <div class="card-title">Smart Reply</div>
+
+    <label>Lead source</label>
+    <div class="source-grid">
+      <button class="src-btn" id="src-fbr" onclick="setSrc('fbr')">Facebook<br>Rental Lead</button>
+      <button class="src-btn" id="src-fbb" onclick="setSrc('fbb')">Facebook<br>Buyer Lead</button>
+      <button class="src-btn" id="src-liv" onclick="setSrc('liv')">Livabl.com<br>Pre-Con Lead</button>
+      <button class="src-btn" id="src-al"  onclick="setSrc('al')">Agent Locator<br>Buyer Lead</button>
+    </div>
+
+    <label>Screenshot <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+    <div class="upload-wrap">
+      <div class="upload-area" id="ua-smart">
+        <input type="file" accept="image/*" onchange="handleImg(event,'smart')"/>
+        <img class="up-preview" id="up-smart"/>
+        <div class="up-ph" id="ph-smart">
+          <div class="up-icon"><i class="ti ti-photo-up"></i></div>
+          <div class="up-text">Tap to upload screenshot</div>
+          <div class="up-sub">Email, text, or lead notification</div>
+        </div>
+      </div>
+      <button class="clear-img" id="clr-smart" onclick="clearImg('smart')">✕ Remove</button>
+    </div>
+
+    <div class="divider"><div class="divider-line"></div><div class="divider-text">AND / OR</div><div class="divider-line"></div></div>
+
+    <label>Paste message text <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+    <textarea id="paste-text" placeholder="Paste the email, text, or lead message here..."></textarea>
+
+    <label style="margin-top:12px;">Extra context <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+    <input type="text" id="extra-ctx" placeholder="e.g. spoke last week, first-time buyer, has home to sell"/>
+
+    <label style="margin-top:12px;">Reply as</label>
+    <div class="ch-row">
+      <button class="ch-btn on" id="ch-email" onclick="setCh('email')">Email</button>
+      <button class="ch-btn" id="ch-text"  onclick="setCh('text')">Text</button>
+      <button class="ch-btn" id="ch-both"  onclick="setCh('both')">Both</button>
+    </div>
+
+    <button class="gen-btn" onclick="smartReply()"><i class="ti ti-sparkles"></i> Generate Reply</button>
+  </div>
+
+  <div class="loading-card" id="loading-card">
+    <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+    <div class="load-text" id="load-text">Reading message...</div>
+  </div>
+
+  <div class="out-card" id="out-card">
+    <div class="out-label">What's going on</div>
+    <div class="summary-box" id="out-summary"></div>
+    <div class="out-label">Your reply</div>
+    <div class="reply-box" id="out-reply"></div>
+    <button class="copy-main" onclick="cpMain()"><i class="ti ti-copy"></i> Copy reply</button>
+  </div>
+
+  <div class="section-label">More Tools</div>
+
+  <!-- ── LISTING COPY ── -->
+  <div class="tool-row">
+    <div class="tool-hdr" onclick="tog('listing')">
+      <div class="tool-title"><div class="t-icon ic-listing"><i class="ti ti-home"></i></div>Listing Copy</div>
+      <i class="ti ti-chevron-down chev" id="chev-listing"></i>
+    </div>
+    <div class="t-body" id="tb-listing">
+      <label>Screenshot of property / notes <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+      <div class="upload-wrap">
+        <div class="upload-area" id="ua-listing">
+          <input type="file" accept="image/*" onchange="handleImg(event,'listing')"/>
+          <img class="up-preview" id="up-listing"/>
+          <div class="up-ph" id="ph-listing">
+            <div class="up-icon"><i class="ti ti-photo-up"></i></div>
+            <div class="up-text">Upload property photo or notes</div>
+          </div>
+        </div>
+        <button class="clear-img" id="clr-listing" onclick="clearImg('listing')">✕ Remove</button>
+      </div>
+      <div class="row2">
+        <div><label>Address</label><input type="text" id="li-addr" placeholder="223 Jackson, Hamilton"/></div>
+        <div><label>Type</label><select id="li-type"><option>Condo</option><option>Townhome</option><option>Detached</option><option>Semi</option><option>Investment</option></select></div>
+      </div>
+      <div class="row2">
+        <div><label>Beds / Baths</label><input type="text" id="li-beds" placeholder="2 bed / 2 bath"/></div>
+        <div><label>Price</label><input type="text" id="li-price" placeholder="$499,900"/></div>
+      </div>
+      <label>Key features</label>
+      <textarea id="li-feat" placeholder="parking, terrace, GO station, 700 sqft..." style="min-height:65px;"></textarea>
+      <label>Output</label>
+      <select id="li-out"><option>MLS remarks</option><option>Facebook post</option><option>Both MLS + Facebook</option><option>Livabl description</option></select>
+      <button class="t-btn" onclick="runTool('listing')"><i class="ti ti-sparkles"></i> Generate</button>
+      <div class="t-load" id="tl-listing"><div class="sd"></div><div class="sd"></div><div class="sd"></div><span>Generating...</span></div>
+      <div class="t-out" id="to-listing"></div>
+      <button class="t-copy" id="tc-listing" onclick="cpTool('listing')"><i class="ti ti-copy"></i> Copy</button>
+    </div>
+  </div>
+
+  <!-- ── FOLLOW-UP ── -->
+  <div class="tool-row">
+    <div class="tool-hdr" onclick="tog('followup')">
+      <div class="tool-title"><div class="t-icon ic-followup"><i class="ti ti-repeat"></i></div>Follow-Up Sequence</div>
+      <i class="ti ti-chevron-down chev" id="chev-followup"></i>
+    </div>
+    <div class="t-body" id="tb-followup">
+      <label>Screenshot of conversation <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+      <div class="upload-wrap">
+        <div class="upload-area" id="ua-followup">
+          <input type="file" accept="image/*" onchange="handleImg(event,'followup')"/>
+          <img class="up-preview" id="up-followup"/>
+          <div class="up-ph" id="ph-followup">
+            <div class="up-icon"><i class="ti ti-photo-up"></i></div>
+            <div class="up-text">Upload screenshot of your conversation</div>
+          </div>
+        </div>
+        <button class="clear-img" id="clr-followup" onclick="clearImg('followup')">✕ Remove</button>
+      </div>
+      <label>Client name</label><input type="text" id="fu-name" placeholder="e.g. Leena"/>
+      <label>Situation <span style="color:#bbb;font-weight:400;">(or let the screenshot speak)</span></label>
+      <textarea id="fu-sit" placeholder="e.g. Saw Binbrook last week, on the fence, no reply to last text..."></textarea>
+      <div class="row2">
+        <div><label>Channel</label><select id="fu-ch"><option>Text</option><option>Email</option><option>Text + Email</option></select></div>
+        <div><label>Touches</label><select id="fu-touches"><option>3-touch</option><option>5-touch</option><option>Just next message</option></select></div>
+      </div>
+      <button class="t-btn" onclick="runTool('followup')"><i class="ti ti-sparkles"></i> Build sequence</button>
+      <div class="t-load" id="tl-followup"><div class="sd"></div><div class="sd"></div><div class="sd"></div><span>Generating...</span></div>
+      <div class="t-out" id="to-followup"></div>
+      <button class="t-copy" id="tc-followup" onclick="cpTool('followup')"><i class="ti ti-copy"></i> Copy</button>
+    </div>
+  </div>
+
+  <!-- ── EMAIL DRAFT ── -->
+  <div class="tool-row">
+    <div class="tool-hdr" onclick="tog('email')">
+      <div class="tool-title"><div class="t-icon ic-email"><i class="ti ti-mail"></i></div>Email Draft</div>
+      <i class="ti ti-chevron-down chev" id="chev-email"></i>
+    </div>
+    <div class="t-body" id="tb-email">
+      <label>Screenshot of email / thread <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+      <div class="upload-wrap">
+        <div class="upload-area" id="ua-email">
+          <input type="file" accept="image/*" onchange="handleImg(event,'email')"/>
+          <img class="up-preview" id="up-email"/>
+          <div class="up-ph" id="ph-email">
+            <div class="up-icon"><i class="ti ti-photo-up"></i></div>
+            <div class="up-text">Upload screenshot of the email or thread</div>
+          </div>
+        </div>
+        <button class="clear-img" id="clr-email" onclick="clearImg('email')">✕ Remove</button>
+      </div>
+      <label>Email type</label>
+      <select id="em-type">
+        <option>Client options (pre-con or resale)</option>
+        <option>Lockbox / showing request</option>
+        <option>Offer to landlord</option>
+        <option>Follow-up after showing</option>
+        <option>Intro / first touch</option>
+        <option>Custom</option>
+      </select>
+      <label>Client name</label><input type="text" id="em-name" placeholder="e.g. Mustafa"/>
+      <label>Key details <span style="color:#bbb;font-weight:400;">(or let the screenshot speak)</span></label>
+      <textarea id="em-det" placeholder="e.g. Sending options for Abacot Hill, investor, 1+den or 2 bed, ~$600K"></textarea>
+      <button class="t-btn" onclick="runTool('email')"><i class="ti ti-sparkles"></i> Draft email</button>
+      <div class="t-load" id="tl-email"><div class="sd"></div><div class="sd"></div><div class="sd"></div><span>Generating...</span></div>
+      <div class="t-out" id="to-email"></div>
+      <button class="t-copy" id="tc-email" onclick="cpTool('email')"><i class="ti ti-copy"></i> Copy</button>
+    </div>
+  </div>
+
+  <!-- ── PRIORITIZE DAY ── -->
+  <div class="tool-row">
+    <div class="tool-hdr" onclick="tog('task')">
+      <div class="tool-title"><div class="t-icon ic-task"><i class="ti ti-list-check"></i></div>Prioritize My Day</div>
+      <i class="ti ti-chevron-down chev" id="chev-task"></i>
+    </div>
+    <div class="t-body" id="tb-task">
+      <label>Screenshot of your to-do list <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+      <div class="upload-wrap">
+        <div class="upload-area" id="ua-task">
+          <input type="file" accept="image/*" onchange="handleImg(event,'task')"/>
+          <img class="up-preview" id="up-task"/>
+          <div class="up-ph" id="ph-task">
+            <div class="up-icon"><i class="ti ti-photo-up"></i></div>
+            <div class="up-text">Screenshot your notes or task list</div>
+          </div>
+        </div>
+        <button class="clear-img" id="clr-task" onclick="clearImg('task')">✕ Remove</button>
+      </div>
+      <label>Paste your to-do list <span style="color:#bbb;font-weight:400;">(or type it)</span></label>
+      <textarea id="ta-list" placeholder="Paste everything on your plate..." style="min-height:90px;"></textarea>
+      <label>Any constraints?</label>
+      <input type="text" id="ta-ctx" placeholder="e.g. showing at 2pm, call Mike by noon"/>
+      <button class="t-btn" onclick="runTool('task')"><i class="ti ti-sparkles"></i> Prioritize</button>
+      <div class="t-load" id="tl-task"><div class="sd"></div><div class="sd"></div><div class="sd"></div><span>Generating...</span></div>
+      <div class="t-out" id="to-task"></div>
+      <button class="t-copy" id="tc-task" onclick="cpTool('task')"><i class="ti ti-copy"></i> Copy</button>
+    </div>
+  </div>
+
+  <!-- ── FUNNEL BUILDER ── -->
+  <div class="tool-row">
+    <div class="tool-hdr" onclick="tog('funnel')">
+      <div class="tool-title"><div class="t-icon ic-funnel"><i class="ti ti-filter"></i></div>Funnel Builder</div>
+      <i class="ti ti-chevron-down chev" id="chev-funnel"></i>
+    </div>
+    <div class="t-body" id="tb-funnel">
+      <label>Screenshot of project / area <span style="color:#bbb;font-weight:400;">(optional)</span></label>
+      <div class="upload-wrap">
+        <div class="upload-area" id="ua-funnel">
+          <input type="file" accept="image/*" onchange="handleImg(event,'funnel')"/>
+          <img class="up-preview" id="up-funnel"/>
+          <div class="up-ph" id="ph-funnel">
+            <div class="up-icon"><i class="ti ti-photo-up"></i></div>
+            <div class="up-text">Upload project info or area screenshot</div>
+          </div>
+        </div>
+        <button class="clear-img" id="clr-funnel" onclick="clearImg('funnel')">✕ Remove</button>
+      </div>
+      <div class="row2">
+        <div><label>Market</label><input type="text" id="fn-area" placeholder="e.g. Grimsby"/></div>
+        <div><label>Buyer type</label><select id="fn-buyer"><option>First-time buyer</option><option>Investor</option><option>Upsizer</option><option>Pre-con buyer</option><option>General</option></select></div>
+      </div>
+      <label>Hook / offer</label>
+      <input type="text" id="fn-hook" placeholder="e.g. Free market report, new listings alert"/>
+      <label>Projects to feature</label>
+      <input type="text" id="fn-props" placeholder="e.g. Abacot Hill, lakefront condos"/>
+      <button class="t-btn" onclick="runTool('funnel')"><i class="ti ti-sparkles"></i> Build funnel</button>
+      <div class="t-load" id="tl-funnel"><div class="sd"></div><div class="sd"></div><div class="sd"></div><span>Generating...</span></div>
+      <div class="t-out" id="to-funnel"></div>
+      <button class="t-copy" id="tc-funnel" onclick="cpTool('funnel')"><i class="ti ti-copy"></i> Copy</button>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+let selSrc='', selCh='email';
+const imgs={smart:{b64:'',mime:''},listing:{b64:'',mime:''},followup:{b64:'',mime:''},email:{b64:'',mime:''},task:{b64:'',mime:''},funnel:{b64:'',mime:''}};
+
+const srcInstructions={
+  fbr:`This is a Facebook Marketplace or Facebook page RENTAL lead. They saw a rental listing Daniel posted and reached out. They want to rent — not buy. Daniel's goals: qualify them fast (what are they looking for, budget, move-in date, employment), and if they qualify move toward booking a showing. Keep it friendly and quick. Don't pitch buying unless they bring it up first.`,
+  fbb:`This is a Facebook BUYER lead. They saw a property post or ad on Daniel's Facebook and reached out. They want to buy. Daniel's goals: start a real conversation, qualify them (what they're looking for, budget, pre-approved, first-time buyer or have something to sell), and move toward a call or showing. Warm and consultative — never salesy.`,
+  liv:`This is a Livabl.com PRE-CONSTRUCTION lead. They registered on a specific pre-con project on livabl.com — already ruled out resale. Higher intent. Speed matters. Daniel's goals: acknowledge the specific project (if mentioned), position as pre-con expert, ask 1-2 smart qualifying questions (timeline, budget, end-use, property to sell?), and move toward a call. Never overwhelm in the first message.`,
+  al:`This is an Agent Locator BUYER lead. These buyers are actively looking for an agent. They may be early stage or ready to move. Daniel's goals: respond fast, establish credibility, ask qualifying questions (what they want, budget, timeline, pre-approved?), and move toward a call or showing. Warm, confident, consultative.`
+};
+
+function setSrc(s){
+  selSrc=s;
+  ['fbr','fbb','liv','al'].forEach(k=>{
+    document.getElementById('src-'+k).className='src-btn'+(k===s?' sel-'+k:'');
+  });
+}
+
+function setCh(c){
+  selCh=c;
+  ['email','text','both'].forEach(k=>document.getElementById('ch-'+k).classList.toggle('on',k===c));
+}
+
+function handleImg(e,id){
+  const file=e.target.files[0]; if(!file) return;
+  imgs[id].mime=file.type;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    imgs[id].b64=ev.target.result.split(',')[1];
+    const prev=document.getElementById('up-'+id);
+    prev.src=ev.target.result; prev.style.display='block';
+    document.getElementById('ph-'+id).style.display='none';
+    document.getElementById('ua-'+id).classList.add('has-img');
+    document.getElementById('clr-'+id).style.display='block';
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearImg(id){
+  imgs[id]={b64:'',mime:''};
+  const prev=document.getElementById('up-'+id);
+  prev.src=''; prev.style.display='none';
+  document.getElementById('ph-'+id).style.display='block';
+  document.getElementById('ua-'+id).classList.remove('has-img');
+  document.getElementById('clr-'+id).style.display='none';
+  const input=document.querySelector('#ua-'+id+' input[type=file]');
+  if(input) input.value='';
+}
+
+function cpMain(){
+  navigator.clipboard.writeText(document.getElementById('out-reply').innerText).then(()=>{
+    const btn=document.querySelector('.copy-main');
+    btn.innerHTML='<i class="ti ti-check"></i> Copied!';
+    setTimeout(()=>{btn.innerHTML='<i class="ti ti-copy"></i> Copy reply';},2000);
+  });
+}
+
+function cpTool(id){
+  navigator.clipboard.writeText(document.getElementById('to-'+id).innerText).then(()=>{
+    const btn=document.getElementById('tc-'+id);
+    btn.innerHTML='<i class="ti ti-check"></i> Copied';
+    setTimeout(()=>{btn.innerHTML='<i class="ti ti-copy"></i> Copy';},2000);
+  });
+}
+
+function tog(id){
+  const b=document.getElementById('tb-'+id),c=document.getElementById('chev-'+id);
+  const open=b.classList.contains('open');
+  b.classList.toggle('open',!open);
+  if(c) c.classList.toggle('open',!open);
+}
+
+const SYS=`You are an AI assistant for Daniel from Zareh Homes — 18+ years real estate across GTA, Hamilton, Stoney Creek, Grimsby, Oakville, Burlington, Milton, Mississauga. Write in Daniel's exact voice: clear, direct, natural, warm — never corporate, never salesy. Short sentences. Conversational. Phrases like "Not saying this is the one, but...", "Just so you have the full picture...", "Happy to walk you through it", "At the end of the day...", "I just want to make sure you're making the right decision". Always move toward a call, showing, or next step. Soft CTAs only. Expert in pre-con, negotiation, investment properties, OREA/TRREB.`;
+
+async function callClaude(messages){
+  const r=await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,system:SYS,messages})
+  });
+  const d=await r.json();
+  return d.content?.[0]?.text||'Something went wrong. Try again.';
+}
+
+function buildContent(id,promptText){
+  const content=[];
+  if(imgs[id].b64) content.push({type:'image',source:{type:'base64',media_type:imgs[id].mime,data:imgs[id].b64}});
+  content.push({type:'text',text:promptText});
+  return content;
+}
+
+async function smartReply(){
+  const txt=document.getElementById('paste-text').value.trim();
+  const ctx=document.getElementById('extra-ctx').value.trim();
+  if(!selSrc){alert('Please select a lead source.');return;}
+  if(!imgs.smart.b64&&!txt){alert('Please upload a screenshot or paste the message.');return;}
+
+  document.getElementById('out-card').style.display='none';
+  document.getElementById('loading-card').style.display='block';
+
+  const loadMsgs=['Reading message...','Figuring out the situation...','Drafting your reply...'];
+  let li=0;
+  const lt=setInterval(()=>{li=(li+1)%loadMsgs.length;document.getElementById('load-text').textContent=loadMsgs[li];},1800);
+
+  const chNote=selCh==='both'?'Write BOTH a short text AND an email with subject line, clearly labeled TEXT: and EMAIL:.':selCh==='text'?'Write a short text only — 2-3 sentences max.':'Write an email with a subject line.';
+  const srcName=selSrc==='fbr'?'Facebook Rental Lead':selSrc==='fbb'?'Facebook Buyer Lead':selSrc==='liv'?'Livabl.com Pre-Con Lead':'Agent Locator Buyer Lead';
+
+  const prompt=`Daniel received a message from: ${srcName}
+
+LEAD SOURCE CONTEXT:
+${srcInstructions[selSrc]}
+
+${txt?`MESSAGE:\n"${txt}"\n`:''}${ctx?`EXTRA CONTEXT: ${ctx}\n`:''}${imgs.smart.b64?'A screenshot is attached — read it and extract all relevant info.\n':''}
+Respond with two clearly labeled sections:
+
+SUMMARY: (2-3 sentences — who this is, what they want, what stage they're at, key details from the message or screenshot)
+
+REPLY: (Daniel's reply in his voice)
+Format: ${chNote}`;
+
+  try{
+    const result=await callClaude([{role:'user',content:buildContent('smart',prompt)}]);
+    clearInterval(lt);
+    const sumM=result.match(/SUMMARY:\s*([\s\S]*?)(?=REPLY:|$)/i);
+    const repM=result.match(/REPLY:\s*([\s\S]*?)$/i);
+    document.getElementById('out-summary').textContent=sumM?sumM[1].trim():'';
+    document.getElementById('out-reply').textContent=repM?repM[1].trim():result;
+    document.getElementById('loading-card').style.display='none';
+    document.getElementById('out-card').style.display='block';
+    document.getElementById('out-card').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){
+    clearInterval(lt);
+    document.getElementById('loading-card').style.display='none';
+    alert('Something went wrong. Check your connection and try again.');
+  }
+}
+
+async function runTool(type){
+  const loadEl=document.getElementById('tl-'+type),outEl=document.getElementById('to-'+type),copyEl=document.getElementById('tc-'+type);
+  loadEl.style.display='flex'; outEl.style.display='none'; copyEl.style.display='none';
+
+  let p='';
+  const hasImg=imgs[type].b64?'A screenshot is attached — read it carefully and use any relevant info from it.\n':'';
+
+  if(type==='listing'){
+    const out=document.getElementById('li-out').value;
+    p=`${hasImg}Write ${out} for Daniel's listing.\nAddress: ${document.getElementById('li-addr').value||'(see screenshot)'}\nType: ${document.getElementById('li-type').value}\nBeds/Baths: ${document.getElementById('li-beds').value}\nPrice: ${document.getElementById('li-price').value}\nFeatures: ${document.getElementById('li-feat').value}\n${out.includes('MLS')?'MLS remarks: max 500 chars, no contact info, punchy and descriptive.':''} ${out.includes('Facebook')?'Facebook post: conversational, engaging, short, CTA to DM Daniel.':''} ${out.includes('Livabl')?'Livabl description: 150-200 words, investor-friendly angle where relevant.':''}`;
+  } else if(type==='followup'){
+    p=`${hasImg}Build a ${document.getElementById('fu-touches').value} follow-up sequence for Daniel via ${document.getElementById('fu-ch').value}.\nClient: ${document.getElementById('fu-name').value||'(see screenshot)'}\nSituation: ${document.getElementById('fu-sit').value||'(read from screenshot)'}\nLabel each touch (Touch 1 — Day X). Daniel's voice — natural, not pushy. Short messages. Move toward a response or next step.`;
+  } else if(type==='email'){
+    p=`${hasImg}Write a ${document.getElementById('em-type').value} email for Daniel to send to ${document.getElementById('em-name').value||'the client'}.\nDetails: ${document.getElementById('em-det').value||'(read from screenshot)'}\nInclude subject line. Short, direct, human. Move toward a clear next step.`;
+  } else if(type==='task'){
+    p=`${hasImg}Prioritize Daniel's day. His money is made on calls and client conversations — admin is secondary.\nTo-do list:\n${document.getElementById('ta-list').value||'(read from screenshot)'}\n${document.getElementById('ta-ctx').value?'Context: '+document.getElementById('ta-ctx').value:''}\nGive: top 3 calls first (one-line reason each), admin to batch, what to defer, realistic day order. Tight and practical.`;
+  } else if(type==='funnel'){
+    p=`${hasImg}Build a 5-touch lead nurture funnel for Daniel targeting ${document.getElementById('fn-buyer').value}s in ${document.getElementById('fn-area').value||'(see screenshot)'}.\nHook: ${document.getElementById('fn-hook').value}\nProjects: ${document.getElementById('fn-props').value||'none specified'}\nMix of text and email. Label each touch with timing, channel, and the full message. Daniel's voice. Goal: cold lead to booked call or showing.`;
+  }
+
+  try{
+    const result=await callClaude([{role:'user',content:buildContent(type,p)}]);
+    outEl.textContent=result; outEl.style.display='block'; copyEl.style.display='flex';
+  }catch(e){
+    outEl.textContent='Something went wrong. Try again.'; outEl.style.display='block';
+  }
+  loadEl.style.display='none';
+}
+</script>
+</body>
+</html>
