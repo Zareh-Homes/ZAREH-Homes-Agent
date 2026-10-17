@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens as RGB channels. Status colours are fixed across themes and
+   always ship with an icon + label, never colour alone. */
+:root {
+  color-scheme: light;
+  --surface-page: 246 247 249;
+  --surface-card: 255 255 255;
+  --surface-sunken: 241 243 246;
+  --line: 223 226 231;
+  --ink: 11 11 11;
+  --ink-2: 82 81 78;
+  --ink-3: 112 111 106;
+  --accent: 42 120 214;        /* #2a78d6 */
+  --accent-track: 219 232 248; /* lighter step of the same blue */
+  --on-accent: 255 255 255;
+  --good: 12 163 12;           /* #0ca30c */
+  --warning: 250 178 25;       /* #fab219 */
+  --serious: 236 131 90;       /* #ec835a */
+  --critical: 208 59 59;       /* #d03b3b */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-page: 17 17 16;
+    --surface-card: 26 26 25;
+    --surface-sunken: 33 33 31;
+    --line: 52 52 49;
+    --ink: 240 239 236;
+    --ink-2: 195 194 183;
+    --ink-3: 150 149 141;
+    --accent: 57 135 229;      /* #3987e5 */
+    --accent-track: 30 52 82;
+    --on-accent: 11 11 11;     /* white on the dark-mode blue is under 4.5:1 */
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-page: 17 17 16;
+  --surface-card: 26 26 25;
+  --surface-sunken: 33 33 31;
+  --line: 52 52 49;
+  --ink: 240 239 236;
+  --ink-2: 195 194 183;
+  --ink-3: 150 149 141;
+  --accent: 57 135 229;
+  --accent-track: 30 52 82;
+  --on-accent: 11 11 11;
+}

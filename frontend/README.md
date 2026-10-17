@@ -1,6 +1,32 @@
-# Zareh Homes back office: client state
+# Zareh Homes back office: frontend
 
-Framework-agnostic TypeScript, no runtime dependencies. Screens read state through selectors and call the controller; they never call `fetch` themselves.
+React 18 + Tailwind CSS 3 (Vite).
+
+## Dashboard
+
+```
+src/dashboard/
+  types.ts                     GET /api/dashboard response
+  useDashboard.ts              loads it (session cookie)
+  format.ts                    money / date formatting
+  components/ui.tsx            Panel, StatTile, StatusBadge, Meter, EmptyState
+  components/AdminDashboard.tsx  financial summary, trust widget, FINTRAC exception queue
+  components/AgentDashboard.tsx  personal analytics, PREC tax tracker, cap tracker, documents sent back
+  components/Dashboard.tsx     picks the layout from the role; brokers who also sell get a toggle
+  demo-data.ts                 fictional data for previews and tests
+```
+
+```bash
+npm run dev          # http://localhost:5173, proxies /api to the backend on :3000
+                     # add ?demo=admin | agent | broker to preview with demo data, &theme=dark for dark mode
+npm run build        # demo data is excluded unless VITE_ENABLE_DEMO=true
+```
+
+Colours are tokens in `src/index.css` (light and dark chosen separately, `data-theme` overrides the OS setting). Status colours always come with an icon and a text label.
+
+## Compliance module state
+
+Framework-agnostic TypeScript. Screens read state through selectors and call the controller; they never call `fetch` themselves.
 
 ```
 src/compliance/
@@ -56,6 +82,6 @@ Start live notifications once after sign-in: `const stop = await compliance.star
 
 ```bash
 npm install
-npm test
+npm test            # state tests (node:test) + component tests (Vitest)
 npm run typecheck
 ```

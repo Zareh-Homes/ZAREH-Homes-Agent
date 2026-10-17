@@ -115,3 +115,14 @@ The closing math is in `src/closing/calculate.ts` (pure function, documented ste
 | `GCI_SHARES_INVALID` | Co-listing agents' GCI shares don't add up to 100% |
 
 Agent splits come from the deal (`TransactionAgent.splitPct`); the annual cap and per-deal fees come from the agent's `CommissionPlan`. Cap year-to-date totals come from earlier finalized closings.
+
+## Dashboard endpoint
+
+`GET /api/dashboard` returns the signed-in user's dashboard. Which sections come back depends on their role:
+
+| Section | Roles | Contents |
+|---|---|---|
+| `brokerage` | Admin, compliance admin, managing broker | Company dollar, closed volume and HST to remit (YTD); trust balance per account; deals past closing still holding trust funds; firm deals closing within 14 days (or overdue) without FINTRAC approval |
+| `personal` | Agent, managing broker | Volume, gross GCI and net payouts (YTD); PREC HST received; cap progress; documents sent back with the reviewer's comment |
+
+Money is integer cents (`…Cents`). Financial figures come from finalized closings, so they always match the issued CDAs.
