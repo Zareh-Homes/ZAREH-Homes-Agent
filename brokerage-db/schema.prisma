@@ -1,0 +1,401 @@
+// Zareh Homes – internal brokerage back office (Lone Wolf / SkySlope replacement)
+// PostgreSQL. Money is Decimal(12,2). Ontario context: RECO trust rules, TRESA, FINTRAC.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  MANAGING_BROKER // Broker of Record – signs trust receipts, approves disbursements
+  FILE_REVIEWER // Deal admin – reviews documents
+  AGENT
+}
+
+enum ListingStatus {
+  ACTIVE
+  PENDING // conditional / firm, not yet closed
+  CLOSED
+  CANCELLED
+  EXPIRED
+}
+
+enum PropertyType {
+  DETACHED
+  SEMI_DETACHED
+  TOWNHOUSE
+  CONDO_APARTMENT
+  CONDO_TOWNHOUSE
+  PRE_CONSTRUCTION
+  MULTIPLEX
+  COMMERCIAL
+  LAND
+  OTHER
+}
+
+enum DealSide {
+  LISTING // seller side
+  BUYER
+  DUAL // both sides, same brokerage
+  LANDLORD
+  TENANT
+}
+
+enum DealStatus {
+  CONDITIONAL
+  FIRM
+  CLOSED
+  COLLAPSED
+  CANCELLED
+}
+
+enum DepositStatus {
+  NOT_DUE
+  AWAITING // due, not received
+  RECEIVED // in our trust account
+  HELD_ELSEWHERE // held by co-op brokerage, lawyer or builder
+  RELEASED // disbursed at closing
+  REFUNDED // returned (collapsed deal, mutual release)
+}
+
+enum DepositHolder {
+  OUR_BROKERAGE
+  COOP_BROKERAGE
+  LAWYER
+  BUILDER
+}
+
+enum DealAgentRole {
+  PRIMARY
+  CO_AGENT
+  REFERRAL
+}
+
+enum PartyRole {
+  SELLER
+  BUYER
+  LANDLORD
+  TENANT
+  SELLER_LAWYER
+  BUYER_LAWYER
+  COOP_BROKERAGE
+}
+
+enum TrustEntryType {
+  DEPOSIT_RECEIVED
+  DISBURSEMENT_TO_GENERAL // commission earned, moved to general account on close
+  DISBURSEMENT_TO_COOP
+  REFUND_TO_PAYER
+  REVERSAL // corrects a prior entry; entries are never edited or deleted
+}
+
+enum PaymentMethod {
+  CHEQUE
+  BANK_DRAFT
+  EFT
+  WIRE
+}
+
+enum DocumentStatus {
+  MISSING // slot exists, nothing uploaded
+  PENDING // uploaded, awaiting review
+  APPROVED
+  REJECTED
+  WAIVED // not applicable to this deal, approved by reviewer
+}
+
+// ─────────────────────────────────────────────
+// 1. Users & roles
+// ─────────────────────────────────────────────
+
+model User {
+  id                 String   @id @default(uuid()) @db.Uuid
+  email              String   @unique
+  firstName          String
+  lastName           String
+  phone              String?
+  role               UserRole @default(AGENT)
+  recoRegistrationNo String?  @unique
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  listings           Listing[]             @relation("ListingAgent")
+  dealAgents         TransactionAgent[]
+  reviewedDocuments  DocumentSlot[]        @relation("Reviewer")
+  uploadedFiles      DocumentFile[]
+  trustEntriesMade   TrustLedgerEntry[]    @relation("EnteredBy")
+  trustEntriesSigned TrustLedgerEntry[]    @relation("ApprovedBy")
+  reconciliations    TrustReconciliation[]
+  auditLogs          AuditLog[]
+
+  @@index([role, isActive])
+}
+
+// ─────────────────────────────────────────────
+// 2. Listings
+// ─────────────────────────────────────────────
+
+model Listing {
+  id             String        @id @default(uuid()) @db.Uuid
+  mlsNumber      String?       @unique // null until posted (e.g. exclusive)
+  streetAddress  String
+  unit           String?
+  city           String
+  province       String        @default("ON")
+  postalCode     String?
+  propertyType   PropertyType
+  listPrice      Decimal       @db.Decimal(12, 2)
+  status         ListingStatus @default(ACTIVE)
+  listingDate    DateTime      @db.Date
+  expiryDate     DateTime?     @db.Date
+  listingAgentId String        @db.Uuid
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  listingAgent  User           @relation("ListingAgent", fields: [listingAgentId], references: [id])
+  transactions  Transaction[]
+  documentSlots DocumentSlot[]
+
+  @@index([status])
+  @@index([listingAgentId, status])
+  @@index([city])
+  @@index([listingDate])
+}
+
+// ─────────────────────────────────────────────
+// 3. Transactions (deals)
+// ─────────────────────────────────────────────
+
+model Transaction {
+  id            String     @id @default(uuid()) @db.Uuid
+  dealNumber    String     @unique // e.g. 2026-0142, used on the trade record sheet
+  side          DealSide
+  status        DealStatus @default(CONDITIONAL)
+  listingId     String?    @db.Uuid // set when it's one of our listings
+  streetAddress String // copied so buy-side deals need no Listing row
+  unit          String?
+  city          String
+  mlsNumber     String?
+
+  salePrice         Decimal   @db.Decimal(12, 2)
+  offerDate         DateTime  @db.Date
+  conditionsDueDate DateTime? @db.Date
+  firmDate          DateTime? @db.Date
+  closeDate         DateTime  @db.Date
+
+  depositAmount  Decimal       @db.Decimal(12, 2)
+  depositDueDate DateTime?     @db.Date
+  depositHolder  DepositHolder
+  depositStatus  DepositStatus @default(AWAITING)
+
+  totalGci          Decimal  @db.Decimal(12, 2) // gross commission to our brokerage, pre-split
+  commissionRatePct Decimal? @db.Decimal(5, 3)
+  coopBrokerageName String?
+  coopAgentName     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  listing       Listing?           @relation(fields: [listingId], references: [id])
+  agents        TransactionAgent[]
+  parties       TransactionParty[]
+  trustEntries  TrustLedgerEntry[]
+  documentSlots DocumentSlot[]
+
+  @@index([status])
+  @@index([closeDate])
+  @@index([listingId])
+  @@index([depositStatus, depositDueDate])
+}
+
+// Agent split per deal (supports co-listing, teams, referrals)
+model TransactionAgent {
+  id            String        @id @default(uuid()) @db.Uuid
+  transactionId String        @db.Uuid
+  userId        String        @db.Uuid
+  role          DealAgentRole @default(PRIMARY)
+  splitPct      Decimal       @db.Decimal(5, 2) // agent's share of their portion of GCI
+  grossShare    Decimal       @db.Decimal(12, 2)
+  brokerageFee  Decimal       @default(0) @db.Decimal(12, 2)
+  netPayout     Decimal       @db.Decimal(12, 2)
+  paidAt        DateTime?
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id])
+
+  @@unique([transactionId, userId])
+  @@index([userId])
+}
+
+// Buyers, sellers, lawyers – also drives FINTRAC ID records
+model TransactionParty {
+  id                  String    @id @default(uuid()) @db.Uuid
+  transactionId       String    @db.Uuid
+  role                PartyRole
+  fullName            String
+  email               String?
+  phone               String?
+  fintracIdVerifiedAt DateTime?
+  fintracIdMethod     String? // e.g. "Government photo ID", "Dual process"
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId, role])
+}
+
+// ─────────────────────────────────────────────
+// 4. Trust / escrow ledger (append-only)
+// ─────────────────────────────────────────────
+
+model TrustAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String // e.g. "Real Estate Trust – TD"
+  bankName     String
+  accountLast4 String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  entries         TrustLedgerEntry[]
+  reconciliations TrustReconciliation[]
+}
+
+model TrustLedgerEntry {
+  id              String         @id @default(uuid()) @db.Uuid
+  trustAccountId  String         @db.Uuid
+  transactionId   String         @db.Uuid
+  entryType       TrustEntryType
+  amount          Decimal        @db.Decimal(12, 2) // always positive; direction comes from entryType
+  method          PaymentMethod
+  referenceNo     String? // cheque # / EFT trace
+  receiptNumber   Int?           @unique // sequential trust receipt # (deposits only)
+  counterparty    String // payer on deposits, payee on disbursements
+  effectiveDate   DateTime       @db.Date // date funds hit / left the bank
+  memo            String?
+  reversesEntryId String?        @unique @db.Uuid
+  enteredById     String         @db.Uuid
+  approvedById    String?        @db.Uuid // Broker of Record sign-off
+  approvedAt      DateTime?
+  bankMatchedAt   DateTime? // matched to a bank feed line
+  createdAt       DateTime       @default(now())
+
+  trustAccount TrustAccount      @relation(fields: [trustAccountId], references: [id])
+  transaction  Transaction       @relation(fields: [transactionId], references: [id])
+  reverses     TrustLedgerEntry? @relation("Reversal", fields: [reversesEntryId], references: [id])
+  reversedBy   TrustLedgerEntry? @relation("Reversal")
+  enteredBy    User              @relation("EnteredBy", fields: [enteredById], references: [id])
+  approvedBy   User?             @relation("ApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([transactionId, effectiveDate])
+  @@index([trustAccountId, effectiveDate])
+  @@index([bankMatchedAt])
+}
+
+model TrustReconciliation {
+  id               String   @id @default(uuid()) @db.Uuid
+  trustAccountId   String   @db.Uuid
+  periodEnd        DateTime @db.Date
+  bankBalance      Decimal  @db.Decimal(12, 2)
+  ledgerBalance    Decimal  @db.Decimal(12, 2)
+  outstandingItems Decimal  @default(0) @db.Decimal(12, 2)
+  isBalanced       Boolean
+  completedById    String   @db.Uuid
+  completedAt      DateTime @default(now())
+  notes            String?
+
+  trustAccount TrustAccount @relation(fields: [trustAccountId], references: [id])
+  completedBy  User         @relation(fields: [completedById], references: [id])
+
+  @@unique([trustAccountId, periodEnd])
+}
+
+// ─────────────────────────────────────────────
+// 5. Document checklist
+// ─────────────────────────────────────────────
+
+// Master list, e.g. "Listing Agreement (Form 271)", "APS (Form 100)", "FINTRAC ID", "Deposit receipt"
+model DocumentType {
+  id          String     @id @default(uuid()) @db.Uuid
+  name        String     @unique
+  formNumber  String? // OREA form #
+  requiredFor DealSide[] // sides that get this slot automatically
+  forListing  Boolean    @default(false) // auto-added to new listings
+  sortOrder   Int        @default(0)
+  isActive    Boolean    @default(true)
+
+  slots DocumentSlot[]
+}
+
+// One required document on one listing or deal
+model DocumentSlot {
+  id              String         @id @default(uuid()) @db.Uuid
+  documentTypeId  String         @db.Uuid
+  listingId       String?        @db.Uuid
+  transactionId   String?        @db.Uuid
+  status          DocumentStatus @default(MISSING)
+  isRequired      Boolean        @default(true)
+  dueDate         DateTime?      @db.Date
+  reviewerId      String?        @db.Uuid
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  documentType DocumentType   @relation(fields: [documentTypeId], references: [id])
+  listing      Listing?       @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  transaction  Transaction?   @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  reviewer     User?          @relation("Reviewer", fields: [reviewerId], references: [id])
+  files        DocumentFile[]
+
+  @@unique([transactionId, documentTypeId])
+  @@unique([listingId, documentTypeId])
+  @@index([status])
+  @@index([reviewerId, status])
+}
+
+// Every upload is kept; latest version is what gets reviewed
+model DocumentFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  slotId       String   @db.Uuid
+  version      Int
+  fileName     String
+  storageKey   String // S3 / Drive path
+  mimeType     String
+  sizeBytes    Int
+  sha256       String
+  uploadedById String   @db.Uuid
+  uploadedAt   DateTime @default(now())
+
+  slot       DocumentSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  uploadedBy User         @relation(fields: [uploadedById], references: [id])
+
+  @@unique([slotId, version])
+}
+
+// ─────────────────────────────────────────────
+// Audit trail (RECO inspections)
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  userId    String?  @db.Uuid
+  entity    String // "Transaction", "TrustLedgerEntry", ...
+  entityId  String
+  action    String // CREATE / UPDATE / APPROVE / REJECT ...
+  changes   Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
