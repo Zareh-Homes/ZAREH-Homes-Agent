@@ -6,11 +6,14 @@ import { trustRoutes } from "./trust/routes.ts";
 import { complianceRoutes } from "./compliance/routes.ts";
 import { NotificationHub } from "./compliance/notifications.ts";
 import type { FileStore } from "./compliance/storage.ts";
+import { closingRoutes } from "./closing/routes.ts";
+import type { BrokerageProfile } from "./closing/cda-template.ts";
 
 export interface AppOptions {
   prisma: PrismaClient;
   resolveUserId: ResolveUserId;
   fileStore: FileStore;
+  brokerage: BrokerageProfile;
   notificationHub?: NotificationHub;
   logger?: boolean;
   today?: () => string;
@@ -37,6 +40,12 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     prisma: opts.prisma,
     store: opts.fileStore,
     hub: opts.notificationHub ?? new NotificationHub(),
+    resolveUserId: opts.resolveUserId,
+    today: opts.today,
+  });
+  app.register(closingRoutes, {
+    prisma: opts.prisma,
+    brokerage: opts.brokerage,
     resolveUserId: opts.resolveUserId,
     today: opts.today,
   });

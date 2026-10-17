@@ -14,6 +14,7 @@ Database, in order:
 2. `psql -f ../brokerage-db/migrations/002_ontario_reco_cra.sql`
 3. `psql -f ../brokerage-db/migrations/003_trust_ledger_invariants.sql`
 4. `psql -f ../brokerage-db/migrations/004_document_compliance.sql`
+5. `psql -f ../brokerage-db/migrations/005_closing_cda.sql`
 
 Use plain `psql -f` (not `--single-transaction`) for 003 and 004: they change enum values before their main transaction.
 
@@ -24,6 +25,9 @@ npm start                        # refuses to start until real auth is wired int
 ALLOW_DEV_AUTH_HEADER=true npm start   # local only: trusts an x-user-id header
 UPLOAD_DIR=/path/to/uploads            # where document files go (default ./var/uploads)
 ```
+
+Printed on every CDA, all required (the server won't start without them):
+`BROKERAGE_LEGAL_NAME`, `BROKERAGE_ADDRESS`, `BROKERAGE_PHONE`, `BROKERAGE_EMAIL`, `BROKERAGE_HST_NUMBER`, `BROKER_OF_RECORD`, and optionally `BROKERAGE_RECO_REGISTRATION`.
 
 ## Test
 
@@ -87,3 +91,27 @@ Mandatory slots come from the `DocumentType` table (`requiredFor` sides + `slotS
 Status flow: `MISSING → PENDING_REVIEW → APPROVED | NEEDS_REVISION`, and `NEEDS_REVISION → PENDING_REVIEW` on re-upload. Approved is final. The database enforces this too.
 
 A review must name the file version it's for (`fileId`). If a newer version was uploaded meanwhile, the review is refused with `STALE_REVIEW`.
+
+## Closing and CDA endpoints
+
+| Method | Path | Who |
+|---|---|---|
+| GET | `/api/deals/:dealId/closing` | Staff. The numbers: a live preview, or the frozen statement once finalized |
+| GET | `/api/deals/:dealId/closing/cda?audience=lawyer` | Staff. Print-ready CDA for the closing lawyer (DRAFT watermark until finalized) |
+| GET | `/api/deals/:dealId/closing/cda?audience=internal` | Staff. Same, plus agent commission statements and the HST position |
+| POST | `/api/deals/:dealId/closing/finalize` | Managing broker, `Idempotency-Key` header. Deal must be CLOSED |
+
+Finalizing is one database transaction. It recomputes from fresh data, runs the audits, posts the trust distributions (co-op, general account, balance to the lawyer) through the trust ledger's own checks, and stores the issued CDA documents. That record can't be changed afterwards.
+
+The closing math is in `src/closing/calculate.ts` (pure function, documented step by step). It refuses to produce a CDA when:
+
+| Code | Why |
+|---|---|
+| `FINTRAC_NOT_APPROVED` | A FINTRAC record on the deal isn't approved (or there are none) |
+| `TRUST_WILL_NOT_BALANCE` | The deal's trust balance wouldn't be exactly $0.00 after the closing distributions |
+| `DEPOSIT_NOT_IN_TRUST` | The deal says we hold the deposit but the trust ledger is empty |
+| `TRUST_HOLD_ACTIVE` | The trust funds are flagged Disputed / Unclaimed |
+| `CLOSING_LAWYER_MISSING` / `COOP_BROKERAGE_MISSING` | No one to address the CDA to |
+| `GCI_SHARES_INVALID` | Co-listing agents' GCI shares don't add up to 100% |
+
+Agent splits come from the deal (`TransactionAgent.splitPct`); the annual cap and per-deal fees come from the agent's `CommissionPlan`. Cap year-to-date totals come from earlier finalized closings.

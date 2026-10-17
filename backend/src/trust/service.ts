@@ -327,36 +327,75 @@ export async function recordDisbursement(
         );
       }
 
-      const hold = await activeHold(tx, input.dealId);
-      if (hold) throw new TrustHoldActiveError(input.dealId, hold.id, hold.reason);
-
-      const available = await assertSufficientDealFunds(tx, input.dealId, input.trustAccountId, input.amount);
-
-      const [entry] = await tx.$queryRaw<LedgerEntry[]>`
-        INSERT INTO "TrustLedgerEntry" AS e (
-          id, "trustAccountId", "transactionId", "entryType", amount, method, "referenceNo", counterparty,
-          "effectiveDate", "authorizationMethod", "authorizationReference", memo, "idempotencyKey",
-          "enteredById", "authorizedById")
-        VALUES (
-          gen_random_uuid(), ${input.trustAccountId}::uuid, ${input.dealId}::uuid, ${entryType}::"TrustEntryType",
-          ${formatCents(input.amount)}::numeric, ${input.method}::"PaymentMethod", ${input.referenceNo},
-          ${input.payeeName}, ${input.dateDisbursed}::date,
-          ${input.authorizationMethod}::"TrustAuthorization", ${input.authorizationReference}, ${input.memo},
-          ${idempotencyKey}::uuid, ${actor.id}::uuid, ${actor.id}::uuid)
-        RETURNING ${ENTRY_COLUMNS}`;
-
-      const balanceAfter = available - input.amount;
-      if (balanceAfter === 0) {
-        await setDepositStatus(
-          tx,
-          input.dealId,
-          input.payeeType === "PAYOR_REFUND" ? "REFUNDED" : "RELEASED",
-          ["RECEIVED"],
-        );
-      }
-      return { entry: entry!, balanceAfter, warnings: [] };
+      const { entry, balanceAfter } = await insertDisbursement(tx, actor.id, {
+        dealId: input.dealId,
+        trustAccountId: input.trustAccountId,
+        entryType,
+        amount: input.amount,
+        method: input.method,
+        referenceNo: input.referenceNo,
+        payeeName: input.payeeName,
+        date: input.dateDisbursed,
+        authorizationMethod: input.authorizationMethod,
+        authorizationReference: input.authorizationReference,
+        memo: input.memo,
+        idempotencyKey,
+        statusWhenEmpty: input.payeeType === "PAYOR_REFUND" ? "REFUNDED" : "RELEASED",
+      });
+      return { entry, balanceAfter, warnings: [] };
     },
   );
+}
+
+export interface DisbursementRow {
+  dealId: string;
+  trustAccountId: string;
+  entryType: string;
+  amount: Cents;
+  method: string;
+  referenceNo: string | null;
+  payeeName: string;
+  date: string;
+  authorizationMethod: string;
+  authorizationReference: string | null;
+  memo: string | null;
+  idempotencyKey: string;
+  /** Deposit status to set once the deal's trust balance reaches zero */
+  statusWhenEmpty: "RELEASED" | "REFUNDED";
+}
+
+/**
+ * Pays money out of a deal's trust balance inside the caller's transaction.
+ * The caller must already hold the deal row lock. Used by manual disbursements
+ * and by closing finalization, so both go through the same hold and
+ * segregation checks.
+ */
+export async function insertDisbursement(
+  tx: Tx,
+  actorId: string,
+  p: DisbursementRow,
+): Promise<{ entry: LedgerEntry; balanceAfter: Cents }> {
+  const hold = await activeHold(tx, p.dealId);
+  if (hold) throw new TrustHoldActiveError(p.dealId, hold.id, hold.reason);
+
+  const available = await assertSufficientDealFunds(tx, p.dealId, p.trustAccountId, p.amount);
+
+  const [entry] = await tx.$queryRaw<LedgerEntry[]>`
+    INSERT INTO "TrustLedgerEntry" AS e (
+      id, "trustAccountId", "transactionId", "entryType", amount, method, "referenceNo", counterparty,
+      "effectiveDate", "authorizationMethod", "authorizationReference", memo, "idempotencyKey",
+      "enteredById", "authorizedById")
+    VALUES (
+      gen_random_uuid(), ${p.trustAccountId}::uuid, ${p.dealId}::uuid, ${p.entryType}::"TrustEntryType",
+      ${formatCents(p.amount)}::numeric, ${p.method}::"PaymentMethod", ${p.referenceNo},
+      ${p.payeeName}, ${p.date}::date,
+      ${p.authorizationMethod}::"TrustAuthorization", ${p.authorizationReference}, ${p.memo},
+      ${p.idempotencyKey}::uuid, ${actorId}::uuid, ${actorId}::uuid)
+    RETURNING ${ENTRY_COLUMNS}`;
+
+  const balanceAfter = available - p.amount;
+  if (balanceAfter === 0) await setDepositStatus(tx, p.dealId, p.statusWhenEmpty, ["RECEIVED"]);
+  return { entry: entry!, balanceAfter };
 }
 
 // ── 5. Corrections: reversal rows only ───────────────────────────────────────

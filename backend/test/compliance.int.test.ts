@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient, type UserRole } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
+import { TEST_BROKERAGE } from "./fixtures.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 import { NotificationHub } from "../src/compliance/notifications.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
@@ -54,7 +55,7 @@ describe("document compliance API", { skip }, () => {
   const prisma = new PrismaClient();
   const hub = new NotificationHub();
   const store = new MemoryStore();
-  const app = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: store, notificationHub: hub, today: () => TODAY });
+  const app = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: store, notificationHub: hub, brokerage: TEST_BROKERAGE, today: () => TODAY });
   const u = { broker: "", compliance: "", admin: "", agent: "", otherAgent: "" };
   let baseUrl = "";
 
