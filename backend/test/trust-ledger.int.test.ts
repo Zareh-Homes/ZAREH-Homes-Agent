@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient, type DealStatus, type DepositHolder } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
+import { MemoryStore } from "../src/compliance/storage.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
@@ -19,18 +20,18 @@ const TODAY = "2026-10-17";
 
 describe("trust ledger API", { skip }, () => {
   const prisma = new PrismaClient();
-  const app = buildApp({ prisma, resolveUserId: devHeaderResolver, today: () => TODAY });
+  const app = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), today: () => TODAY });
   const users = { broker: "", admin: "", reviewer: "", agent: "" };
   let account = "";
 
   before(async () => {
-    const make = async (role: "MANAGING_BROKER" | "ADMIN" | "FILE_REVIEWER" | "AGENT") =>
+    const make = async (role: "MANAGING_BROKER" | "ADMIN" | "COMPLIANCE_ADMIN" | "AGENT") =>
       (await prisma.user.create({
         data: { email: `${role.toLowerCase()}-${randomUUID()}@zareh.test`, firstName: role, lastName: "Test", role },
       })).id;
     users.broker = await make("MANAGING_BROKER");
     users.admin = await make("ADMIN");
-    users.reviewer = await make("FILE_REVIEWER");
+    users.reviewer = await make("COMPLIANCE_ADMIN");
     users.agent = await make("AGENT");
     account = (await prisma.trustAccount.create({
       data: { name: "Real Estate Trust", bankName: "TD", accountLast4: "4821" },

@@ -12,13 +12,17 @@ Database, in order:
 
 1. `prisma db push` for the v1 schema, then `psql -f ../brokerage-db/constraints.sql`
 2. `psql -f ../brokerage-db/migrations/002_ontario_reco_cra.sql`
-3. `psql -f ../brokerage-db/migrations/003_trust_ledger_invariants.sql` (plain `-f`, not `--single-transaction`)
+3. `psql -f ../brokerage-db/migrations/003_trust_ledger_invariants.sql`
+4. `psql -f ../brokerage-db/migrations/004_document_compliance.sql`
+
+Use plain `psql -f` (not `--single-transaction`) for 003 and 004: they change enum values before their main transaction.
 
 ## Run
 
 ```bash
 npm start                        # refuses to start until real auth is wired into buildApp
 ALLOW_DEV_AUTH_HEADER=true npm start   # local only: trusts an x-user-id header
+UPLOAD_DIR=/path/to/uploads            # where document files go (default ./var/uploads)
 ```
 
 ## Test
@@ -39,7 +43,7 @@ Integration tests create their own users and deals and never delete anything (th
 | POST | `/api/trust/entries/:entryId/reversals` | Managing broker |
 | GET | `/api/trust/entries/:entryId` | Staff, or an agent on the deal |
 | GET | `/api/deals/:dealId/trust` | Staff, or an agent on the deal |
-| POST | `/api/deals/:dealId/trust/holds` | Admin, file reviewer, managing broker |
+| POST | `/api/deals/:dealId/trust/holds` | Admin, compliance admin, managing broker |
 | POST | `/api/trust/holds/:holdId/release` | Managing broker |
 | PUT / PATCH / DELETE | `/api/trust/entries/:entryId` | Nobody: always 405 |
 
@@ -56,3 +60,30 @@ Errors are `{ "error": { "code", "message", "details" } }`:
 | 422 | `DEPOSIT_NOT_HELD_BY_BROKERAGE`, `DEAL_NOT_CLOSED`, … | Business rule refused it |
 | 423 | `TRUST_HOLD_ACTIVE` | Deal is flagged Disputed / Unclaimed |
 | 405 | `TRUST_LEDGER_IMMUTABLE` | Edits and deletes are never allowed |
+
+## Document compliance endpoints
+
+| Method | Path | Who |
+|---|---|---|
+| POST | `/api/deals` | Staff, or an agent on the deal. Adds the mandatory slots |
+| POST | `/api/deals/:dealId/parties` | Staff, or an agent on the deal. Adds FINTRAC slots for new clients |
+| GET | `/api/deals/:dealId/documents` | Staff, or an agent on the deal |
+| POST | `/api/documents/slots/:slotId/files` | Staff, or an agent on the deal. `multipart/form-data`: `metadata` (JSON, FINTRAC slots only) then `file` |
+| POST | `/api/documents/slots/:slotId/review` | Managing broker, compliance admin |
+| GET | `/api/documents/files/:fileId` | Staff get the full FINTRAC record; agents get the ID number masked |
+| GET | `/api/documents/files/:fileId/content` | Staff, or an agent on the deal |
+| GET | `/api/notifications?unread=true` | Signed-in user |
+| POST | `/api/notifications/:id/read` | Signed-in user |
+| GET | `/api/notifications/stream` | Signed-in user (Server-Sent Events) |
+
+Mandatory slots come from the `DocumentType` table (`requiredFor` sides + `slotScope`), seeded by migration 004:
+
+| Deal side | Slots |
+|---|---|
+| Buyer | APS, Form 320, FINTRAC ID record per individual buyer, FINTRAC corporate record per corporate buyer |
+| Seller (listing) | Form 200, FINTRAC ID record per individual seller, FINTRAC corporate record per corporate seller |
+| Dual | All of the above |
+
+Status flow: `MISSING → PENDING_REVIEW → APPROVED | NEEDS_REVISION`, and `NEEDS_REVISION → PENDING_REVIEW` on re-upload. Approved is final. The database enforces this too.
+
+A review must name the file version it's for (`fileId`). If a newer version was uploaded meanwhile, the review is refused with `STALE_REVIEW`.

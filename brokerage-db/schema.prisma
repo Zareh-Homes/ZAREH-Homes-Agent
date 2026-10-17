@@ -17,7 +17,7 @@ datasource db {
 enum UserRole {
   ADMIN
   MANAGING_BROKER // Broker of Record – signs trust receipts, approves disbursements
-  FILE_REVIEWER // Deal admin – reviews documents
+  COMPLIANCE_ADMIN // Deal admin – reviews documents and FINTRAC records
   AGENT
 }
 
@@ -120,12 +120,38 @@ enum PaymentMethod {
   WIRE
 }
 
+// Missing -> Pending Review -> Approved | Needs Revision (-> Pending Review again).
+// Transitions are enforced by a trigger (migrations/004_document_compliance.sql).
 enum DocumentStatus {
   MISSING // slot exists, nothing uploaded
-  PENDING // uploaded, awaiting review
+  PENDING_REVIEW // uploaded, awaiting broker / compliance review
   APPROVED
-  REJECTED
-  WAIVED // not applicable to this deal, approved by reviewer
+  NEEDS_REVISION // reviewer sent it back with a comment
+  WAIVED // not applicable to this deal, waived by a reviewer
+}
+
+// What a slot is created for when a deal is opened
+enum DocumentSlotScope {
+  DEAL // one per deal (APS, Form 320, Form 200)
+  CLIENT_INDIVIDUAL // one per individual client (FINTRAC ID record)
+  CLIENT_CORPORATION // one per corporate client (FINTRAC corporate / beneficial ownership)
+}
+
+// Structured data an upload must carry
+enum DocumentMetadataKind {
+  NONE
+  FINTRAC_INDIVIDUAL
+  FINTRAC_CORPORATE
+}
+
+enum PartyEntityType {
+  INDIVIDUAL
+  CORPORATION
+}
+
+enum ReviewDecision {
+  APPROVED
+  NEEDS_REVISION
 }
 
 // ─────────────────────────────────────────────
@@ -151,6 +177,8 @@ model User {
   dealAgents         TransactionAgent[]
   reviewedDocuments  DocumentSlot[]        @relation("Reviewer")
   uploadedFiles      DocumentFile[]
+  documentReviews    DocumentReview[]      @relation("DocumentReviewer")
+  notifications      Notification[]
   trustEntriesMade   TrustLedgerEntry[]    @relation("EnteredBy")
   trustEntriesSigned TrustLedgerEntry[]    @relation("AuthorizedBy")
   trustHoldsFlagged  TrustHold[]           @relation("HoldFlaggedBy")
@@ -261,16 +289,18 @@ model TransactionAgent {
 
 // Buyers, sellers, lawyers – also drives FINTRAC ID records
 model TransactionParty {
-  id                  String    @id @default(uuid()) @db.Uuid
-  transactionId       String    @db.Uuid
+  id                  String          @id @default(uuid()) @db.Uuid
+  transactionId       String          @db.Uuid
   role                PartyRole
+  entityType          PartyEntityType @default(INDIVIDUAL)
   fullName            String
   email               String?
   phone               String?
   fintracIdVerifiedAt DateTime?
   fintracIdMethod     String? // e.g. "Government photo ID", "Dual process"
 
-  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  documentSlots DocumentSlot[]
 
   @@index([transactionId, role])
 }
@@ -373,61 +403,108 @@ model TrustReconciliation {
 
 // Master list, e.g. "Listing Agreement (Form 271)", "APS (Form 100)", "FINTRAC ID", "Deposit receipt"
 model DocumentType {
-  id          String     @id @default(uuid()) @db.Uuid
-  name        String     @unique
-  formNumber  String? // OREA form #
-  requiredFor DealSide[] // sides that get this slot automatically
-  forListing  Boolean    @default(false) // auto-added to new listings
-  sortOrder   Int        @default(0)
-  isActive    Boolean    @default(true)
+  id           String               @id @default(uuid()) @db.Uuid
+  code         String               @unique // stable key used by code: APS, FORM_320, FINTRAC_INDIVIDUAL …
+  name         String               @unique
+  formNumber   String? // OREA form #
+  requiredFor  DealSide[] // sides that get this slot automatically
+  slotScope    DocumentSlotScope    @default(DEAL)
+  metadataKind DocumentMetadataKind @default(NONE)
+  forListing   Boolean              @default(false) // auto-added to new listings
+  sortOrder    Int                  @default(0)
+  isActive     Boolean              @default(true)
 
   slots DocumentSlot[]
 }
 
 // One required document on one listing or deal
+// One required document on one listing or deal. FINTRAC slots also point at
+// the client party they are for. Uniqueness per (deal, type[, party]) is a
+// pair of partial indexes in migration 004.
 model DocumentSlot {
-  id              String         @id @default(uuid()) @db.Uuid
-  documentTypeId  String         @db.Uuid
-  listingId       String?        @db.Uuid
-  transactionId   String?        @db.Uuid
-  status          DocumentStatus @default(MISSING)
-  isRequired      Boolean        @default(true)
-  dueDate         DateTime?      @db.Date
-  reviewerId      String?        @db.Uuid
-  reviewedAt      DateTime?
-  rejectionReason String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  id             String         @id @default(uuid()) @db.Uuid
+  documentTypeId String         @db.Uuid
+  listingId      String?        @db.Uuid
+  transactionId  String?        @db.Uuid
+  partyId        String?        @db.Uuid
+  status         DocumentStatus @default(MISSING)
+  isRequired     Boolean        @default(true)
+  dueDate        DateTime?      @db.Date
+  reviewerId     String?        @db.Uuid
+  reviewedAt     DateTime?      @db.Timestamptz(6)
+  reviewComment  String? // required when NEEDS_REVISION
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
-  documentType DocumentType   @relation(fields: [documentTypeId], references: [id])
-  listing      Listing?       @relation(fields: [listingId], references: [id], onDelete: Cascade)
-  transaction  Transaction?   @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  reviewer     User?          @relation("Reviewer", fields: [reviewerId], references: [id])
+  documentType DocumentType      @relation(fields: [documentTypeId], references: [id])
+  listing      Listing?          @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  transaction  Transaction?      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  party        TransactionParty? @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  reviewer     User?             @relation("Reviewer", fields: [reviewerId], references: [id])
   files        DocumentFile[]
+  reviews      DocumentReview[]
 
-  @@unique([transactionId, documentTypeId])
   @@unique([listingId, documentTypeId])
+  @@index([transactionId])
   @@index([status])
   @@index([reviewerId, status])
 }
 
 // Every upload is kept; latest version is what gets reviewed
+// Every upload is kept (append-only); the highest version is the one under review.
 model DocumentFile {
-  id           String   @id @default(uuid()) @db.Uuid
-  slotId       String   @db.Uuid
+  id           String               @id @default(uuid()) @db.Uuid
+  slotId       String               @db.Uuid
   version      Int
   fileName     String
   storageKey   String // S3 / Drive path
   mimeType     String
   sizeBytes    Int
   sha256       String
-  uploadedById String   @db.Uuid
-  uploadedAt   DateTime @default(now())
+  metadataKind DocumentMetadataKind @default(NONE)
+  metadata     Json? // validated FINTRAC record fields, by metadataKind
+  uploadedById String               @db.Uuid
+  uploadedAt   DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  slot       DocumentSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
-  uploadedBy User         @relation(fields: [uploadedById], references: [id])
+  slot       DocumentSlot     @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  uploadedBy User             @relation(fields: [uploadedById], references: [id])
+  reviews    DocumentReview[]
 
   @@unique([slotId, version])
+}
+
+// Append-only history of every review decision
+model DocumentReview {
+  id         String         @id @default(uuid()) @db.Uuid
+  slotId     String         @db.Uuid
+  fileId     String         @db.Uuid // the exact version that was reviewed
+  decision   ReviewDecision
+  comment    String?
+  reviewerId String         @db.Uuid
+  createdAt  DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  slot     DocumentSlot @relation(fields: [slotId], references: [id])
+  file     DocumentFile @relation(fields: [fileId], references: [id])
+  reviewer User         @relation("DocumentReviewer", fields: [reviewerId], references: [id])
+
+  @@index([slotId, createdAt])
+}
+
+// In-app notifications (pushed live over SSE, kept for when the user is offline)
+model Notification {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @db.Uuid
+  type          String // DOCUMENT_NEEDS_REVISION, DOCUMENT_APPROVED
+  title         String
+  body          String
+  transactionId String?   @db.Uuid
+  slotId        String?   @db.Uuid
+  createdAt     DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  readAt        DateTime? @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, readAt, createdAt])
 }
 
 // ─────────────────────────────────────────────

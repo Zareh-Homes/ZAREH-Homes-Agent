@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { buildApp } from "./app.ts";
 import { devHeaderResolver, type ResolveUserId } from "./auth.ts";
+import { LocalDiskStore } from "./compliance/storage.ts";
 
 // Real authentication isn't wired yet. Refuse to start rather than run a
 // trust API that anyone could call as a broker.
@@ -13,7 +14,9 @@ function resolveAuth(): ResolveUserId {
 }
 
 const prisma = new PrismaClient();
-const app = buildApp({ prisma, resolveUserId: resolveAuth(), logger: true });
+// Local disk for development; use S3 / Drive with encryption at rest in production
+const fileStore = new LocalDiskStore(process.env.UPLOAD_DIR ?? "./var/uploads");
+const app = buildApp({ prisma, resolveUserId: resolveAuth(), fileStore, logger: true });
 
 const port = Number(process.env.PORT ?? 3000);
 await app.listen({ port, host: process.env.HOST ?? "127.0.0.1" });

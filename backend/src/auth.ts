@@ -40,5 +40,5 @@ export function requireRole(actor: Actor, allowed: readonly UserRole[], action: 
 
 /** Only the Broker of Record / managing broker can move trust money. */
 export const TRUST_AUTHORIZERS: readonly UserRole[] = ["MANAGING_BROKER"];
-export const TRUST_HOLD_FLAGGERS: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "FILE_REVIEWER"];
-export const TRUST_VIEWERS: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "FILE_REVIEWER"];
+export const TRUST_HOLD_FLAGGERS: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"];
+export const TRUST_VIEWERS: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"];

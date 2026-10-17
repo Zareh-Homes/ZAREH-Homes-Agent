@@ -106,6 +106,12 @@ export function fromDatabaseError(err: unknown): DomainError | null {
       return new DomainError("TRUST_LEDGER_IMMUTABLE", 405, message);
     case "ZT006":
       return new RuleViolationError("TRUST_HOLD_RULE", message);
+    case "ZD001":
+      return new ConflictError("ILLEGAL_STATUS_CHANGE", message);
+    case "ZD002":
+      return new ForbiddenError(message);
+    case "ZD003":
+      return new DomainError("APPEND_ONLY", 405, message);
     default:
       return null;
   }

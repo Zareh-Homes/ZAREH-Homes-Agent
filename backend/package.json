@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Zareh Homes back office API",
-  "engines": { "node": ">=22.18" },
-  "prisma": { "schema": "../brokerage-db/schema.prisma" },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "prisma": {
+    "schema": "../brokerage-db/schema.prisma"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "start": "node src/server.ts",
@@ -13,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/multipart": "^9.4.0",
     "@prisma/client": "6.16.2",
     "fastify": "5.12.5"
   },

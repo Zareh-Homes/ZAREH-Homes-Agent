@@ -4,9 +4,11 @@
  * all problems are reported together.
  */
 
-import { ValidationError, type FieldIssue } from "../errors.ts";
-import { isIsoDate } from "../lib/dates.ts";
-import { MAX_ENTRY_CENTS, parseAmount, type Cents } from "../lib/money.ts";
+import { ValidationError } from "../errors.ts";
+import { type Cents } from "../lib/money.ts";
+import { isUuid, Reader } from "../lib/reader.ts";
+
+export { isUuid };
 
 export const DEPOSIT_METHODS = ["BANK_DRAFT", "WIRE", "CERTIFIED_CHEQUE"] as const;
 export const DISBURSEMENT_METHODS = ["CHEQUE", "EFT", "WIRE", "BANK_DRAFT"] as const;
@@ -67,106 +69,6 @@ export interface HoldInput {
 
 export interface ReleaseInput {
   releaseNote: string;
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isUuid(value: unknown): value is string {
-  return typeof value === "string" && UUID.test(value);
-}
-
-/** Collects issues while reading an untrusted body. */
-class Reader {
-  readonly issues: FieldIssue[] = [];
-  private readonly body: Record<string, unknown>;
-
-  constructor(body: unknown, allowed: readonly string[]) {
-    if (body === null || typeof body !== "object" || Array.isArray(body)) {
-      this.body = {};
-      this.issues.push({ field: "body", message: "must be a JSON object" });
-      return;
-    }
-    this.body = body as Record<string, unknown>;
-    for (const key of Object.keys(this.body)) {
-      if (!allowed.includes(key)) this.issues.push({ field: key, message: "is not a recognised field" });
-    }
-  }
-
-  private fail(field: string, message: string): void {
-    this.issues.push({ field, message });
-  }
-
-  uuid(field: string): string {
-    const v = this.body[field];
-    if (!isUuid(v)) this.fail(field, "must be a UUID");
-    return v as string;
-  }
-
-  optionalUuid(field: string): string | null {
-    const v = this.body[field];
-    if (v === undefined || v === null) return null;
-    return this.uuid(field);
-  }
-
-  text(field: string, max: number): string {
-    const v = this.body[field];
-    if (typeof v !== "string" || v.trim().length === 0) {
-      this.fail(field, "is required");
-      return "";
-    }
-    if (v.trim().length > max) this.fail(field, `must be at most ${max} characters`);
-    return v.trim();
-  }
-
-  optionalText(field: string, max: number): string | null {
-    const v = this.body[field];
-    if (v === undefined || v === null || (typeof v === "string" && v.trim() === "")) return null;
-    return this.text(field, max);
-  }
-
-  oneOf<T extends string>(field: string, options: readonly T[]): T {
-    const v = this.body[field];
-    if (typeof v !== "string" || !options.includes(v as T)) {
-      this.fail(field, `must be one of ${options.join(", ")}`);
-    }
-    return v as T;
-  }
-
-  amount(field: string): Cents {
-    const cents = parseAmount(this.body[field]);
-    if (cents === null) {
-      this.fail(field, 'must be a decimal string with up to 2 decimals, e.g. "40000.00"');
-      return 0;
-    }
-    if (cents <= 0) this.fail(field, "must be greater than zero");
-    if (cents > MAX_ENTRY_CENTS) this.fail(field, "is larger than a single trust entry allows");
-    return cents;
-  }
-
-  /** A calendar date that is not in the future. */
-  pastDate(field: string, today: string): string {
-    const v = this.body[field];
-    if (!isIsoDate(v)) {
-      this.fail(field, "must be a date in YYYY-MM-DD format");
-      return "";
-    }
-    if (v > today) this.fail(field, "cannot be in the future");
-    return v;
-  }
-
-  optionalPastDate(field: string, today: string): string | null {
-    const v = this.body[field];
-    if (v === undefined || v === null) return null;
-    return this.pastDate(field, today);
-  }
-
-  check(condition: boolean, field: string, message: string): void {
-    if (!condition) this.fail(field, message);
-  }
-
-  done(): void {
-    if (this.issues.length > 0) throw new ValidationError(this.issues);
-  }
 }
 
 export function validateIdempotencyKey(header: unknown): string {
