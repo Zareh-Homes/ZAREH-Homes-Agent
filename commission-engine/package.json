@@ -1,0 +1,11 @@
+{
+  "name": "zareh-commission-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stateless brokerage commission calculator. No runtime dependencies.",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  }
+}
