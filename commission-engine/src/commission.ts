@@ -1,35 +1,48 @@
 /**
- * Zareh Homes – Brokerage Commission Engine
+ * Zareh Homes – Brokerage Commission Engine (Ontario / CRA)
  *
  * Pure, stateless functions. No dependencies, no I/O, no clock.
  * The caller passes in the agent's year-to-date totals and persists the
  * `ytdAfter` values that come back.
  *
  * Money is integer cents everywhere. Percentages are basis points
- * (1% = 100 bps, 80% = 8000 bps) so nothing touches floating point.
+ * (1% = 100 bps, 13% = 1300 bps) so nothing touches floating point.
  *
- * Order of operations:
- *   1. Outside referral   – % of GCI, paid off the top to the other brokerage
- *   2. Franchise fee      – % of (GCI − referral), limited by an annual cap
- *   3. Agent / house split on what's left, house share limited by the annual cap
- *   4. Flat fees          – charged against the agent's or the house's side
+ * `baseGci` is the commission BEFORE tax. HST is added on top:
+ *   total received = baseGci + HST (13% in Ontario)
  *
- * Invariant: referral + franchise + houseGross + agentGross === GCI, to the cent.
+ * Order of operations (all on base, pre-tax amounts):
+ *   1. Outside referral   – % of base GCI, paid off the top (+ HST if the payee charges it)
+ *   2. Franchise fee      – % of (base GCI − referral), limited by an annual cap (+ HST)
+ *   3. Agent / house split on what's left; house share limited by the annual cap
+ *   4. Internal fees      – charged to the agent with HST, or absorbed by the house
+ *
+ * Agent payout = (agent base split + HST) − (agent fees + HST on fees)
+ * HST on the agent's split is only added when the agent (or their PREC) is
+ * HST-registered; HST on brokerage fees is always charged.
+ *
+ * Invariants checked by the tests:
+ *   referral + franchise + houseSplit + agentSplit === baseGci            (base)
+ *   referral + franchise + agent payout − owed + brokerage retained
+ *     + HST remittance === total received                                 (cash)
  */
 
 export type Cents = number;
 export type BasisPoints = number;
 export type FeePayer = "AGENT" | "HOUSE";
 
+export const ONTARIO_HST: BasisPoints = 1300;
+
 export interface FlatFee {
-  name: string;            // "E&O insurance", "Tech fee"
-  amount: Cents;
-  paidBy: FeePayer;
+  name: string;            // "Deal fee", "E&O insurance", "Desk fee"
+  amount: Cents;           // base, before HST
+  paidBy: FeePayer;        // AGENT = charged to agent with HST; HOUSE = brokerage absorbs it
 }
 
 export interface ReferralRule {
   payee: string;           // outside brokerage name
-  rate: BasisPoints;       // 2500 = 25% of GCI
+  rate: BasisPoints;       // 2500 = 25% of base GCI
+  chargesHst?: boolean;    // default true; false for e.g. a non-resident (US) brokerage
 }
 
 export interface FranchiseRule {
@@ -39,40 +52,84 @@ export interface FranchiseRule {
 
 export interface SplitPlan {
   agentRate: BasisPoints;  // 8000 = 80% to agent, 20% to house
-  annualCap: Cents | null; // most the house collects from this agent per cap year; null = no cap
+  annualCap: Cents | null; // most the house collects (base) from this agent per cap year
 }
 
 export interface AgentYtd {
-  houseCollected: Cents;   // house share already collected this cap year
-  franchisePaid: Cents;    // franchise fees already paid this cap year
+  houseCollected: Cents;   // house base split already collected this cap year
+  franchisePaid: Cents;    // franchise base fees already paid this cap year
+}
+
+/** Mirrors the User row: isPrec, precLegalName, hstNumber. */
+export interface AgentProfile {
+  name: string;
+  isPrec: boolean;
+  precLegalName?: string | null;
+  hstNumber?: string | null; // present = HST-registered
 }
 
 export interface CommissionInput {
-  gci: Cents;
+  baseGci: Cents;
+  agent: AgentProfile;
   split: SplitPlan;
   ytd: AgentYtd;
   fees?: FlatFee[];
   referral?: ReferralRule | null;
   franchise?: FranchiseRule | null;
+  hstRate?: BasisPoints;   // default 13% Ontario
 }
 
-export interface FeeLine extends FlatFee {}
+export interface TaxedAmount {
+  base: Cents;
+  hst: Cents;
+  total: Cents;
+}
+
+export interface FeeLine extends TaxedAmount {
+  name: string;
+}
 
 export interface CommissionBreakdown {
-  gci: Cents;
-  referral: { payee: string; amount: Cents } | null;
-  franchiseFee: Cents;
-  splittable: Cents;                 // GCI after referral + franchise
-  houseGross: Cents;                 // house share of the split (counts toward the cap)
-  agentGross: Cents;                 // agent share of the split
-  agentFees: FeeLine[];
-  houseFees: FeeLine[];
-  agentNet: Cents;                   // what we actually pay the agent (never below 0)
-  agentOwes: Cents;                  // agent fees larger than agent's share, to collect separately
-  houseNet: Cents;                   // house share after house-paid fees (can be negative)
-  effectiveAgentRate: BasisPoints;   // agentGross / splittable, for the trade record sheet
-  capReachedOnThisDeal: boolean;
-  capRemainingAfter: Cents | null;
+  hstRate: BasisPoints;
+  gci: TaxedAmount;                         // what comes in from the lawyer / co-op
+  referral: (TaxedAmount & { payee: string }) | null;
+  franchise: TaxedAmount;
+  splittableBase: Cents;                    // base GCI after referral + franchise
+
+  agent: {
+    payeeName: string;                      // PREC legal name if applicable
+    isPrec: boolean;
+    hstNumber: string | null;
+    split: TaxedAmount;                     // agent's base share + HST on it
+    fees: FeeLine[];                        // brokerage fees charged to the agent
+    feesTotal: TaxedAmount;
+    net: TaxedAmount;                       // split − fees, base and HST separately
+    payout: Cents;                          // what we send (never below 0)
+    owes: Cents;                            // fees larger than the split, to collect separately
+    effectiveSplitRate: BasisPoints;        // agent base split / splittable base
+  };
+
+  brokerage: {
+    split: Cents;                           // house base share (counts toward the cap)
+    feesCharged: TaxedAmount;               // fees billed to the agent
+    feesAbsorbed: FeeLine[];                // HOUSE-paid fees, no HST billed to anyone
+    retainedBase: Cents;                    // split + fees charged; stays in general account
+    netRevenueBase: Cents;                  // retained − absorbed fees
+  };
+
+  hst: {
+    collectedOnGci: Cents;
+    collectedOnAgentFees: Cents;
+    paidOnReferral: Cents;                  // input tax credit
+    paidOnFranchise: Cents;                 // input tax credit
+    paidToAgent: Cents;                     // input tax credit
+    netRemittance: Cents;                   // what the brokerage owes CRA for this deal
+  };
+
+  cap: {
+    reachedOnThisDeal: boolean;
+    remainingAfter: Cents | null;
+  };
   ytdAfter: AgentYtd;
 }
 
@@ -95,6 +152,18 @@ export function centsToDollars(cents: Cents): string {
   return `${sign}$${Math.floor(abs / 100).toLocaleString("en-CA")}.${String(abs % 100).padStart(2, "0")}`;
 }
 
+function taxed(base: Cents, rate: BasisPoints): TaxedAmount {
+  const hst = applyRate(base, rate);
+  return { base, hst, total: base + hst };
+}
+
+function sumTaxed(items: TaxedAmount[]): TaxedAmount {
+  return items.reduce(
+    (acc, i) => ({ base: acc.base + i.base, hst: acc.hst + i.hst, total: acc.total + i.total }),
+    { base: 0, hst: 0, total: 0 },
+  );
+}
+
 function assertCents(label: string, value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new CommissionError(`${label} must be a non-negative whole number of cents, got ${value}`);
@@ -107,12 +176,15 @@ function assertRate(label: string, value: number): void {
   }
 }
 
+const HST_NUMBER = /^[0-9]{9}RT[0-9]{4}$/;
+
 function validate(input: CommissionInput): void {
-  assertCents("gci", input.gci);
+  assertCents("baseGci", input.baseGci);
   assertRate("split.agentRate", input.split.agentRate);
   if (input.split.annualCap !== null) assertCents("split.annualCap", input.split.annualCap);
   assertCents("ytd.houseCollected", input.ytd.houseCollected);
   assertCents("ytd.franchisePaid", input.ytd.franchisePaid);
+  if (input.hstRate !== undefined) assertRate("hstRate", input.hstRate);
   for (const fee of input.fees ?? []) {
     assertCents(`fee "${fee.name}"`, fee.amount);
     if (fee.paidBy !== "AGENT" && fee.paidBy !== "HOUSE") {
@@ -124,6 +196,13 @@ function validate(input: CommissionInput): void {
     assertRate("franchise.rate", input.franchise.rate);
     if (input.franchise.annualCap !== null) assertCents("franchise.annualCap", input.franchise.annualCap);
   }
+  const { agent } = input;
+  if (agent.isPrec && !agent.precLegalName?.trim()) {
+    throw new CommissionError(`agent "${agent.name}" is a PREC but has no PREC legal name`);
+  }
+  if (agent.hstNumber && !HST_NUMBER.test(agent.hstNumber)) {
+    throw new CommissionError(`agent "${agent.name}" HST number "${agent.hstNumber}" is not in CRA format`);
+  }
 }
 
 /** Remaining room under a cap; null cap means unlimited. */
@@ -133,64 +212,107 @@ function capRoom(cap: Cents | null, used: Cents): Cents {
 
 export function calculateCommission(input: CommissionInput): CommissionBreakdown {
   validate(input);
-  const { gci, split, ytd } = input;
+  const { baseGci, split, ytd, agent } = input;
+  const hstRate = input.hstRate ?? ONTARIO_HST;
   const fees = input.fees ?? [];
 
-  // 1. Outside referral, off the top
-  const referralAmount = input.referral ? applyRate(gci, input.referral.rate) : 0;
-  const afterReferral = gci - referralAmount;
+  const gci = taxed(baseGci, hstRate);
+
+  // 1. Outside referral, off the top of base GCI
+  let referral: CommissionBreakdown["referral"] = null;
+  if (input.referral) {
+    const base = applyRate(baseGci, input.referral.rate);
+    const rate = input.referral.chargesHst === false ? 0 : hstRate;
+    referral = { payee: input.referral.payee, ...taxed(base, rate) };
+  }
+  const afterReferral = baseGci - (referral?.base ?? 0);
 
   // 2. Franchise fee on what's left, limited by the annual franchise cap
-  let franchiseFee = 0;
+  let franchiseBase = 0;
   if (input.franchise) {
     const uncapped = applyRate(afterReferral, input.franchise.rate);
-    franchiseFee = Math.min(uncapped, capRoom(input.franchise.annualCap, ytd.franchisePaid));
+    franchiseBase = Math.min(uncapped, capRoom(input.franchise.annualCap, ytd.franchisePaid));
   }
-  const splittable = afterReferral - franchiseFee;
+  const franchise = taxed(franchiseBase, hstRate);
+  const splittableBase = afterReferral - franchiseBase;
 
-  // 3. Agent / house split. The house takes its normal share until the cap is
-  //    hit; anything past the cap goes to the agent (100% split from there on).
-  const houseRate = BPS_DENOMINATOR - split.agentRate;
-  const houseUncapped = applyRate(splittable, houseRate);
-  const houseRoom = capRoom(split.annualCap, ytd.houseCollected);
-  const houseGross = Math.min(houseUncapped, houseRoom);
-  const agentGross = splittable - houseGross;   // remainder, so totals always reconcile
+  // 3. Split on base. House takes its share until the cap; past it the agent gets 100%.
+  const houseUncapped = applyRate(splittableBase, BPS_DENOMINATOR - split.agentRate);
+  const houseSplit = Math.min(houseUncapped, capRoom(split.annualCap, ytd.houseCollected));
+  const agentSplitBase = splittableBase - houseSplit; // remainder, so base always reconciles
+  const agentHstRegistered = Boolean(agent.hstNumber);
+  const agentSplit = taxed(agentSplitBase, agentHstRegistered ? hstRate : 0);
 
-  // 4. Flat fees
-  const agentFees = fees.filter((f) => f.paidBy === "AGENT");
-  const houseFees = fees.filter((f) => f.paidBy === "HOUSE");
-  const agentFeeTotal = agentFees.reduce((sum, f) => sum + f.amount, 0);
-  const houseFeeTotal = houseFees.reduce((sum, f) => sum + f.amount, 0);
+  // 4. Fees: charged to the agent carry HST; house-absorbed fees are just a cost
+  const agentFees: FeeLine[] = fees
+    .filter((f) => f.paidBy === "AGENT")
+    .map((f) => ({ name: f.name, ...taxed(f.amount, hstRate) }));
+  const houseFees: FeeLine[] = fees
+    .filter((f) => f.paidBy === "HOUSE")
+    .map((f) => ({ name: f.name, base: f.amount, hst: 0, total: f.amount }));
+  const agentFeesTotal = sumTaxed(agentFees);
+  const houseFeesBase = houseFees.reduce((s, f) => s + f.base, 0);
 
-  const agentAfterFees = agentGross - agentFeeTotal;
-  const agentNet = Math.max(0, agentAfterFees);
-  const agentOwes = Math.max(0, -agentAfterFees);
-  const houseNet = houseGross - houseFeeTotal;
+  const agentNet: TaxedAmount = {
+    base: agentSplit.base - agentFeesTotal.base,
+    hst: agentSplit.hst - agentFeesTotal.hst,
+    total: agentSplit.total - agentFeesTotal.total,
+  };
 
-  const houseCollectedAfter = ytd.houseCollected + houseGross;
-  const capReachedOnThisDeal =
-    split.annualCap !== null &&
-    ytd.houseCollected < split.annualCap &&
-    houseCollectedAfter >= split.annualCap;
+  const hstCollectedOnGci = gci.hst;
+  const netRemittance =
+    hstCollectedOnGci + agentFeesTotal.hst - (referral?.hst ?? 0) - franchise.hst - agentSplit.hst;
+
+  const houseCollectedAfter = ytd.houseCollected + houseSplit;
 
   return {
+    hstRate,
     gci,
-    referral: input.referral ? { payee: input.referral.payee, amount: referralAmount } : null,
-    franchiseFee,
-    splittable,
-    houseGross,
-    agentGross,
-    agentFees: agentFees.map((f) => ({ ...f })),
-    houseFees: houseFees.map((f) => ({ ...f })),
-    agentNet,
-    agentOwes,
-    houseNet,
-    effectiveAgentRate: splittable === 0 ? split.agentRate : Math.round((agentGross * BPS_DENOMINATOR) / splittable),
-    capReachedOnThisDeal,
-    capRemainingAfter: split.annualCap === null ? null : Math.max(0, split.annualCap - houseCollectedAfter),
+    referral,
+    franchise,
+    splittableBase,
+
+    agent: {
+      payeeName: agent.isPrec ? agent.precLegalName!.trim() : agent.name,
+      isPrec: agent.isPrec,
+      hstNumber: agent.hstNumber ?? null,
+      split: agentSplit,
+      fees: agentFees,
+      feesTotal: agentFeesTotal,
+      net: agentNet,
+      payout: Math.max(0, agentNet.total),
+      owes: Math.max(0, -agentNet.total),
+      effectiveSplitRate:
+        splittableBase === 0 ? split.agentRate : Math.round((agentSplitBase * BPS_DENOMINATOR) / splittableBase),
+    },
+
+    brokerage: {
+      split: houseSplit,
+      feesCharged: agentFeesTotal,
+      feesAbsorbed: houseFees,
+      retainedBase: houseSplit + agentFeesTotal.base,
+      netRevenueBase: houseSplit + agentFeesTotal.base - houseFeesBase,
+    },
+
+    hst: {
+      collectedOnGci: hstCollectedOnGci,
+      collectedOnAgentFees: agentFeesTotal.hst,
+      paidOnReferral: referral?.hst ?? 0,
+      paidOnFranchise: franchise.hst,
+      paidToAgent: agentSplit.hst,
+      netRemittance,
+    },
+
+    cap: {
+      reachedOnThisDeal:
+        split.annualCap !== null &&
+        ytd.houseCollected < split.annualCap &&
+        houseCollectedAfter >= split.annualCap,
+      remainingAfter: split.annualCap === null ? null : Math.max(0, split.annualCap - houseCollectedAfter),
+    },
     ytdAfter: {
       houseCollected: houseCollectedAfter,
-      franchisePaid: ytd.franchisePaid + franchiseFee,
+      franchisePaid: ytd.franchisePaid + franchiseBase,
     },
   };
 }
