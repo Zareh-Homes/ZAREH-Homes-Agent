@@ -1,0 +1,7 @@
+Agent ID,Agent Name,Email,Cell,RECO #,Corporation Name,HST #,Status
+A100{run},"Smith, Jane",Jane.Smith.{run}@example.test,416-555-0101,R{run}1,Jane Smith Personal Real Estate Corporation,123456789 RT 0001,Active
+A101{run},Omar Haddad,omar.haddad.{run}@example.test,905-555-0102,R{run}2,,987654321,Active
+A102{run},Priya Shah,priya.shah.{run}@example.test,,R{run}3,Shah Holdings Inc.,,Active
+A103{run},Leo Martins,not-an-email,,,,,Active
+A100{run},Someone Else,someone.else.{run}@example.test,,,,,Active
+A104{run},Ana Côté,ana.cote.{run}@example.test,,R{run}4,,,Inactive

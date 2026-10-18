@@ -1,0 +1,13 @@
+Trade #,Agent ID,End,Status,Property Address,City,Province,MLS #,Sale Price,Offer Date,Closing Date,Deposit,Deposit Held By,Commission,HST,Total Commission,Co-op Commission,Agent Split %,GCI Share %,Agent Gross,Agent Net,Seller,Buyer
+T1{run},A100{run},Listing,Closed,1205 - 88 Queens Quay W,Toronto,ON,c 1234567,"$1,100,000.00",10/09/2024,11-30-24,"$55,000",Our Brokerage,"27,500.00","3,575.00",,"$22,000",80%,,"22,000.00","21,800.00",Ann Lee,Bo Kim
+T2{run},A101{run},Selling,Sold,45 Lakeshore Rd,Oakville,,W7654321,"1,250,000",02/02/2025,15/03/2025,"50,000",Co-op,,,"$31,075.00",,0.8,,,,,Maria Santos
+T3{run},A102{run},Listing,Closed,"12 Main St E, Grimsby",,ON,,"$410,000",01/04/2009,15/06/2009,"20,000",Our Brokerage,"20,000",,,,75,,,,"Paul Chen",
+T4{run},A100{run},List,Completed,8 Barton St,Hamilton,ON,X1111111,"699,000",01/08/2025,30/09/2025,"10,000",Our Brokerage,"10,000","1,000",,,80,,,,"2468013 Ontario Inc.",
+T5{run},A100{run},Listing,Firm,22 Main St E,Grimsby,ON,X2222222,"920,000",01/09/2026,15/01/2027,"50,000",Our Brokerage,"23,000",,,,80,50,,,Leo Martins,
+T5{run},A102{run},Listing,Firm,22 Main St E,Grimsby,ON,X2222222,"920,000",01/09/2026,15/01/2027,"50,000",Our Brokerage,"23,000",,,,75,50,,,,
+T6{run},A999{run},Listing,Closed,1 Nowhere Rd,Hamilton,ON,,"500,000",01/01/2024,01/03/2024,,,"12,500",,,,80,,,,,
+T7{run},A101{run},Buyer,Closed,9 Elm Ave,Grimsby,ON,,"700,000",01/01/2024,01/03/2024,,,"17,500",,,,80,,,,,
+T7{run},A100{run},Buyer,Closed,9 Elm Ave,Grimsby,ON,,"705,000",01/01/2024,01/03/2024,,,"17,500",,,,80,,,,,
+T8{run},A101{run},Buyer,Closed,3 Pine St,Hamilton,ON,,"600,000",01/01/2024,01/03/2024,,,"15,000",,,"5,000",80,,,,,
+T9{run},A101{run},Buyer,Closed,4 Oak St,Hamilton,ON,,"600,000",01/01/2024,31/02/2024,,,"15,000",,,,80,,,,,
+T10{run},A101{run},Buyer,Closed,5 Fir St,Vancouver,BC,,"600,000",01/01/2024,01/03/2024,,,"15,000",,,,80,,,,,
