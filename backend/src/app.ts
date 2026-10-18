@@ -12,6 +12,7 @@ import { dashboardRoutes } from "./dashboard/routes.ts";
 import { pipelineRoutes } from "./pipeline/routes.ts";
 import { bankRoutes } from "./bank/routes.ts";
 import { privacyRoutes } from "./security/privacy.ts";
+import { unclaimedRoutes } from "./bank/unclaimed.ts";
 import type { AuthService } from "./security/auth-service.ts";
 import { FieldCipher } from "./security/crypto.ts";
 import { registerHttpSecurity } from "./security/http.ts";
@@ -81,5 +82,6 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.register(pipelineRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId, today: opts.today });
   app.register(privacyRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(unclaimedRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   return app;
 }

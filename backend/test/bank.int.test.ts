@@ -113,9 +113,9 @@ describe("bank reconciliation API", { skip }, () => {
 
     const prepared = await as(u.admin, "POST", "/api/trust/reconciliations", { statementId: imported.json().id });
     assert.equal(prepared.statusCode, 201, prepared.body);
-    // s.13: due 30 days after the statement was received (Nov 3), not after the period end
-    assert.deepEqual([prepared.json().status, prepared.json().statementReceived, prepared.json().dueBy, prepared.json().figures.difference],
-      ["PREPARED", "2026-11-03", "2026-12-03", "0.00"]);
+    // s.13 allows 30 days from receipt (Dec 3); RECO's guidance is 30 days after month end (Nov 30): we hold to the earlier
+    assert.deepEqual([prepared.json().status, prepared.json().statementReceived, prepared.json().dueBy, prepared.json().statutoryDueBy,
+      prepared.json().figures.difference], ["PREPARED", "2026-11-03", "2026-11-30", "2026-12-03", "0.00"]);
     recon.october = prepared.json().id;
     assert.equal((await as(u.admin, "POST", `/api/trust/reconciliations/${recon.october}/sign`, {})).statusCode, 403);
 

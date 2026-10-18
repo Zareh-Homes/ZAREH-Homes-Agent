@@ -146,10 +146,11 @@ export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOpt
     return payload;
   });
 
-  app.addHook("onResponse", async (request, reply) => {
+  // Written before the response goes out, so a sensitive read is never served without its audit record
+  app.addHook("onSend", async (request, reply, payload) => {
     const url = request.url.split("?")[0]!;
-    if (!url.startsWith("/api/") || url.startsWith("/api/auth/")) return; // auth routes write their own events
-    if (!UNSAFE.has(request.method) && !isSensitiveRead(url)) return;
+    if (!url.startsWith("/api/") || url.startsWith("/api/auth/")) return payload; // auth routes write their own events
+    if (!UNSAFE.has(request.method) && !isSensitiveRead(url)) return payload;
     const status = reply.statusCode;
     const claimed = request.auth?.userId ?? (request.headers["x-user-id"] as string | undefined) ?? null;
     try {
@@ -167,6 +168,7 @@ export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOpt
     } catch (err) {
       request.log.error({ err }, "audit write failed");
     }
+    return payload;
   });
 
   if (opts.auth) registerAuthRoutes(app, opts.auth, opts, limiter, limits);

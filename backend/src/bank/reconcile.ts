@@ -17,10 +17,16 @@
  * An item is settled at D only if both sides are dated ≤ D. History attested
  * as pre-cutover counts as settled. A deal with a negative balance is a
  * shortfall: liabilities can't be covered by another deal's money.
+ *
+ * s.13 also needs the balance owed to each person. Each deal's balance is
+ * attributed to whoever deposited it, net of refunds to them. When a deal
+ * holds money from more than one depositor the split is shown pro rata and
+ * flagged for review: the ledger can't know how the parties agreed to share it.
  */
 
 import { businessDaysBetween } from "../lib/dates.ts";
 import type { Cents } from "../lib/money.ts";
+import { STATUTORY_CALENDAR, type BusinessCalendar } from "../lib/ontario-calendar.ts";
 
 export const STALE_DEPOSIT_BUSINESS_DAYS = 5;
 
@@ -49,6 +55,21 @@ export interface ReconInput {
   bankClosingBalance: Cents;
   entries: ReconLedgerEntry[]; // every entry of the account dated ≤ periodEnd
   bankLines: ReconBankLine[]; // every statement line of the account posted ≤ periodEnd
+  calendar?: BusinessCalendar;
+}
+
+export interface Beneficiary {
+  name: string;
+  amount: Cents;
+}
+
+export interface DealLiability {
+  dealId: string;
+  dealNumber: string;
+  balance: Cents;
+  owedTo: Beneficiary[];
+  /** SOLE_DEPOSITOR: one person deposited it; PRO_RATA_REVIEW: several, split needs review; PER_CDA: commission held for the CDA's payees; UNIDENTIFIED: no depositor named */
+  basis: "SOLE_DEPOSITOR" | "PRO_RATA_REVIEW" | "PER_CDA" | "UNIDENTIFIED";
 }
 
 export interface OutstandingItem {
@@ -73,7 +94,7 @@ export interface ReconResult {
   difference: Cents;
   isBalanced: boolean;
   details: {
-    deals: { dealId: string; dealNumber: string; balance: Cents }[];
+    deals: DealLiability[];
     outstanding: OutstandingItem[];
     unrecorded: { bankTransactionId: string; postedDate: string; amount: Cents; description: string }[];
     staleDeposits: OutstandingItem[]; // recorded as received, still not at the bank after 5 business days
@@ -84,6 +105,36 @@ export interface ReconResult {
 
 const money = (c: Cents) => `$${(c / 100).toFixed(2)}`;
 
+const COMMISSION_TYPES = new Set(["COMMISSION_RECEIVED", "RECEIPT_RETURNED", "PAYMENT", "PAYMENT_RETURNED"]);
+
+function beneficiaries(balance: Cents, entries: ReconLedgerEntry[]): Pick<DealLiability, "owedTo" | "basis"> {
+  if (entries.some((e) => COMMISSION_TYPES.has(e.entryType))) {
+    return { owedTo: [{ name: "Payees under the CDA", amount: balance }], basis: "PER_CDA" };
+  }
+  const contributed = new Map<string, Cents>();
+  const key = (n: string | null) => (n ?? "").trim();
+  for (const e of entries) {
+    const name = key(e.counterparty);
+    if (!name) continue;
+    if (e.entryType === "DEPOSIT_RECEIVED") contributed.set(name, (contributed.get(name) ?? 0) + e.signedAmount);
+  }
+  for (const e of entries) {
+    const name = key(e.counterparty);
+    if (e.entryType === "REFUND_TO_PAYER" && contributed.has(name)) contributed.set(name, contributed.get(name)! + e.signedAmount);
+  }
+  const people = [...contributed].filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
+  if (people.length === 0) return { owedTo: [{ name: "Unidentified depositor", amount: balance }], basis: "UNIDENTIFIED" };
+  if (people.length === 1) return { owedTo: [{ name: people[0]![0], amount: balance }], basis: "SOLE_DEPOSITOR" };
+  const total = people.reduce((s, [, c]) => s + c, 0);
+  let left = balance;
+  const owedTo = people.map(([name, c], i) => {
+    const amount = i === people.length - 1 ? left : Math.floor((balance * c) / total);
+    left -= amount;
+    return { name, amount };
+  });
+  return { owedTo, basis: "PRO_RATA_REVIEW" };
+}
+
 export function reconcile(input: ReconInput): ReconResult {
   const D = input.periodEnd;
   const entries = input.entries.filter((e) => e.effectiveDate <= D);
@@ -93,7 +144,7 @@ export function reconcile(input: ReconInput): ReconResult {
     .map((e) => ({
       entryId: e.id, dealNumber: e.dealNumber, entryType: e.entryType, amount: e.signedAmount,
       effectiveDate: e.effectiveDate, referenceNo: e.referenceNo, counterparty: e.counterparty,
-      businessDaysOutstanding: businessDaysBetween(e.effectiveDate, D),
+      businessDaysOutstanding: businessDaysBetween(e.effectiveDate, D, input.calendar ?? STATUTORY_CALENDAR),
     }));
   const outstandingDeposits = outstanding.filter((o) => o.amount > 0).reduce((s, o) => s + o.amount, 0);
   const outstandingDisbursements = -outstanding.filter((o) => o.amount < 0).reduce((s, o) => s + o.amount, 0);
@@ -106,14 +157,20 @@ export function reconcile(input: ReconInput): ReconResult {
   const adjustedBankBalance = input.bankClosingBalance + outstandingDeposits - outstandingDisbursements;
   const ledgerBalance = entries.reduce((s, e) => s + e.signedAmount, 0);
 
-  const byDeal = new Map<string, { dealId: string; dealNumber: string; balance: Cents }>();
+  const byDeal = new Map<string, { dealId: string; dealNumber: string; balance: Cents; entries: ReconLedgerEntry[] }>();
   for (const e of entries) {
-    const d = byDeal.get(e.dealId) ?? { dealId: e.dealId, dealNumber: e.dealNumber, balance: 0 };
+    const d = byDeal.get(e.dealId) ?? { dealId: e.dealId, dealNumber: e.dealNumber, balance: 0, entries: [] };
     d.balance += e.signedAmount;
+    d.entries.push(e);
     byDeal.set(e.dealId, d);
   }
-  const deals = [...byDeal.values()].filter((d) => d.balance !== 0).sort((a, b) => a.dealNumber.localeCompare(b.dealNumber));
-  const shortfalls = deals.filter((d) => d.balance < 0);
+  const deals: DealLiability[] = [...byDeal.values()].filter((d) => d.balance !== 0)
+    .sort((a, b) => a.dealNumber.localeCompare(b.dealNumber))
+    .map((d) => ({
+      dealId: d.dealId, dealNumber: d.dealNumber, balance: d.balance,
+      ...(d.balance > 0 ? beneficiaries(d.balance, d.entries) : { owedTo: [], basis: "UNIDENTIFIED" as const }),
+    }));
+  const shortfalls = deals.filter((d) => d.balance < 0).map(({ dealId, dealNumber, balance }) => ({ dealId, dealNumber, balance }));
   const clientLiabilities = deals.filter((d) => d.balance > 0).reduce((s, d) => s + d.balance, 0);
 
   const difference = adjustedBankBalance - ledgerBalance;

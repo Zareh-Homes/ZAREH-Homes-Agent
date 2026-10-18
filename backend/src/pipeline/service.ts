@@ -16,6 +16,7 @@ import type { Actor } from "../auth.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { numericToCents } from "../lib/money.ts";
 import { depositStatus, type DepositBadge } from "./deposit-status.ts";
+import { loadBusinessCalendar } from "../lib/calendar-store.ts";
 
 const SEE_ALL: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"];
 
@@ -74,6 +75,7 @@ interface DealRow {
 }
 
 export async function getPipeline(db: PrismaClient, actor: Actor, today = todayInToronto()): Promise<PipelineResponse> {
+  const calendar = await loadBusinessCalendar(db);
   const all = SEE_ALL.includes(actor.role);
   const mine = all ? null : actor.id;
   const month = today.slice(0, 7);
@@ -145,6 +147,7 @@ export async function getPipeline(db: PrismaClient, actor: Actor, today = todayI
           bankCleared: x.bankCleared,
         })),
         today,
+        calendar,
       }),
       finalized: d.finalized,
     };

@@ -9,12 +9,13 @@
  * "Cleared" means the deposit has been matched to the trust account's bank
  * statement: money the bank actually holds, not just an entry in the ledger.
  *
- * Statutory holidays aren't excluded from the 5-day count (weekends are), so
- * the clock can read a day short near a holiday, never long.
+ * Business days exclude Saturdays, Sundays and Ontario holidays
+ * (O. Reg. 567/05 s.17(2)); see lib/ontario-calendar.ts.
  */
 
 import { businessDaysBetween } from "../lib/dates.ts";
 import type { Cents } from "../lib/money.ts";
+import { STATUTORY_CALENDAR, type BusinessCalendar } from "../lib/ontario-calendar.ts";
 
 export const TRUST_DEPOSIT_BUSINESS_DAYS = 5;
 
@@ -43,6 +44,7 @@ export interface DepositFacts {
   dueDate: string | null;
   deposits: { amountCents: Cents; receivedDate: string; depositedDate: string; receiptNumber: number | null; bankCleared: boolean }[];
   today: string;
+  calendar?: BusinessCalendar;
 }
 
 const HOLDER_LABEL = { COOP_BROKERAGE: "co-op brokerage", LAWYER: "lawyer", BUILDER: "builder / trustee" } as const;
@@ -56,6 +58,7 @@ const shortDate = (iso: string) =>
 export function depositStatus(f: DepositFacts): DepositBadge {
   const base = { expectedCents: f.expectedCents, receivedCents: f.deposits.reduce((s, d) => s + d.amountCents, 0) };
   const received = base.receivedCents;
+  const cal = f.calendar ?? STATUTORY_CALENDAR;
 
   if (f.holder !== "OUR_BROKERAGE") {
     return {
@@ -67,7 +70,7 @@ export function depositStatus(f: DepositFacts): DepositBadge {
 
   // A deposit banked more than 5 business days after receipt is a breach on record
   const late = f.deposits
-    .map((d) => ({ ...d, days: businessDaysBetween(d.receivedDate, d.depositedDate) }))
+    .map((d) => ({ ...d, days: businessDaysBetween(d.receivedDate, d.depositedDate, cal) }))
     .filter((d) => d.days > TRUST_DEPOSIT_BUSINESS_DAYS);
   if (late.length > 0) {
     const worst = late.reduce((a, b) => (b.days > a.days ? b : a));
@@ -98,7 +101,7 @@ export function depositStatus(f: DepositFacts): DepositBadge {
   }
 
   if (pastDue) {
-    const daysLate = businessDaysBetween(f.dueDate!, f.today);
+    const daysLate = businessDaysBetween(f.dueDate!, f.today, cal);
     return {
       ...base, state: "OVERDUE", tone: "critical",
       label: "Deposit Missing / Overdue",

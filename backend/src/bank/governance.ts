@@ -14,7 +14,7 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { requireRole, TRUST_VIEWERS, type Actor } from "../auth.ts";
-import { DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
+import { ConflictError, DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { Reader } from "../lib/reader.ts";
 import { BANK_STAFF } from "./service.ts";
@@ -26,6 +26,15 @@ export const POLICIES = {
   THIRD_PARTY_PAYABLES:
     "Allows co-op brokerage and referral payables to be approved and paid. Off until counsel and the accountant confirm which " +
     "account those funds are held in.",
+  COMMISSION_TRUST_ACCOUNT:
+    "Allows commission to be received into, and paid from, a commission trust account. Off until counsel and the accountant confirm " +
+    "the legal basis and rules for that account (no regulation section was found; see docs/regulatory-references.md §1).",
+  CIVIC_HOLIDAY_IS_HOLIDAY:
+    "Treats the Civic Holiday (first Monday in August) as a holiday for the 5-business-day trust deposit deadline. Off by default, " +
+    "which gives the earlier deadline; turn on only once counsel confirms the Legislation Act s.87 lists it.",
+  UNCLAIMED_MONEY_REMITTANCE:
+    "Allows recording that unclaimed trust money was remitted to RECO (TRESA s.27(4)). The payment itself is made outside this " +
+    "system. Off until the broker of record confirms RECO's current remittance process.",
 } as const;
 export type PolicyKey = keyof typeof POLICIES;
 
@@ -138,4 +147,31 @@ export async function decidePolicy(deps: Deps, actor: Actor, body: unknown) {
     rethrow(err);
   }
   return (await listPolicies(deps, actor)).find((p) => p.policy === input.policy)!;
+}
+
+// ── Proclaimed holidays ──────────────────────────────────────────────────────
+
+/** Statutory holidays are generated; proclaimed ones (s.87) are added here by the broker of record with the proclamation. */
+export async function listProclaimedHolidays(deps: Deps, actor: Actor) {
+  requireRole(actor, TRUST_VIEWERS, "Viewing the holiday calendar");
+  const rows = await deps.prisma.proclaimedHoliday.findMany({ orderBy: { date: "asc" }, include: { addedBy: { select: { firstName: true, lastName: true } } } });
+  return rows.map((h) => ({
+    date: iso(h.date), name: h.name, reference: h.reference, addedBy: `${h.addedBy.firstName} ${h.addedBy.lastName}`, addedAt: h.addedAt.toISOString(),
+  }));
+}
+
+export async function addProclaimedHoliday(deps: Deps, actor: Actor, body: unknown) {
+  requireRole(actor, ["MANAGING_BROKER"], "Adding a proclaimed holiday");
+  const r = new Reader(body, ["date", "name", "reference"]);
+  const input = { date: r.date("date"), name: r.text("name", 200), reference: r.text("reference", 500) };
+  r.done();
+  try {
+    await deps.prisma.$executeRaw`
+      INSERT INTO "ProclaimedHoliday" (date, name, reference, "addedById")
+      VALUES (${input.date}::date, ${input.name}, ${input.reference}, ${actor.id}::uuid)`;
+  } catch (err) {
+    if ((err as { meta?: { code?: string } })?.meta?.code === "23505") throw new ConflictError("HOLIDAY_EXISTS", `${input.date} is already a proclaimed holiday`);
+    rethrow(err);
+  }
+  return input;
 }

@@ -3,7 +3,9 @@ import type { PrismaClient } from "@prisma/client";
 import { loadActor, requireRole, TRUST_VIEWERS, type Actor, type ResolveUserId } from "../auth.ts";
 import type { NotificationHub } from "../compliance/notifications.ts";
 import { validatePathUuid } from "../trust/validation.ts";
-import { createDesignation, decidePolicy, endDesignation, listDesignations, listPolicies } from "./governance.ts";
+import {
+  addProclaimedHoliday, createDesignation, decidePolicy, endDesignation, listDesignations, listPolicies, listProclaimedHolidays,
+} from "./governance.ts";
 import {
   addIncidentEvent,
   attestPreCutover,
@@ -23,6 +25,8 @@ import {
   type BankDeps,
 } from "./service.ts";
 import { todayInToronto } from "../lib/dates.ts";
+import { loadBusinessCalendar } from "../lib/calendar-store.ts";
+import { ontarioHolidays } from "../lib/ontario-calendar.ts";
 
 export interface BankRouteOptions {
   prisma: PrismaClient;
@@ -54,6 +58,9 @@ type Params = Record<string, string>;
  * POST   /api/broker-of-record/:id/end                  end a designation
  * GET    /api/financial-policies                        sign-off switches and their history
  * POST   /api/financial-policies                        broker of record turns one on or off, citing the sign-off
+ * GET    /api/business-calendar?year=2026               Ontario holidays used for trust deadlines, and proclaimed days
+ * POST   /api/business-calendar/proclaimed              broker of record adds a proclaimed holiday, citing the proclamation
+ * (unclaimed trust money: bank/unclaimed.ts)
  */
 export async function bankRoutes(app: FastifyInstance, opts: BankRouteOptions): Promise<void> {
   const deps: BankDeps = { prisma: opts.prisma, hub: opts.hub, today: opts.today };
@@ -112,6 +119,23 @@ export async function bankRoutes(app: FastifyInstance, opts: BankRouteOptions): 
   app.get("/api/financial-policies", async (request) => ({ policies: await listPolicies(deps, await actorOf(request)) }));
 
   app.post("/api/financial-policies", async (request) => decidePolicy(deps, await actorOf(request), request.body));
+
+  app.get<{ Querystring: { year?: string } }>("/api/business-calendar", async (request) => {
+    const actor = await actorOf(request);
+    const year = Number(request.query.year ?? (opts.today?.() ?? todayInToronto()).slice(0, 4));
+    const calendar = await loadBusinessCalendar(opts.prisma);
+    const proclaimed = await listProclaimedHolidays(deps, actor);
+    return {
+      year,
+      civicHolidayCounted: calendar.options.civicHoliday === true,
+      holidays: [...ontarioHolidays(Number.isInteger(year) ? year : 2026, calendar.options)].map(([date, name]) => ({ date, name })),
+      proclaimed,
+      rule: "O. Reg. 567/05 s.17(2): a business day is not a Saturday or a Legislation Act s.87 holiday (every Sunday is a holiday).",
+    };
+  });
+
+  app.post("/api/business-calendar/proclaimed", async (request, reply) =>
+    reply.code(201).send(await addProclaimedHoliday(deps, await actorOf(request), request.body)));
 
   app.get("/api/trust/reconciliation-status", async (request) => {
     requireRole(await actorOf(request), TRUST_VIEWERS, "Viewing reconciliation status");

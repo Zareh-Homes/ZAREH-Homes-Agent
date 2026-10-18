@@ -121,9 +121,15 @@ def test_trust_entry_classification_uses_direction_not_just_keywords():
     assert m.classify_entry("Misc", None, "out") is None
 
 
-def test_business_days_skip_weekends():
+def test_business_days_skip_weekends_and_ontario_holidays():
     assert m.business_days_between(date(2026, 10, 2), date(2026, 10, 9)) == 5
-    assert m.business_days_between(date(2026, 10, 2), date(2026, 10, 12)) == 6
+    assert m.business_days_between(date(2026, 10, 2), date(2026, 10, 12)) == 5  # Thanksgiving
+    assert m.business_days_between(date(2026, 10, 2), date(2026, 10, 13)) == 6
+    assert m.business_days_between(date(2026, 4, 1), date(2026, 4, 10)) == 5  # Good Friday, Easter Monday
+    assert m.business_days_between(date(2026, 12, 23), date(2026, 12, 31)) == 5  # Christmas, Boxing Day on Saturday
+    assert m.easter_sunday(2027) == date(2027, 3, 28)
+    assert date(2022, 12, 27) in m.ontario_holidays(2022)  # Christmas on a Sunday: Tuesday too
+    assert date(2026, 8, 3) not in m.ontario_holidays(2026)  # Civic Holiday off by default
 
 
 def test_error_log_rows_are_redacted():

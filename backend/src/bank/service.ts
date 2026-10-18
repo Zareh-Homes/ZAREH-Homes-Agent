@@ -24,6 +24,8 @@ import { formatCents, numericToCents, parseAmount, type Cents } from "../lib/mon
 import { isUuid, Reader } from "../lib/reader.ts";
 import { BankCsvError, checkRunningBalance, parseBankCsv, type BankLine, type DateOrder } from "./csv.ts";
 import { reconcile, type ReconBankLine, type ReconLedgerEntry, type ReconResult } from "./reconcile.ts";
+import { compareInterimToMonthly, type IntegrityLine } from "./integrity.ts";
+import { loadBusinessCalendar } from "../lib/calendar-store.ts";
 
 export const BANK_STAFF: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER"];
 export const RECONCILIATION_DUE_DAYS = 30;
@@ -93,7 +95,9 @@ export interface StatementView {
   source: string | null;
   fileName: string;
   importedBy: string;
-  verification: { verifiedBy: string; method: string; verifiedAt: string; segregationException: boolean } | null;
+  verification: { verifiedBy: string; method: string; verifiedAt: string; segregationException: boolean; exceptionsReviewed: string | null } | null;
+  /** Differences from the account's other bank records; the verifier must say how each was checked */
+  integrityExceptions: string[];
   lines: {
     id: string;
     lineNumber: number;
@@ -101,18 +105,24 @@ export interface StatementView {
     amount: string;
     description: string;
     reference: string | null;
-    match: { id: string; trustEntryId: string | null; commissionReceiptId: string | null; dealNumber: string | null } | null;
+    match: {
+      id: string; trustEntryId: string | null; commissionReceiptId: string | null; payoutEventId: string | null;
+      receiptReversalId: string | null; dealNumber: string | null;
+    } | null;
   }[];
   matched: number;
   unmatched: number;
 }
 
 interface Candidate {
-  id: string;
+  id: string; // "<match column>:<uuid>"
   signed: Cents;
   date: string;
   reference: string | null;
 }
+
+const MATCH_TARGETS = ["trustEntryId", "commissionReceiptId", "payoutEventId", "receiptReversalId"] as const;
+type MatchTarget = (typeof MATCH_TARGETS)[number];
 
 /** One sensible ledger entry per bank line, or none. Never guesses between two. */
 export function proposeMatches(lines: { id: string; postedDate: string; amount: Cents; text: string }[], candidates: Candidate[]): Map<string, string> {
@@ -138,6 +148,17 @@ export function proposeMatches(lines: { id: string; postedDate: string; amount: 
   return chosen;
 }
 
+async function insertMatch(db: Db, actor: Actor, lineId: string, column: MatchTarget, targetId: string, note: string | null): Promise<string> {
+  const target = (c: MatchTarget) => (c === column ? targetId : null);
+  const [row] = await db.$queryRaw<{ id: string }[]>`
+    INSERT INTO "BankMatch" (id, basis, "bankTransactionId", "trustEntryId", "commissionReceiptId", "payoutEventId", "receiptReversalId",
+                             note, "matchedById")
+    VALUES (gen_random_uuid(), 'BANK_STATEMENT', ${lineId}::uuid, ${target("trustEntryId")}::uuid, ${target("commissionReceiptId")}::uuid,
+            ${target("payoutEventId")}::uuid, ${target("receiptReversalId")}::uuid, ${note}, ${actor.id}::uuid)
+    RETURNING id::text`;
+  return row!.id;
+}
+
 async function autoMatch(tx: Prisma.TransactionClient, actor: Actor, statementId: string): Promise<number> {
   const stmt = await tx.bankStatement.findUniqueOrThrow({ where: { id: statementId }, include: { lines: { include: { match: true } } } });
   const kind = stmt.kind;
@@ -148,39 +169,48 @@ async function autoMatch(tx: Prisma.TransactionClient, actor: Actor, statementId
   const from = addDays(iso(stmt.periodStart), -60);
   const to = addDays(iso(stmt.periodEnd), 5);
 
-  let candidates: Candidate[];
   const trustKind = stmt.trustAccountId
     ? (await tx.trustAccount.findUniqueOrThrow({ where: { id: stmt.trustAccountId }, select: { kind: true } })).kind
     : null;
+  const unmatched = (column: MatchTarget) => Prisma.sql`NOT EXISTS (SELECT 1 FROM "BankMatch" m WHERE m.${Prisma.raw(`"${column}"`)} = x.id
+    AND (m."matchKind" = ${kind}::"StatementKind" OR m."matchKind" = 'MONTHLY'))`;
+  let rows: { id: string; signed: string; date: string; reference: string | null }[];
   if (trustKind === "REAL_ESTATE_TRUST") {
-    const rows = await tx.$queryRaw<{ id: string; signed: string; date: string; reference: string | null }[]>`
-      SELECT e.id::text, (e.amount * e.direction)::text AS signed, to_char(e."effectiveDate", 'YYYY-MM-DD') AS date, e."referenceNo" AS reference
-        FROM "TrustLedgerEntry" e
-       WHERE e."trustAccountId" = ${stmt.trustAccountId}::uuid
-         AND e."effectiveDate" BETWEEN ${from}::date AND ${to}::date
-         AND NOT EXISTS (SELECT 1 FROM "BankMatch" m WHERE m."trustEntryId" = e.id
-                          AND (m."matchKind" = ${kind}::"StatementKind" OR m."matchKind" = 'MONTHLY'))`;
-    candidates = rows.map((r) => ({ ...r, signed: numericToCents(r.signed) }));
+    rows = await tx.$queryRaw`
+      SELECT 'trustEntryId:' || x.id AS id, (x.amount * x.direction)::text AS signed, to_char(x."effectiveDate", 'YYYY-MM-DD') AS date,
+             x."referenceNo" AS reference
+        FROM "TrustLedgerEntry" x
+       WHERE x."trustAccountId" = ${stmt.trustAccountId}::uuid
+         AND x."effectiveDate" BETWEEN ${from}::date AND ${to}::date AND ${unmatched("trustEntryId")}`;
   } else {
-    const rows = await tx.$queryRaw<{ id: string; amount: string; date: string; reference: string }[]>`
-      SELECT r.id::text, r.amount::text, to_char(r."receivedDate", 'YYYY-MM-DD') AS date, r.reference
-        FROM "CommissionReceipt" r
-       WHERE r."receivedDate" BETWEEN ${from}::date AND ${to}::date
+    // Commission in, commission returned, payments out and payments returned, for this account
+    rows = await tx.$queryRaw`
+      SELECT 'commissionReceiptId:' || x.id AS id, x.amount::text AS signed, to_char(x."receivedDate", 'YYYY-MM-DD') AS date, x.reference
+        FROM "CommissionReceipt" x
+       WHERE x."receivedDate" BETWEEN ${from}::date AND ${to}::date
+         AND x."trustAccountId" IS NOT DISTINCT FROM ${stmt.trustAccountId}::uuid
+         AND x."operatingAccountId" IS NOT DISTINCT FROM ${stmt.operatingAccountId}::uuid
+         AND NOT EXISTS (SELECT 1 FROM "CommissionReceiptReversal" v WHERE v."receiptId" = x.id) AND ${unmatched("commissionReceiptId")}
+      UNION ALL
+      SELECT 'receiptReversalId:' || x.id, (-r.amount)::text, to_char(v."reversedDate", 'YYYY-MM-DD'), v.reference
+        FROM "CommissionReceiptReversal" v JOIN "CommissionReceipt" r ON r.id = v."receiptId"
+        CROSS JOIN LATERAL (SELECT v."receiptId" AS id) x
+       WHERE v."reversedDate" BETWEEN ${from}::date AND ${to}::date
          AND r."trustAccountId" IS NOT DISTINCT FROM ${stmt.trustAccountId}::uuid
-         AND r."operatingAccountId" IS NOT DISTINCT FROM ${stmt.operatingAccountId}::uuid
-         AND NOT EXISTS (SELECT 1 FROM "CommissionReceiptReversal" x WHERE x."receiptId" = r.id)
-         AND NOT EXISTS (SELECT 1 FROM "BankMatch" m WHERE m."commissionReceiptId" = r.id
-                          AND (m."matchKind" = ${kind}::"StatementKind" OR m."matchKind" = 'MONTHLY'))`;
-    candidates = rows.map((r) => ({ id: r.id, signed: numericToCents(r.amount), date: r.date, reference: r.reference }));
+         AND r."operatingAccountId" IS NOT DISTINCT FROM ${stmt.operatingAccountId}::uuid AND ${unmatched("receiptReversalId")}
+      UNION ALL
+      SELECT 'payoutEventId:' || x.id, mv.signed::text, to_char(x."eventDate", 'YYYY-MM-DD'), x.reference
+        FROM "PayoutEvent" x CROSS JOIN LATERAL payout_event_money(x) mv
+       WHERE x."eventDate" BETWEEN ${from}::date AND ${to}::date
+         AND mv.trust_account IS NOT DISTINCT FROM ${stmt.trustAccountId}::uuid
+         AND mv.operating_account IS NOT DISTINCT FROM ${stmt.operatingAccountId}::uuid AND ${unmatched("payoutEventId")}`;
   }
+  const candidates: Candidate[] = rows.map((r) => ({ ...r, signed: numericToCents(r.signed) }));
 
   const proposals = proposeMatches(lines, candidates);
-  for (const [lineId, targetId] of proposals) {
-    await tx.$executeRaw`
-      INSERT INTO "BankMatch" (id, basis, "bankTransactionId", "trustEntryId", "commissionReceiptId", note, "matchedById")
-      VALUES (gen_random_uuid(), 'BANK_STATEMENT', ${lineId}::uuid,
-              ${trustKind === "REAL_ESTATE_TRUST" ? targetId : null}::uuid, ${trustKind === "REAL_ESTATE_TRUST" ? null : targetId}::uuid,
-              'Matched automatically on import', ${actor.id}::uuid)`;
+  for (const [lineId, target] of proposals) {
+    const [column, targetId] = target.split(":") as [MatchTarget, string];
+    await insertMatch(tx, actor, lineId, column, targetId, "Matched automatically on import");
   }
   return proposals.size;
 }
@@ -280,6 +310,11 @@ export async function importStatement(deps: BankDeps, actor: Actor, body: unknow
     duplicatesSkipped = fingerprinted.length - toInsert.length;
   }
 
+  const integrityExceptions = await crossCheck(deps.prisma, { trustAccountId, operatingAccountId }, {
+    kind, fileName: input.fileName, periodStart: input.periodStart, periodEnd: input.periodEnd,
+    openingBalance: input.openingBalance, closingBalance: input.closingBalance, lines,
+  });
+
   let statementId = "";
   let autoMatched = 0;
   const published: NotificationView[] = [];
@@ -287,11 +322,13 @@ export async function importStatement(deps: BankDeps, actor: Actor, body: unknow
     await deps.prisma.$transaction(async (tx) => {
       const [row] = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO "BankStatement" (id, kind, "trustAccountId", "operatingAccountId", "periodStart", "periodEnd", "openingBalance",
-                                     "closingBalance", "receivedDate", source, "sourceNote", "fileName", "fileSha256", "importedById")
+                                     "closingBalance", "receivedDate", source, "sourceNote", "fileName", "fileSha256", "importedById",
+                                     "integrityExceptions")
         VALUES (gen_random_uuid(), ${kind}::"StatementKind", ${trustAccountId}::uuid, ${operatingAccountId}::uuid,
                 ${input.periodStart}::date, ${input.periodEnd}::date,
                 ${input.openingBalance === null ? null : formatCents(input.openingBalance)}::numeric, ${formatCents(input.closingBalance)}::numeric,
-                ${input.receivedDate}::date, ${input.source}, ${input.sourceNote}, ${input.fileName}, ${sha}, ${actor.id}::uuid)
+                ${input.receivedDate}::date, ${input.source}, ${input.sourceNote}, ${input.fileName}, ${sha}, ${actor.id}::uuid,
+                ${JSON.stringify(integrityExceptions)}::jsonb)
         RETURNING id::text`;
       statementId = row!.id;
       for (const l of toInsert) {
@@ -302,6 +339,17 @@ export async function importStatement(deps: BankDeps, actor: Actor, body: unknow
                   ${l.description}, ${l.reference}, ${fingerprint})`;
       }
       if (input.autoMatch) autoMatched = await autoMatch(tx, actor, statementId);
+
+      if (integrityExceptions.length > 0) {
+        published.push(...await insertNotifications(tx, {
+          userIds: await brokers(tx),
+          type: "BANK_RECORD_MISMATCH",
+          title: `${account.name}: bank file ${input.fileName} doesn't agree with earlier bank records`,
+          body: `${integrityExceptions.slice(0, 3).join(" · ")}. Check with the bank before relying on either file.`,
+          dealId: null,
+          slotId: null,
+        }));
+      }
 
       // Money moved in a trust account that the ledger doesn't explain: tell the brokers now
       if (trustAccountId) {
@@ -330,17 +378,55 @@ export async function importStatement(deps: BankDeps, actor: Actor, body: unknow
   return { ...(await getStatement(deps, actor, statementId)), autoMatched, duplicatesSkipped };
 }
 
+/** Monthly statements are compared with every interim file for the same dates, in whichever order they arrive. */
+async function crossCheck(
+  db: Db, account: { trustAccountId: string | null; operatingAccountId: string | null },
+  file: { kind: "MONTHLY" | "INTERIM"; fileName: string; periodStart: string; periodEnd: string; openingBalance: Cents | null;
+          closingBalance: Cents; lines: BankLine[] },
+): Promise<string[]> {
+  const toLines = (ls: { postedDate: string | Date; amount: Cents | Prisma.Decimal; description: string }[]): IntegrityLine[] =>
+    ls.map((l) => ({
+      postedDate: typeof l.postedDate === "string" ? l.postedDate : iso(l.postedDate),
+      amount: typeof l.amount === "number" ? l.amount : cents(l.amount), description: l.description,
+    }));
+  const others = await db.bankStatement.findMany({
+    where: {
+      trustAccountId: account.trustAccountId, operatingAccountId: account.operatingAccountId,
+      kind: file.kind === "MONTHLY" ? "INTERIM" : "MONTHLY",
+      periodStart: { lte: new Date(`${file.periodEnd}T00:00:00Z`) }, periodEnd: { gte: new Date(`${file.periodStart}T00:00:00Z`) },
+    },
+    include: { lines: true },
+  });
+  const out: string[] = [];
+  for (const o of others) {
+    if (file.kind === "MONTHLY") {
+      out.push(...compareInterimToMonthly(
+        { periodStart: file.periodStart, periodEnd: file.periodEnd, openingBalance: file.openingBalance!, lines: toLines(file.lines) },
+        { label: `interim file ${o.fileName}`, periodStart: iso(o.periodStart), periodEnd: iso(o.periodEnd), closingBalance: cents(o.closingBalance), lines: toLines(o.lines) },
+      ));
+    } else {
+      out.push(...compareInterimToMonthly(
+        { periodStart: iso(o.periodStart), periodEnd: iso(o.periodEnd), openingBalance: cents(o.openingBalance!), lines: toLines(o.lines) },
+        { label: `this file (monthly statement ${o.fileName} differs)`, periodStart: file.periodStart, periodEnd: file.periodEnd,
+          closingBalance: file.closingBalance, lines: toLines(file.lines) },
+      ));
+    }
+  }
+  return out;
+}
+
 /** A second person confirms the imported file against the bank itself (portal, statement). */
 export async function verifyStatement(deps: BankDeps, actor: Actor, statementId: string, body: unknown) {
   requireRole(actor, BANK_STAFF, "Verifying a bank statement");
-  const r = new Reader(body, ["method", "exceptionReason"]);
+  const r = new Reader(body, ["method", "exceptionReason", "exceptionsReviewed"]);
   const method = r.text("method", 500);
   const exceptionReason = r.optionalText("exceptionReason", 500);
+  const exceptionsReviewed = r.optionalText("exceptionsReviewed", 4000);
   r.done();
   try {
     await deps.prisma.$executeRaw`
-      INSERT INTO "BankStatementVerification" ("statementId", "verifiedById", method, "exceptionReason")
-      VALUES (${statementId}::uuid, ${actor.id}::uuid, ${method}, ${exceptionReason})`;
+      INSERT INTO "BankStatementVerification" ("statementId", "verifiedById", method, "exceptionReason", "exceptionsReviewed")
+      VALUES (${statementId}::uuid, ${actor.id}::uuid, ${method}, ${exceptionReason}, ${exceptionsReviewed})`;
   } catch (err) {
     const code = (err as { meta?: { code?: string } })?.meta?.code;
     if (code === "23505") throw new ConflictError("STATEMENT_ALREADY_VERIFIED", "This bank file is already verified");
@@ -373,6 +459,7 @@ export async function getStatement(deps: BankDeps, actor: Actor, statementId: st
     reference: l.reference,
     match: l.match
       ? { id: l.match.id, trustEntryId: l.match.trustEntryId, commissionReceiptId: l.match.commissionReceiptId,
+          payoutEventId: l.match.payoutEventId, receiptReversalId: l.match.receiptReversalId,
           dealNumber: l.match.trustEntry?.transaction.dealNumber ?? null }
       : null,
   }));
@@ -391,8 +478,9 @@ export async function getStatement(deps: BankDeps, actor: Actor, statementId: st
     importedBy: `${s.importedBy.firstName} ${s.importedBy.lastName}`,
     verification: v
       ? { verifiedBy: `${v.verifiedBy.firstName} ${v.verifiedBy.lastName}`, method: v.method, verifiedAt: v.verifiedAt.toISOString(),
-          segregationException: v.segregationException }
+          segregationException: v.segregationException, exceptionsReviewed: v.exceptionsReviewed }
       : null,
+    integrityExceptions: s.integrityExceptions as string[],
     lines,
     matched: lines.filter((l) => l.match).length,
     unmatched: lines.filter((l) => !l.match).length,
@@ -403,22 +491,14 @@ export async function getStatement(deps: BankDeps, actor: Actor, statementId: st
 
 export async function matchLine(deps: BankDeps, actor: Actor, body: unknown) {
   requireRole(actor, BANK_STAFF, "Matching a bank transaction");
-  const r = new Reader(body, ["bankTransactionId", "trustEntryId", "commissionReceiptId", "note"]);
-  const input = {
-    bankTransactionId: r.uuid("bankTransactionId"),
-    trustEntryId: r.optionalUuid("trustEntryId"),
-    commissionReceiptId: r.optionalUuid("commissionReceiptId"),
-    note: r.optionalText("note", 500),
-  };
-  r.check((input.trustEntryId === null) !== (input.commissionReceiptId === null), "trustEntryId", "give exactly one of trustEntryId or commissionReceiptId");
+  const r = new Reader(body, ["bankTransactionId", ...MATCH_TARGETS, "note"]);
+  const bankTransactionId = r.uuid("bankTransactionId");
+  const targets = MATCH_TARGETS.map((c) => [c, r.optionalUuid(c)] as const).filter(([, id]) => id !== null);
+  const note = r.optionalText("note", 500);
+  r.check(targets.length === 1, "trustEntryId", `give exactly one of ${MATCH_TARGETS.join(", ")}`);
   r.done();
   try {
-    const [row] = await deps.prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO "BankMatch" (id, basis, "bankTransactionId", "trustEntryId", "commissionReceiptId", note, "matchedById")
-      VALUES (gen_random_uuid(), 'BANK_STATEMENT', ${input.bankTransactionId}::uuid, ${input.trustEntryId}::uuid,
-              ${input.commissionReceiptId}::uuid, ${input.note}, ${actor.id}::uuid)
-      RETURNING id::text`;
-    return { matchId: row!.id };
+    return { matchId: await insertMatch(deps.prisma, actor, bankTransactionId, targets[0]![0], targets[0]![1]!, note) };
   } catch (err) {
     rethrow(err);
   }
@@ -463,14 +543,20 @@ export async function attestPreCutover(deps: BankDeps, actor: Actor, body: unkno
 export async function computeForStatement(db: Db, statementId: string): Promise<{
   result: ReconResult; trustAccountId: string; periodEnd: string; receivedDate: string | null;
 }> {
-  const s = await db.bankStatement.findUnique({ where: { id: statementId } });
+  const s = await db.bankStatement.findUnique({ where: { id: statementId }, include: { trustAccount: { select: { kind: true } } } });
   if (!s || !s.trustAccountId || s.kind !== "MONTHLY") throw new NotFoundError("Monthly trust account statement", statementId);
   const D = iso(s.periodEnd);
 
-  const entries = await db.$queryRaw<{
+  type Row = {
     id: string; dealId: string; dealNumber: string; entryType: string; signed: string; effectiveDate: string;
     referenceNo: string | null; counterparty: string | null; basis: "BANK_STATEMENT" | "PRE_CUTOVER" | null; postedDate: string | null;
-  }[]>`
+  };
+  // A commission trust account's ledger is its receipts and payments (migration 012)
+  const entries = s.trustAccount!.kind === "COMMISSION_TRUST" ? await db.$queryRaw<Row[]>`
+    SELECT id::text, deal_id::text AS "dealId", deal_number AS "dealNumber", kind AS "entryType", signed::text,
+           to_char(effective_date, 'YYYY-MM-DD') AS "effectiveDate", reference AS "referenceNo", counterparty,
+           CASE WHEN match_posted IS NULL THEN NULL ELSE 'BANK_STATEMENT' END AS basis, to_char(match_posted, 'YYYY-MM-DD') AS "postedDate"
+      FROM commission_trust_ledger(${s.trustAccountId}::uuid, ${D}::date)` : await db.$queryRaw<Row[]>`
     SELECT e.id::text, e."transactionId"::text AS "dealId", t."dealNumber", e."entryType"::text AS "entryType",
            (e.amount * e.direction)::text AS signed, to_char(e."effectiveDate", 'YYYY-MM-DD') AS "effectiveDate",
            e."referenceNo", e.counterparty, m.basis::text AS basis, to_char(b."postedDate", 'YYYY-MM-DD') AS "postedDate"
@@ -482,11 +568,14 @@ export async function computeForStatement(db: Db, statementId: string): Promise<
 
   const lines = await db.$queryRaw<{ id: string; postedDate: string; amount: string; description: string; matchedEntryDate: string | null }[]>`
     SELECT b.id::text, to_char(b."postedDate", 'YYYY-MM-DD') AS "postedDate", b.amount::text, b.description,
-           to_char(e."effectiveDate", 'YYYY-MM-DD') AS "matchedEntryDate"
+           to_char(COALESCE(e."effectiveDate", cr."receivedDate", rv."reversedDate", pe."eventDate"), 'YYYY-MM-DD') AS "matchedEntryDate"
       FROM "BankTransaction" b
       JOIN "BankStatement" s ON s.id = b."statementId"
       LEFT JOIN "BankMatch" m ON m."bankTransactionId" = b.id
       LEFT JOIN "TrustLedgerEntry" e ON e.id = m."trustEntryId"
+      LEFT JOIN "CommissionReceipt" cr ON cr.id = m."commissionReceiptId"
+      LEFT JOIN "CommissionReceiptReversal" rv ON rv."receiptId" = m."receiptReversalId"
+      LEFT JOIN "PayoutEvent" pe ON pe.id = m."payoutEventId"
      WHERE s."trustAccountId" = ${s.trustAccountId}::uuid AND s.kind = 'MONTHLY' AND b."postedDate" <= ${D}::date`;
 
   const result = reconcile({
@@ -498,13 +587,24 @@ export async function computeForStatement(db: Db, statementId: string): Promise<
       match: e.basis ? { basis: e.basis, postedDate: e.postedDate } : null,
     })),
     bankLines: lines.map((l): ReconBankLine => ({ ...l, amount: numericToCents(l.amount) })),
+    calendar: await loadBusinessCalendar(db),
   });
   return { result, trustAccountId: s.trustAccountId, periodEnd: D, receivedDate: s.receivedDate ? iso(s.receivedDate) : null };
 }
 
 /** O. Reg. 579/05 s.13: 30 days after the statement is received (or, with no statement, after month end). */
-export const reconciliationDueBy = (receivedDate: string | null, periodEnd: string) =>
+export const statutoryDueBy = (receivedDate: string | null, periodEnd: string) =>
   addDays(receivedDate ?? periodEnd, RECONCILIATION_DUE_DAYS);
+
+/**
+ * The date we hold ourselves to: the earlier of s.13 and RECO's guidance that
+ * the broker of record signs within 30 days after month end.
+ */
+export const reconciliationDueBy = (receivedDate: string | null, periodEnd: string) => {
+  const statutory = statutoryDueBy(receivedDate, periodEnd);
+  const guidance = addDays(periodEnd, RECONCILIATION_DUE_DAYS);
+  return statutory < guidance ? statutory : guidance;
+};
 
 export interface ReconciliationView {
   id: string;
@@ -513,7 +613,11 @@ export interface ReconciliationView {
   periodEnd: string;
   statementReceived: string | null;
   dueBy: string;
-  status: "PREPARED" | "SIGNED" | "SIGNED_WITH_DISCREPANCY";
+  statutoryDueBy: string;
+  status: "PREPARED" | "SIGNED" | "SIGNED_WITH_DISCREPANCY" | "SUPERSEDED";
+  /** A correction of an earlier signed reconciliation, and why */
+  supersedes: { id: string; reason: string } | null;
+  supersededBy: string | null;
   signedOnTime: boolean | null;
   statementVerified: boolean;
   incidents: { id: string; kind: string; open: boolean }[];
@@ -539,6 +643,7 @@ async function reconciliationView(db: Db, id: string): Promise<ReconciliationVie
       preparedBy: { select: { firstName: true, lastName: true } },
       signedBy: { select: { firstName: true, lastName: true } },
       statement: { select: { receivedDate: true, verification: { select: { statementId: true } } } },
+      supersededBy: { select: { id: true, signedAt: true } },
     },
   });
   if (!r) throw new NotFoundError("Reconciliation", id);
@@ -556,7 +661,10 @@ async function reconciliationView(db: Db, id: string): Promise<ReconciliationVie
     periodEnd: iso(r.periodEnd),
     statementReceived: received,
     dueBy,
-    status: !r.signedAt ? "PREPARED" : r.isBalanced ? "SIGNED" : "SIGNED_WITH_DISCREPANCY",
+    statutoryDueBy: statutoryDueBy(received, iso(r.periodEnd)),
+    status: r.supersededBy?.signedAt ? "SUPERSEDED" : !r.signedAt ? "PREPARED" : r.isBalanced ? "SIGNED" : "SIGNED_WITH_DISCREPANCY",
+    supersedes: r.supersedesId ? { id: r.supersedesId, reason: r.amendmentReason! } : null,
+    supersededBy: r.supersededBy?.id ?? null,
     signedOnTime: r.signedAt ? todayInToronto(r.signedAt) <= dueBy : null,
     statementVerified: r.statement.verification !== null,
     incidents,
@@ -581,14 +689,20 @@ async function reconciliationView(db: Db, id: string): Promise<ReconciliationVie
 export async function previewReconciliation(deps: BankDeps, actor: Actor, statementId: string) {
   requireRole(actor, TRUST_VIEWERS, "Viewing a trust reconciliation");
   const { result, periodEnd, receivedDate } = await computeForStatement(deps.prisma, statementId);
-  return { periodEnd, statementReceived: receivedDate, dueBy: reconciliationDueBy(receivedDate, periodEnd), ...result };
+  return {
+    periodEnd, statementReceived: receivedDate, dueBy: reconciliationDueBy(receivedDate, periodEnd),
+    statutoryDueBy: statutoryDueBy(receivedDate, periodEnd), ...result,
+  };
 }
 
 export async function prepareReconciliation(deps: BankDeps, actor: Actor, body: unknown): Promise<ReconciliationView> {
   requireRole(actor, BANK_STAFF, "Preparing a trust reconciliation");
-  const r = new Reader(body, ["statementId", "explanation"]);
+  const r = new Reader(body, ["statementId", "explanation", "supersedesId", "amendmentReason"]);
   const statementId = r.uuid("statementId");
   const explanation = r.optionalText("explanation", 4000);
+  const supersedesId = r.optionalUuid("supersedesId");
+  const amendmentReason = r.optionalText("amendmentReason", 2000);
+  r.check((supersedesId === null) === (amendmentReason === null), "amendmentReason", "is required with supersedesId (and only then)");
   r.done();
 
   const published: NotificationView[] = [];
@@ -599,13 +713,13 @@ export async function prepareReconciliation(deps: BankDeps, actor: Actor, body: 
       const [row] = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO "TrustReconciliation" (id, "trustAccountId", "statementId", "periodEnd", "bankClosingBalance", "outstandingDeposits",
           "outstandingDisbursements", "unrecordedBankItems", "adjustedBankBalance", "ledgerBalance", "clientLiabilities", difference,
-          "isBalanced", details, explanation, "preparedById")
+          "isBalanced", details, explanation, "preparedById", "supersedesId", "amendmentReason")
         VALUES (gen_random_uuid(), ${trustAccountId}::uuid, ${statementId}::uuid, ${periodEnd}::date,
           ${formatCents(x.bankClosingBalance)}::numeric, ${formatCents(x.outstandingDeposits)}::numeric,
           ${formatCents(x.outstandingDisbursements)}::numeric, ${formatCents(x.unrecordedBankItems)}::numeric,
           ${formatCents(x.adjustedBankBalance)}::numeric, ${formatCents(x.ledgerBalance)}::numeric,
           ${formatCents(x.clientLiabilities)}::numeric, ${formatCents(x.difference)}::numeric, ${x.isBalanced},
-          ${JSON.stringify(x.details)}::jsonb, ${explanation}, ${actor.id}::uuid)
+          ${JSON.stringify(x.details)}::jsonb, ${explanation}, ${actor.id}::uuid, ${supersedesId}::uuid, ${amendmentReason})
         RETURNING id::text`;
       id = row!.id;
       const today = deps.today?.() ?? todayInToronto();
@@ -619,7 +733,8 @@ export async function prepareReconciliation(deps: BankDeps, actor: Actor, body: 
           type: "TRUST_SHORTFALL",
           title: `Trust shortfall of $${formatCents(shortfall)} at ${periodEnd}: notify RECO and replenish immediately`,
           body: "O. Reg. 579/05 s.14 requires the brokerage to notify the registrar immediately and deposit enough to eliminate the " +
-            "shortfall. Record both on the trust incident. " + x.details.exceptions.slice(0, 3).join(" · "),
+            "shortfall. The only exception (RECO Bulletin 8.2): a shortfall caused solely by bank service fees and made good as soon " +
+            "as it is found. The broker of record records the cause on the trust incident. " + x.details.exceptions.slice(0, 3).join(" · "),
           dealId: null,
           slotId: null,
         }));
@@ -781,26 +896,57 @@ export interface IncidentView {
   open: boolean;
   registrarNotified: boolean;
   replenished: string;
+  /** BANK_SERVICE_FEE, OTHER, or null until the broker of record determines it */
+  cause: "BANK_SERVICE_FEE" | "OTHER" | null;
+  /** RECO Bulletin 8.2: no registrar notice if solely bank service fees and replenished by the day after discovery */
+  serviceFeeException: { feesIdentified: string; replenishBy: string; available: boolean } | null;
   /** What the s.14 process still needs, in order */
   outstanding: string[];
-  events: { kind: string; eventDate: string; amount: string | null; reference: string | null; note: string | null; by: string; at: string }[];
+  events: {
+    kind: string; eventDate: string; amount: string | null; reference: string | null; note: string | null; cause: string | null;
+    bankTransactionId: string | null; by: string; at: string;
+  }[];
 }
 
 async function incidentView(db: Db, id: string): Promise<IncidentView> {
   const i = await db.trustIncident.findUnique({
     where: { id },
-    include: { events: { orderBy: { createdAt: "asc" }, include: { actor: { select: { firstName: true, lastName: true } } } } },
+    include: {
+      events: {
+        orderBy: { createdAt: "asc" },
+        include: { actor: { select: { firstName: true, lastName: true } }, bankTransaction: { select: { amount: true } } },
+      },
+    },
   });
   if (!i) throw new NotFoundError("Trust incident", id);
   const open = !i.events.some((e) => e.kind === "RESOLVED");
   const notified = i.events.some((e) => e.kind === "REGISTRAR_NOTIFIED");
   const replenished = i.events.filter((e) => e.kind === "REPLENISHED").reduce((s, e) => s + cents(e.amount!), 0);
   const worst = Math.max(cents(i.amount), ...i.events.filter((e) => e.kind === "OBSERVED" && e.amount).map((e) => cents(e.amount!)));
+  const causes = i.events.filter((e) => e.kind === "CAUSE_DETERMINED");
+  const cause = causes.some((e) => e.cause === "OTHER") ? "OTHER" : causes.length ? "BANK_SERVICE_FEE" : null;
+  const fees = cause === "BANK_SERVICE_FEE" ? -causes.reduce((s, e) => s + cents(e.bankTransaction!.amount), 0) : 0;
+  const replenishBy = addDays(todayInToronto(i.detectedAt), 1);
+  let running = 0;
+  const coveredOn = i.events.filter((e) => e.kind === "REPLENISHED")
+    .sort((a, b) => iso(a.eventDate).localeCompare(iso(b.eventDate)))
+    .find((e) => (running += cents(e.amount!)) >= worst);
+  const feeExceptionAvailable = cause === "BANK_SERVICE_FEE" && fees >= worst && (coveredOn ? iso(coveredOn.eventDate) <= replenishBy : true);
   const outstanding: string[] = [];
   if (open && i.kind === "SHORTFALL") {
-    if (!notified) outstanding.push("Notify the RECO registrar immediately and record when, how and the reference");
-    if (replenished < worst) outstanding.push(`Deposit $${formatCents(worst - replenished)} of brokerage funds into the trust account and record the bank reference`);
-    outstanding.push("Resolve once reported and replenished (or once a later balanced reconciliation shows it was a ledger error)");
+    if (!notified && !feeExceptionAvailable) outstanding.push("Notify the RECO registrar immediately and record when, how and the reference");
+    if (cause === null) {
+      outstanding.push("Broker of record: record the cause. Only a shortfall caused solely by bank service fees, made good by " +
+        `${replenishBy}, is exempt from notifying RECO (Bulletin 8.2); anything else is reported now`);
+    }
+    if (replenished < worst) {
+      outstanding.push(`Deposit $${formatCents(worst - replenished)} of brokerage funds into the trust account and record the bank reference` +
+        (feeExceptionAvailable ? ` by ${replenishBy}, or the service-fee exception lapses and RECO must be notified` : ""));
+    }
+    if (cause === "BANK_SERVICE_FEE" && fees < worst) {
+      outstanding.push(`The bank fees identified ($${formatCents(fees)}) don't account for the whole $${formatCents(worst)}: identify the rest or treat it as reportable`);
+    }
+    outstanding.push("Resolve once reported and replenished, replenished under the service-fee exception, or shown by a later balanced reconciliation to be a ledger error");
   } else if (open) {
     outstanding.push("Investigate, record what was found, and resolve");
   }
@@ -814,10 +960,14 @@ async function incidentView(db: Db, id: string): Promise<IncidentView> {
     open,
     registrarNotified: notified,
     replenished: formatCents(replenished),
+    cause,
+    serviceFeeException: i.kind === "SHORTFALL" && cause === "BANK_SERVICE_FEE"
+      ? { feesIdentified: formatCents(fees), replenishBy, available: feeExceptionAvailable }
+      : null,
     outstanding,
     events: i.events.map((e) => ({
       kind: e.kind, eventDate: iso(e.eventDate), amount: e.amount?.toFixed(2) ?? null, reference: e.reference, note: e.note,
-      by: `${e.actor.firstName} ${e.actor.lastName}`, at: e.createdAt.toISOString(),
+      cause: e.cause, bankTransactionId: e.bankTransactionId, by: `${e.actor.firstName} ${e.actor.lastName}`, at: e.createdAt.toISOString(),
     })),
   };
 }
@@ -838,9 +988,10 @@ export async function getIncident(deps: BankDeps, actor: Actor, id: string) {
 export async function addIncidentEvent(deps: BankDeps, actor: Actor, incidentId: string, body: unknown): Promise<IncidentView> {
   requireRole(actor, BANK_STAFF, "Updating a trust incident");
   const today = deps.today?.() ?? todayInToronto();
-  const r = new Reader(body, ["kind", "eventDate", "amount", "reference", "note", "reconciliationId", "bankTransactionId"]);
+  const r = new Reader(body, ["kind", "eventDate", "amount", "reference", "note", "reconciliationId", "bankTransactionId", "cause"]);
   const input = {
-    kind: r.oneOf("kind", ["NOTE", "REGISTRAR_NOTIFIED", "REPLENISHED", "RESOLVED"] as const),
+    kind: r.oneOf("kind", ["NOTE", "REGISTRAR_NOTIFIED", "REPLENISHED", "RESOLVED", "CAUSE_DETERMINED"] as const),
+    cause: r.has("cause") ? r.oneOf("cause", ["BANK_SERVICE_FEE", "OTHER"] as const) : null,
     eventDate: r.has("eventDate") ? r.pastDate("eventDate", today) : today,
     amount: r.has("amount") ? r.amount("amount") : null,
     reference: r.optionalText("reference", 200),
@@ -850,14 +1001,17 @@ export async function addIncidentEvent(deps: BankDeps, actor: Actor, incidentId:
   };
   r.check(input.kind !== "REPLENISHED" || input.amount !== null, "amount", "is required for a replenishment");
   r.check(!["REGISTRAR_NOTIFIED", "REPLENISHED"].includes(input.kind) || input.reference !== null, "reference", "is required as evidence");
-  r.check(!["NOTE", "RESOLVED"].includes(input.kind) || input.note !== null, "note", "is required");
+  r.check(!["NOTE", "RESOLVED", "CAUSE_DETERMINED"].includes(input.kind) || input.note !== null, "note", "is required");
+  r.check((input.kind === "CAUSE_DETERMINED") === (input.cause !== null), "cause", "is given with CAUSE_DETERMINED, and only then");
+  r.check(input.cause !== "BANK_SERVICE_FEE" || input.bankTransactionId !== null, "bankTransactionId", "the bank line showing the fee is required");
   r.done();
   try {
     await deps.prisma.$executeRaw`
-      INSERT INTO "TrustIncidentEvent" (id, "incidentId", kind, "eventDate", amount, reference, note, "reconciliationId", "bankTransactionId", "actorId")
+      INSERT INTO "TrustIncidentEvent" (id, "incidentId", kind, "eventDate", amount, reference, note, "reconciliationId", "bankTransactionId",
+                                        "actorId", cause)
       VALUES (gen_random_uuid(), ${incidentId}::uuid, ${input.kind}::"TrustIncidentEventKind", ${input.eventDate}::date,
               ${input.amount === null ? null : formatCents(input.amount)}::numeric, ${input.reference}, ${input.note},
-              ${input.reconciliationId}::uuid, ${input.bankTransactionId}::uuid, ${actor.id}::uuid)`;
+              ${input.reconciliationId}::uuid, ${input.bankTransactionId}::uuid, ${actor.id}::uuid, ${input.cause})`;
   } catch (err) {
     if ((err as { meta?: { code?: string } })?.meta?.code === "23503") throw new NotFoundError("Trust incident", incidentId);
     rethrow(err);

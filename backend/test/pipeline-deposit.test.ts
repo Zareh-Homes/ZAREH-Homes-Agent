@@ -25,17 +25,26 @@ test("recorded on time but not yet matched to the bank statement: amber, not yet
 });
 
 test("banked on the 6th business day: red, late to trust", () => {
-  const b = depositStatus({ ...base, deposits: [dep("2026-10-02", "2026-10-12")] });
+  // Received Fri Oct 2, banked Tue Oct 13: Oct 5–9 and 13 are business days; Thanksgiving (Oct 12) isn't
+  const b = depositStatus({ ...base, deposits: [dep("2026-10-02", "2026-10-13")] });
   assert.equal(b.state, "LATE_TO_TRUST");
   assert.equal(b.tone, "critical");
   assert.match(b.detail, /6 business days \(limit 5\)/);
+});
+
+test("statutory holidays don't count: banked the Monday after Thanksgiving weekend is on time", () => {
+  // Received Fri Oct 2, banked Mon Oct 12 (Thanksgiving): still 5 business days
+  assert.equal(depositStatus({ ...base, deposits: [dep("2026-10-02", "2026-10-12")] }).state, "CLEARED");
+  // Good Friday and Easter Monday 2026 (Apr 3 and 6): received Wed Apr 1, banked Fri Apr 10 = 5 business days
+  assert.equal(depositStatus({ ...base, deposits: [dep("2026-04-01", "2026-04-10")] }).state, "CLEARED");
+  assert.equal(depositStatus({ ...base, deposits: [dep("2026-04-01", "2026-04-13")] }).state, "LATE_TO_TRUST");
 });
 
 test("nothing received and the APS due date has passed: red, Missing / Overdue", () => {
   const b = depositStatus(base);
   assert.equal(b.state, "OVERDUE");
   assert.equal(b.label, "Deposit Missing / Overdue");
-  assert.equal(b.detail, "$50,000 was due Oct 9 (4 business days ago)");
+  assert.equal(b.detail, "$50,000 was due Oct 9 (3 business days ago)"); // Oct 13–15; Thanksgiving doesn't count
 });
 
 test("part received after the due date is still overdue; before it, partial", () => {

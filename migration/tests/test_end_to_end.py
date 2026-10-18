@@ -198,7 +198,7 @@ def test_8_error_log_and_rejected_files(setup, migrated):
     assert any("left blank and marked MISSING (5% GST would be 1000.00)" in w["reason"] for w in warnings)
     jane = next(w for w in warnings if w["row"].get("Agent ID") == f"A101{run}")
     assert jane["row"]["Email"].startswith("o***@") and jane["row"]["Cell"] == "***0102"
-    assert any("9 business days after receipt" in w["reason"] for w in warnings)
+    assert any("8 business days after receipt" in w["reason"] for w in warnings)  # Sep 1 to 14, 2026: Labour Day excluded
     assert any("isn't named as a Personal Real Estate Corporation" in w["reason"] for w in warnings)
 
     rejected = pd.read_csv(setup["work"] / "out" / "rejected_trust.csv", dtype=str)

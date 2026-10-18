@@ -380,4 +380,36 @@ describe("closing and CDA API", { skip }, () => {
     assert.equal((await as(u.broker, "GET", `/api/deals/${dealId}/trust`)).json().balances[0].balance, "10000.00");
     assert.equal(await prisma.closingStatement.count({ where: { transactionId: dealId } }), 0);
   });
+  test("commission trust account: off until the broker of record enables it; then its own ledger and reconciliation", async () => {
+    const dealId = await torontoListing({ deposit: 40_000 });
+    await close(dealId);
+    assert.equal((await finalize(dealId)).statusCode, 201);
+    const cta = (await prisma.trustAccount.create({ data: { name: "Commission Trust", bankName: "TD", accountLast4: "5550", kind: "COMMISSION_TRUST" } })).id;
+    const receive = () => as(u.admin, "POST", `/api/deals/${dealId}/closing/commission-received`,
+      { amount: "15935.00", receivedDate: "2026-11-30", reference: "WIRE-CTA-9", account: { type: "COMMISSION_TRUST", id: cta } });
+    assert.equal((await receive()).json().error.code, "POLICY_NOT_APPROVED");
+
+    const policy = (enabled: boolean) => as(u.broker, "POST", "/api/financial-policies",
+      { policy: "COMMISSION_TRUST_ACCOUNT", enabled, reference: "Test: counsel and accountant sign-off" });
+    assert.equal((await policy(true)).statusCode, 200);
+    try {
+      assert.equal((await receive()).statusCode, 201);
+      const imported = await as(u.admin, "POST", "/api/bank/statements", {
+        accountType: "TRUST", accountId: cta, periodStart: "2026-11-01", periodEnd: "2026-11-30", openingBalance: "0.00",
+        closingBalance: "15935.00", receivedDate: "2026-12-01", source: "BANK_PORTAL_DOWNLOAD", fileName: "cta-nov.csv",
+        csv: "Date,Description,Amount\n11/30/2026,WIRE IN WIRE-CTA-9,15935.00\n",
+      });
+      assert.equal(imported.statusCode, 201, imported.body);
+      assert.equal(imported.json().autoMatched, 1);
+      assert.equal((await as(u.broker, "POST", `/api/bank/statements/${imported.json().id}/verify`, { method: "Checked TD portal" })).statusCode, 200);
+      const recon = await as(u.admin, "POST", "/api/trust/reconciliations", { statementId: imported.json().id });
+      assert.equal(recon.statusCode, 201, recon.body);
+      const r = recon.json();
+      assert.deepEqual([r.isBalanced, r.figures.ledgerBalance, r.figures.clientLiabilities], [true, "15935.00", "15935.00"]);
+      assert.deepEqual(r.details.deals.map((d: { basis: string; balance: number }) => [d.basis, d.balance]), [["PER_CDA", 1_593_500]]);
+      assert.equal((await as(u.broker, "POST", `/api/trust/reconciliations/${r.id}/sign`, {})).json().status, "SIGNED");
+    } finally {
+      await policy(false);
+    }
+  });
 });

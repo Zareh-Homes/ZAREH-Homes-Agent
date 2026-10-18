@@ -24,6 +24,7 @@ import {
   uniqueViolation,
 } from "../errors.ts";
 import { businessDaysBetween } from "../lib/dates.ts";
+import { loadBusinessCalendar } from "../lib/calendar-store.ts";
 import { formatCents, numericToCents, type Cents } from "../lib/money.ts";
 import {
   PAYEE_ENTRY_TYPE,
@@ -290,7 +291,7 @@ export async function recordDeposit(
       await setDepositStatus(tx, input.dealId, "RECEIVED", ["NOT_DUE", "AWAITING"]);
 
       const warnings: string[] = [];
-      if (businessDaysBetween(input.dateReceived, input.dateDeposited) > DEPOSIT_DEADLINE_BUSINESS_DAYS) {
+      if (businessDaysBetween(input.dateReceived, input.dateDeposited, await loadBusinessCalendar(tx)) > DEPOSIT_DEADLINE_BUSINESS_DAYS) {
         warnings.push("DEPOSITED_AFTER_5_BUSINESS_DAYS");
       }
       if (balanceAfter > numericToCents(deal.depositAmount)) {

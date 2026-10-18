@@ -369,11 +369,53 @@ def reconcile_tax(base: Decimal | None, tax: Decimal | None, total: Decimal | No
     return base, tax, source, notes
 
 
+def easter_sunday(year: int) -> date:
+    """Gregorian Easter (anonymous / Meeus algorithm)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def _nth_monday(year: int, month: int, n: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(7 - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def ontario_holidays(year: int, civic_holiday: bool = False) -> set[date]:
+    """Weekday holidays under the Legislation Act, 2006 ss.87-88, as in backend/src/lib/ontario-calendar.ts.
+    The Civic Holiday is off by default (unverified; counting it as a business day gives the earlier deadline).
+    Proclaimed days aren't known to the migration; the backend calendar has them."""
+    easter = easter_sunday(year)
+    days = {
+        date(year, 1, 1), _nth_monday(year, 2, 3), easter - timedelta(days=2), easter + timedelta(days=1),
+        date(year, 5, 24) - timedelta(days=date(year, 5, 24).weekday()),  # Victoria Day: Monday on or before May 24
+        date(year, 7, 2) if date(year, 7, 1).weekday() == 6 else date(year, 7, 1),
+        _nth_monday(year, 9, 1), _nth_monday(year, 10, 2), date(year, 11, 11), date(year, 12, 25), date(year, 12, 26),
+    }
+    if date(year, 1, 1).weekday() == 6:
+        days.add(date(year, 1, 2))
+    if date(year, 12, 25).weekday() in (5, 6):
+        days.add(date(year, 12, 27))
+    if civic_holiday:
+        days.add(_nth_monday(year, 8, 1))
+    return days
+
+
 def business_days_between(start: date, end: date) -> int:
-    days, d = 0, start
+    """Ontario business days after start, up to and including end (O. Reg. 567/05 s.17(2))."""
+    days, d, cache = 0, start, {}
     while d < end:
         d += timedelta(days=1)
-        if d.weekday() < 5:
+        holidays = cache.setdefault(d.year, ontario_holidays(d.year))
+        if d.weekday() < 5 and d not in holidays:
             days += 1
     return days
 

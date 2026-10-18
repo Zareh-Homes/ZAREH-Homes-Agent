@@ -1,5 +1,7 @@
 /** Calendar dates are "YYYY-MM-DD" strings in the brokerage's time zone. */
 
+import { BusinessCalendar, STATUTORY_CALENDAR } from "./ontario-calendar.ts";
+
 export const BROKERAGE_TIME_ZONE = "America/Toronto";
 
 const ISO_DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
@@ -23,16 +25,10 @@ export function todayInToronto(now: Date = new Date()): string {
 }
 
 /**
- * Weekdays after `from`, up to and including `to`. Statutory holidays are
- * not excluded, so this can undercount near a holiday (never overcount).
+ * Ontario business days after `from`, up to and including `to`: no
+ * Saturdays, Sundays or Legislation Act holidays (O. Reg. 567/05 s.17(2)).
+ * Pass the brokerage calendar to include proclaimed holidays.
  */
-export function businessDaysBetween(from: string, to: string): number {
-  const start = Date.parse(`${from}T00:00:00Z`);
-  const end = Date.parse(`${to}T00:00:00Z`);
-  let days = 0;
-  for (let t = start + 86_400_000; t <= end; t += 86_400_000) {
-    const dow = new Date(t).getUTCDay();
-    if (dow !== 0 && dow !== 6) days++;
-  }
-  return days;
+export function businessDaysBetween(from: string, to: string, calendar: BusinessCalendar = STATUTORY_CALENDAR): number {
+  return calendar.between(from, to);
 }
