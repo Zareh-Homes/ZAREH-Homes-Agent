@@ -40,7 +40,7 @@ export function PrecTaxTracker({ prec, year }: { prec: NonNullable<PersonalDashb
           {dollars(prec.hstReceivedCents)}
         </p>
         <p className="mt-2 text-sm text-ink-2">
-          This is CRA's money, not income. Keep it set aside for your corporation's HST return.
+          This is HST you collected for CRA, not income. Set it aside for your corporation's HST return; it's separate from corporate income tax.
         </p>
         <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-line pt-3 text-sm">
           <div>

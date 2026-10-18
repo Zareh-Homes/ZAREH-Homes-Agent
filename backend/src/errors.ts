@@ -112,6 +112,8 @@ export function fromDatabaseError(err: unknown): DomainError | null {
       return new ForbiddenError(message);
     case "ZD003":
       return new DomainError("APPEND_ONLY", 405, message);
+    case "ZD004":
+      return new RuleViolationError("PAYOUT_RULE", message);
     default:
       return null;
   }

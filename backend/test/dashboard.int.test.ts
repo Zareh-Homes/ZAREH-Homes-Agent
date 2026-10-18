@@ -66,7 +66,7 @@ describe("dashboard API", { skip }, () => {
     await prisma.transaction.update({ where: { id: deals.closed }, data: { status: "CLOSED" } });
     const computation = {
       incoming: { commission: { base: 2_750_000, hst: 357_500, total: 3_107_500 } },
-      brokerage: { netEarnedShare: { base: 570_000, hst: 74_100, total: 644_100 }, referral: null, hstRemittance: 74_100 },
+      brokerage: { netEarnedShare: { base: 570_000, hst: 74_100, total: 644_100 }, referral: null, netHstEstimate: 74_100 },
     };
     const [closing] = await prisma.$queryRaw<{ id: string }[]>`
       INSERT INTO "ClosingStatement" (id, "transactionId", "cdaNumber", computation, "computationSha", "lawyerHtml",
@@ -78,7 +78,7 @@ describe("dashboard API", { skip }, () => {
       data: {
         closingId: closing!.id, userId: u.agent, closeDate: new Date("2031-03-01"), payeeName: "Jane Agent Real Estate Professional Corporation",
         allocatedBaseGci: "27500", houseSplitBase: "5500", agentSplitBase: "22000", agentSplitHst: "2860",
-        feesBase: "200", feesHst: "26", netPayout: "24634", wiredByLawyer: "24634", paidByBrokerage: "0",
+        feesBase: "200", feesHst: "26", netPayout: "24634", wiredByLawyer: "0", paidByBrokerage: "24634",
       },
     });
 
@@ -129,7 +129,7 @@ describe("dashboard API", { skip }, () => {
     );
     assert.deepEqual(delta, {
       companyDollarCents: 570_000, closedVolumeCents: 100_000_000, closedDeals: 1,
-      hstCollectedCents: 357_500, hstToRemitCents: 74_100, finalizedClosings: 1,
+      hstCollectedCents: 357_500, netHstEstimateCents: 74_100, finalizedClosings: 1,
     });
   });
 

@@ -22,7 +22,7 @@ describe("closing and CDA API", { skip }, () => {
   const app = buildApp({
     prisma, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), brokerage: TEST_BROKERAGE, today: () => TODAY,
   });
-  const u = { broker: "", compliance: "", agent: "" };
+  const u = { broker: "", compliance: "", agent: "", admin: "" };
   let account = "";
 
   before(async () => {
@@ -32,6 +32,7 @@ describe("closing and CDA API", { skip }, () => {
       })).id;
     u.broker = await make("MANAGING_BROKER");
     u.compliance = await make("COMPLIANCE_ADMIN");
+    u.admin = await make("ADMIN");
     u.agent = await make("AGENT", {
       isPrec: true, precLegalName: "Jane Smith Real Estate Professional Corporation", hstNumber: "123456789RT0001",
     });
@@ -172,14 +173,71 @@ describe("closing and CDA API", { skip }, () => {
     assert.equal(code, "APPEND_ONLY");
   });
 
-  test("deposit short of the commission: lawyer owes the balance, wired to the PREC", async () => {
+  test("deposit short of the commission: lawyer pays the brokerage; the agent is paid only after receipt and broker approval", async () => {
     const dealId = await torontoListing({ deposit: 40_000 });
     await close(dealId);
     const res = await finalize(dealId);
     assert.equal(res.statusCode, 201, res.body);
     const c = res.json().computation;
     assert.equal(c.trust.balanceDueFromLawyer, 1_593_500);
-    assert.deepEqual(c.wires.map((w: { to: string; amount: number }) => [w.to, w.amount]), [["AGENT", 1_593_500]]);
+    assert.deepEqual(c.wires.map((w: { to: string; amount: number }) => [w.to, w.amount]), [["BROKERAGE", 1_593_500]]);
+
+    const row = await prisma.closingAgentPayout.findFirstOrThrow({ where: { closing: { transactionId: dealId } } });
+    assert.equal(row.wiredByLawyer.toFixed(2), "0.00");
+    assert.equal(row.paidByBrokerage.toFixed(2), "24634.00");
+
+    const payouts = (await as(u.admin, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
+    assert.equal(payouts.commissionDue, "15935.00");
+    assert.equal(payouts.payouts[0].status, "AWAITING_COMMISSION");
+    const payoutId: string = payouts.payouts[0].id;
+
+    // Can't approve before the money is in, or pay before approval
+    const early = await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {});
+    assert.equal(early.json().error.code, "COMMISSION_NOT_RECEIVED");
+    const unapproved = await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "EFT-1" });
+    assert.equal(unapproved.json().error.code, "PAYOUT_NOT_APPROVED");
+
+    const receive = (amount: string, user = u.admin) => as(user, "POST", `/api/deals/${dealId}/closing/commission-received`,
+      { amount, receivedDate: "2026-11-30", reference: "WIRE-PATEL-77" });
+    assert.equal((await receive("15935.00", u.agent)).statusCode, 403);
+    assert.equal((await receive("10000.00")).statusCode, 201);
+    assert.equal((await receive("6000.00")).json().error.code, "COMMISSION_OVER_RECEIVED");
+    assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "COMMISSION_NOT_RECEIVED");
+    const full = await receive("5935.00");
+    assert.equal(full.json().commissionReceived, "15935.00");
+    assert.equal(full.json().payouts[0].status, "READY_FOR_APPROVAL");
+
+    assert.equal((await as(u.admin, "POST", `/api/payouts/${payoutId}/approve`, {})).statusCode, 403); // broker only
+    const approved = await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, { note: "Checked against CDA" });
+    assert.equal(approved.statusCode, 200, approved.body);
+    assert.equal(approved.json().payouts[0].status, "APPROVED");
+    assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "PAYOUT_ALREADY_APPROVED");
+
+    const paid = await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "EFT-20261201-1" });
+    assert.equal(paid.statusCode, 200, paid.body);
+    assert.deepEqual(
+      [paid.json().payouts[0].status, paid.json().payouts[0].paymentReference], ["PAID", "EFT-20261201-1"]);
+
+    // The database enforces the same rules if the API is bypassed
+    let code = "no error";
+    try {
+      await prisma.$executeRaw`INSERT INTO "ClosingAgentPayout" (id, "closingId", "userId", "closeDate", "payeeName",
+        "allocatedBaseGci", "houseSplitBase", "agentSplitBase", "agentSplitHst", "feesBase", "feesHst", "netPayout",
+        "wiredByLawyer", "paidByBrokerage")
+        VALUES (gen_random_uuid(), ${row.closingId}::uuid, ${u.agent}::uuid, '2026-11-30', 'x', 1, 0, 1, 0, 0, 0, 1, 1, 0)`;
+    } catch (err) {
+      code = (err as { meta?: { code?: string } }).meta?.code ?? "other";
+    }
+    assert.equal(code, "23514", "direct-to-agent payments are rejected by a CHECK constraint");
+  });
+
+  test("payouts on a closing paid entirely from trust can be approved straight away", async () => {
+    const dealId = await torontoListing({ deposit: 60_000 });
+    await close(dealId);
+    assert.equal((await finalize(dealId)).statusCode, 201);
+    const view = (await as(u.broker, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
+    assert.equal(view.commissionDue, "0.00");
+    assert.equal(view.payouts[0].status, "READY_FOR_APPROVAL");
   });
 
   test("cap: earlier finalized closings count toward the agent's cap year", async () => {

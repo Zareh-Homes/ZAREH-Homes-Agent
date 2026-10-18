@@ -104,7 +104,7 @@ def test_5_deals_tax_dates_and_money(engine, setup, migrated):
     run = setup["run"]
     deals = {r["dealNumber"]: r for r in q(engine, """
         SELECT "dealNumber", side::text, status::text, "streetAddress", city, "mlsNumber", "salePrice", "offerDate"::text,
-               "closeDate"::text, "totalGci", "hstOnGci", "coopCommission", "trustDepositHolder"::text, "depositStatus"::text
+               "closeDate"::text, "totalGci", "hstOnGci", "hstSource"::text, "coopCommission", "trustDepositHolder"::text, "depositStatus"::text
           FROM "Transaction" WHERE "dealNumber" LIKE :p""", p=f"LW-T%{run}")}
     assert sorted(deals) == sorted(f"LW-T{n}{run}" for n in (1, 2, 3, 4, 5))
 
@@ -112,19 +112,20 @@ def test_5_deals_tax_dates_and_money(engine, setup, migrated):
     assert (t1["offerDate"], t1["closeDate"]) == ("2024-09-10", "2024-11-30")
     assert (t1["salePrice"], t1["totalGci"], t1["hstOnGci"], t1["coopCommission"]) == (
         Decimal("1100000.00"), Decimal("27500.00"), Decimal("3575.00"), Decimal("22000.00"))
+    assert t1["hstSource"] == "RECORDED"
     assert t1["mlsNumber"] == "C1234567"
     assert t1["depositStatus"] == "RELEASED"
 
     t2 = deals[f"LW-T2{run}"]
     assert (t2["side"], t2["status"]) == ("BUYER", "CLOSED")
-    assert (t2["totalGci"], t2["hstOnGci"]) == (Decimal("27500.00"), Decimal("3575.00"))
+    assert (t2["totalGci"], t2["hstOnGci"], t2["hstSource"]) == (Decimal("27500.00"), Decimal("3575.00"), "DERIVED_FROM_TOTAL")
     assert t2["trustDepositHolder"] == "COOP_BROKERAGE"
 
     t3 = deals[f"LW-T3{run}"]
     assert (t3["streetAddress"], t3["city"]) == ("12 Main St E", "Grimsby")
-    assert t3["hstOnGci"] == Decimal("1000.00")
+    assert (t3["hstOnGci"], t3["hstSource"]) == (None, "MISSING")
 
-    assert deals[f"LW-T4{run}"]["hstOnGci"] == Decimal("1000.00")
+    assert (deals[f"LW-T4{run}"]["hstOnGci"], deals[f"LW-T4{run}"]["hstSource"]) == (Decimal("1000.00"), "RECORDED")
     assert deals[f"LW-T5{run}"]["depositStatus"] == "RECEIVED"
 
 
@@ -183,6 +184,9 @@ def test_8_error_log_and_rejected_files(setup, migrated):
     warnings = [e for e in lines if e.get("severity") == "WARNING"]
     assert any("expected 1300.00" in w["reason"] for w in warnings)
     assert any("backed out of combined commission" in w["reason"] for w in warnings)
+    assert any("left blank and marked MISSING (5% GST would be 1000.00)" in w["reason"] for w in warnings)
+    jane = next(w for w in warnings if w["row"].get("Agent ID") == f"A101{run}")
+    assert jane["row"]["Email"].startswith("o***@") and jane["row"]["Cell"] == "***0102"
     assert any("9 business days after receipt" in w["reason"] for w in warnings)
     assert any("isn't named as a Personal Real Estate Corporation" in w["reason"] for w in warnings)
 

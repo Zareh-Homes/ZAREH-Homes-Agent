@@ -77,22 +77,20 @@ test("1–3: incoming funds, agent PREC payout and the brokerage's earned share"
   assert.deepEqual(jane!.feesTotal, { base: $(200), hst: $(26), total: $(226) });
   assert.equal(jane!.payout, $(24_634));
 
-  // Brokerage keeps $5,700 + $741 HST; $741 is also what it remits to CRA
+  // Brokerage keeps $5,700 + $741 HST; $741 is this deal's net HST before the brokerage's other ITCs
   assert.deepEqual(c.brokerage.netEarnedShare, { base: $(5_700), hst: $(741), total: $(6_441) });
-  assert.equal(c.brokerage.hstRemittance, $(741));
+  assert.equal(c.brokerage.netHstEstimate, $(741));
+  assert.equal(c.brokerage.agentPayablesTotal, $(24_634));
 });
 
-test("5: deposit not held by us — lawyer wires $31,301 to the brokerage and $24,634 to the PREC", () => {
+test("5: deposit not held by us — lawyer pays the whole $55,935 to the brokerage, nothing to the PREC", () => {
   const c = computeClosing(toronto(55_000, "COOP_BROKERAGE"), BROKERAGE);
   assert.equal(c.payer.kind, "SELLER_LAWYER");
   assert.equal(c.trust.balanceDueFromLawyer, $(55_935));
   assert.deepEqual(c.trust.distributions, []);
   assert.deepEqual(
-    c.wires.map((w) => [w.to, w.payeeName, w.owed.base, w.owed.hst, w.amount]),
-    [
-      ["BROKERAGE", BROKERAGE, $(27_700), $(3_601), $(31_301)], // co-op $24,860 + brokerage $6,441
-      ["AGENT", "Jane Smith Real Estate Professional Corporation", $(21_800), $(2_834), $(24_634)],
-    ],
+    c.wires.map((w) => [w.to, w.payeeName, w.owed.base, w.owed.hst, w.lessFromTrust, w.amount]),
+    [["BROKERAGE", BROKERAGE, $(49_500), $(6_435), 0, $(55_935)]], // our $27,500 + co-op $22,000, plus HST
   );
   assert.equal(c.wiresTotal, $(55_935));
 });
@@ -111,18 +109,16 @@ test("2: deposit greater than commission — trust pays everything and $4,065 go
   );
   assert.equal(c.trust.balanceAfter, 0);
   assert.deepEqual(c.wires, []);
-  assert.equal(c.agents[0]!.coveredByTrust, $(24_634));
 });
 
-test("2: deposit less than commission — brokerage side from trust first, lawyer wires the rest to the PREC", () => {
+test("2: deposit less than commission — co-op and brokerage from trust first, lawyer pays the rest to the brokerage", () => {
   const c = computeClosing(toronto(40_000, "OUR_BROKERAGE"), BROKERAGE);
   assert.equal(c.trust.balanceDueFromLawyer, $(15_935)); // 55,935 − 40,000
   assert.deepEqual(
     c.trust.distributions.map((d) => [d.entryType, d.amount]),
     [["DISBURSEMENT_TO_COOP", $(24_860)], ["DISBURSEMENT_TO_GENERAL", $(15_140)]], // 6,441 + 8,699 toward Jane
   );
-  assert.deepEqual(c.wires.map((w) => [w.to, w.lessFromTrust, w.amount]), [["AGENT", $(8_699), $(15_935)]]);
-  assert.equal(c.agents[0]!.coveredByTrust + c.agents[0]!.wiredByPayer, c.agents[0]!.payout);
+  assert.deepEqual(c.wires.map((w) => [w.to, w.lessFromTrust, w.amount]), [["BROKERAGE", $(40_000), $(15_935)]]);
 });
 
 test("co-listing, cap and referral: shares split the GCI to the cent and the cap limits the house", () => {
@@ -200,15 +196,17 @@ test("CDA document: lawyer copy has the wires but not the split; internal copy a
   for (const text of [
     "Commission Disbursement", "CDA-2026-0042", "November 30, 2026", "1205 – 88 Queens Quay W, Toronto, Ontario",
     "Patel &lt;Law&gt; &amp; Co", "Balance due FROM lawyer", "$15,935.00", "$55,935.00",
-    "Jane Smith Real Estate Professional Corporation", "Trust balance for this deal after closing", "$0.00",
-    "Wire fraud warning",
+    "Trust balance for this deal after closing", "$0.00", "Wire fraud warning",
+    "Do not pay any salesperson, broker or personal real estate corporation directly",
   ]) assert.ok(lawyer.includes(text), `lawyer copy is missing: ${text}`);
+  assert.ok(!lawyer.includes("Jane Smith Real Estate Professional Corporation"), "the lawyer copy names no agent payee");
   assert.ok(!lawyer.includes("Patel <Law>"));
   assert.ok(!lawyer.includes("Agent commission statements"));
   assert.ok(!lawyer.includes("DRAFT</div>"));
 
   assert.ok(internal.includes("Agent commission statements"));
-  assert.ok(internal.includes("Net HST to remit to CRA"));
+  assert.ok(internal.includes("Estimated net HST on this deal"));
+  assert.ok(internal.includes("Paid by Test Brokerage Inc. once the commission is received"), "agent statements say the brokerage pays them");
   assert.ok(internal.includes('class="watermark"'));
 });
 

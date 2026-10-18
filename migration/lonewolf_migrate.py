@@ -123,6 +123,39 @@ class Issue:
     row: dict[str, Any]
 
 
+REDACT_RULES = [
+    (re.compile(r"account|acct|transit|institution|routing|iban|swift|card"), "last4"),
+    (re.compile(r"\bsin\b|social insurance|passport|licen[cs]e|id ?(number|no|#)|birth|\bdob\b"), "remove"),
+    (re.compile(r"e-?mail"), "email"),
+    (re.compile(r"phone|cell|mobile|\btel\b|fax"), "last4"),
+    (re.compile(r"seller|buyer|payor|payee|payer|purchaser|vendor|client|tenant|landlord|counterparty"), "initials"),
+]
+LONG_NUMBER = re.compile(r"(?<![\d.,])\d{4,}(\d{4})(?![\d.,])")
+
+
+def redact_value(header: str, value: Any) -> Any:
+    if value is None or str(value).strip() == "":
+        return value
+    text_value = str(value)
+    h = norm_header(header)
+    for pattern, how in REDACT_RULES:
+        if pattern.search(h):
+            if how == "remove":
+                return "[redacted]"
+            if how == "last4":
+                digits = re.sub(r"\D", "", text_value)
+                return f"***{digits[-4:]}" if len(digits) >= 4 else "***"
+            if how == "email":
+                local, _, domain = text_value.partition("@")
+                return f"{local[:1]}***@{domain}" if domain else "***"
+            return " ".join(f"{w[0]}." for w in re.findall(r"[^\W\d_]+", text_value)) or "***"
+    return LONG_NUMBER.sub(lambda m: "****" + m.group(1), text_value)
+
+
+def redact_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {k: redact_value(k, v) for k, v in row.items()}
+
+
 @dataclass
 class Ledger:
     issues: list[Issue] = field(default_factory=list)
@@ -143,7 +176,7 @@ class Ledger:
             "key": issue.key,
             "severity": issue.severity,
             "reason": issue.reason,
-            "row": issue.row,
+            "row": redact_row(issue.row),
         }
         log.log(logging.ERROR if issue.severity == "ERROR" else logging.WARNING, json.dumps(payload, default=str, ensure_ascii=False))
 
@@ -301,31 +334,36 @@ def tax_rate(province: str | None, when: date) -> tuple[Decimal, str]:
     raise RowError(f"no Ontario tax rate for {when.isoformat()}")
 
 
-def reconcile_tax(base: Decimal | None, tax: Decimal | None, total: Decimal | None, rate: Decimal, tax_name: str) -> tuple[Decimal, Decimal, list[str]]:
+def reconcile_tax(base: Decimal | None, tax: Decimal | None, total: Decimal | None, rate: Decimal, tax_name: str) -> tuple[Decimal, Decimal | None, str, list[str]]:
     notes: list[str] = []
     pct = f"{(rate * HUNDRED).normalize()}% {tax_name}"
     if base is None and total is None:
         raise RowError("no commission amount (base GCI or commission incl. tax)")
+    source = "RECORDED"
     if base is not None and tax is not None:
         if total is not None and abs(base + tax - total) > CENT:
             raise RowError(f"base GCI {base} + tax {tax} doesn't equal the total commission {total}")
     elif base is not None and total is not None:
         tax = total - base
+        source = "DERIVED_FROM_TOTAL"
         notes.append(f"tax {tax} derived from total commission {total} − base GCI {base}")
     elif total is not None:
         base = (total / (1 + rate)).quantize(CENT, rounding=ROUND_HALF_UP)
         tax = total - base
-        notes.append(f"base GCI {base} and tax {tax} backed out of combined commission {total} at {pct}")
-    else:
-        tax = (base * rate).quantize(CENT, rounding=ROUND_HALF_UP)
-        notes.append(f"tax {tax} backfilled at {pct} of base GCI {base}")
-    assert base is not None and tax is not None
+        source = "DERIVED_FROM_TOTAL"
+        notes.append(f"base GCI {base} and tax {tax} backed out of combined commission {total} assuming {pct}; confirm against the original statement")
+    assert base is not None
+    expected = (base * rate).quantize(CENT, rounding=ROUND_HALF_UP)
+    if tax is None:
+        notes.append(f"tax not in the export; left blank and marked MISSING ({pct} would be {expected}); confirm against the original statement")
+        if base < 0:
+            raise RowError(f"commission figures don't make sense: base {base}")
+        return base, None, "MISSING", notes
     if base < 0 or tax < 0 or tax > base:
         raise RowError(f"commission figures don't make sense: base {base}, tax {tax}")
-    expected = (base * rate).quantize(CENT, rounding=ROUND_HALF_UP)
     if abs(tax - expected) > CENT:
         notes.append(f"recorded tax {tax} is not {pct} of base GCI {base} (expected {expected}); kept as recorded, please review")
-    return base, tax, notes
+    return base, tax, source, notes
 
 
 def business_days_between(start: date, end: date) -> int:
@@ -529,7 +567,8 @@ class Deal:
     deposit_amount: Decimal | None
     deposit_holder: str | None
     base_gci: Decimal
-    hst: Decimal
+    hst: Decimal | None
+    hst_source: str
     coop: Decimal
     agents: list[DealAgent]
     sellers: list[str]
@@ -576,7 +615,7 @@ def _deal_fields(raw: dict[str, Any], cols: dict[str, str | None], row_number: i
         raise RowError(f"closing date {close_date} is before offer date {offer_date}")
 
     rate, tax_name = tax_rate(clean_text(get(raw, cols, "province")), close_date)
-    base, hst, notes = reconcile_tax(
+    base, hst, hst_source, notes = reconcile_tax(
         parse_money(get(raw, cols, "base_gci"), "base GCI"),
         parse_money(get(raw, cols, "tax"), "tax"),
         parse_money(get(raw, cols, "commission_incl_tax"), "commission incl. tax"),
@@ -599,7 +638,7 @@ def _deal_fields(raw: dict[str, Any], cols: dict[str, str | None], row_number: i
         "side": side, "status": status, "address": address, "unit": clean_text(get(raw, cols, "unit")), "city": city,
         "mls": mls.upper().replace(" ", "") if mls else None, "sale_price": sale_price, "offer_date": offer_date,
         "close_date": close_date, "deposit_amount": parse_money(get(raw, cols, "deposit_amount"), "deposit amount"),
-        "deposit_holder": holder, "base_gci": base, "hst": hst, "coop": coop,
+        "deposit_holder": holder, "base_gci": base, "hst": hst, "hst_source": hst_source, "coop": coop,
     }
 
 
@@ -687,7 +726,7 @@ def transform_deals(df: pd.DataFrame, cols: dict[str, str | None], agents: dict[
                 side=base["side"], status=base["status"], address=base["address"], unit=base["unit"], city=base["city"],
                 mls=base["mls"], sale_price=base["sale_price"], offer_date=base["offer_date"], close_date=base["close_date"],
                 deposit_amount=base["deposit_amount"], deposit_holder=base["deposit_holder"], base_gci=base["base_gci"],
-                hst=base["hst"], coop=base["coop"], agents=deal_agents, sellers=sellers, buyers=buyers, rows=rows,
+                hst=base["hst"], hst_source=base["hst_source"], coop=base["coop"], agents=deal_agents, sellers=sellers, buyers=buyers, rows=rows,
             )
         except RowError as exc:
             for row_number, raw in rows:
@@ -1041,13 +1080,13 @@ def insert_deals(engine: Engine, deals: dict[str, Deal], user_ids: dict[str, str
                 conn.execute(text("""
                     INSERT INTO "Transaction" (id, "dealNumber", side, status, "streetAddress", unit, city, "mlsNumber", "salePrice",
                         "offerDate", "closeDate", "depositAmount", "trustDepositHolder", "depositStatus", "totalGci", "hstOnGci",
-                        "coopCommission", "updatedAt")
+                        "hstSource", "coopCommission", "updatedAt")
                     VALUES (CAST(:id AS uuid), :number, CAST(:side AS "DealSide"), CAST(:status AS "DealStatus"), :address, :unit, :city,
                         :mls, :price, :offer, :close, :deposit, CAST(:holder AS "DepositHolder"), CAST(:dstatus AS "DepositStatus"),
-                        :gci, :hst, :coop, now())
+                        :gci, :hst, CAST(:hst_source AS "TaxAmountSource"), :coop, now())
                 """), {"id": d.deal_id, "number": d.deal_number, "side": d.side, "status": d.status, "address": d.address, "unit": d.unit,
                        "city": d.city, "mls": d.mls, "price": d.sale_price, "offer": d.offer_date, "close": d.close_date,
-                       "deposit": deposit_amount, "holder": holder, "dstatus": deposit_status, "gci": d.base_gci, "hst": d.hst, "coop": d.coop})
+                       "deposit": deposit_amount, "holder": holder, "dstatus": deposit_status, "gci": d.base_gci, "hst": d.hst, "hst_source": d.hst_source, "coop": d.coop})
                 for a in d.agents:
                     conn.execute(text("""
                         INSERT INTO "TransactionAgent" (id, "transactionId", "userId", role, "splitPct", "gciSharePct", "grossShare", "netPayout")
@@ -1092,6 +1131,7 @@ def insert_trust(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: d
                 done = set(conn.execute(text('SELECT "idempotencyKey"::text FROM "TrustLedgerEntry" WHERE "transactionId" = CAST(:d AS uuid)'),
                                         {"d": deal_ids[deal_legacy]}).scalars())
                 conn.execute(text('SELECT 1 FROM "TrustAccount" WHERE id = CAST(:a AS uuid) FOR UPDATE'), {"a": account_id})
+                conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('trust-receipt-number'))"))
                 for e in items:
                     if e.entry_id in done:
                         stats["trust_existing"] += 1

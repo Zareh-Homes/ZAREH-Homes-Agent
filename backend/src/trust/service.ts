@@ -268,8 +268,9 @@ export async function recordDeposit(
         throw new RuleViolationError("DEAL_NOT_ACTIVE", `Deal ${deal.dealNumber} is ${deal.status}`);
       }
 
-      // Account lock keeps receipt numbers sequential with no gaps
       await requireActiveTrustAccount(tx, input.trustAccountId, true);
+      // Receipt numbers are brokerage-wide, so serialize across all trust accounts: sequential, no gaps, no duplicates
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('trust-receipt-number'))`;
       const [{ next }] = await tx.$queryRaw<{ next: number }[]>`
         SELECT (COALESCE(MAX("receiptNumber"), ${FIRST_RECEIPT_NUMBER - 1}::int) + 1)::int AS next
           FROM "TrustLedgerEntry"`;

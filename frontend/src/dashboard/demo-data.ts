@@ -13,7 +13,7 @@ export const demoBrokerage: BrokerageDashboard = {
     closedVolumeCents: 4_216_550_000,
     closedDeals: 41,
     hstCollectedCents: 13_871_300,
-    hstToRemitCents: 2_423_525,
+    netHstEstimateCents: 2_423_525,
     finalizedClosings: 38,
   },
   trust: {

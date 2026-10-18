@@ -90,19 +90,20 @@ def test_ontario_tax_rate_follows_the_transaction_date():
         m.tax_rate("BC", date(2024, 1, 1))
 
 
-def test_tax_verified_backfilled_and_backed_out():
+def test_tax_verified_derived_or_left_missing_never_invented():
     rate = Decimal("0.13")
-    base, tax, notes = m.reconcile_tax(Decimal("27500.00"), Decimal("3575.00"), None, rate, "HST")
-    assert (base, tax, notes) == (Decimal("27500.00"), Decimal("3575.00"), [])
+    assert m.reconcile_tax(Decimal("27500.00"), Decimal("3575.00"), None, rate, "HST") == (
+        Decimal("27500.00"), Decimal("3575.00"), "RECORDED", [])
 
-    base, tax, notes = m.reconcile_tax(Decimal("27500.00"), None, None, rate, "HST")
-    assert tax == Decimal("3575.00") and "backfilled" in notes[0]
+    base, tax, source, notes = m.reconcile_tax(Decimal("27500.00"), None, None, rate, "HST")
+    assert (tax, source) == (None, "MISSING")
+    assert "left blank" in notes[0] and "would be 3575.00" in notes[0]
 
-    base, tax, notes = m.reconcile_tax(None, None, Decimal("31075.00"), rate, "HST")
-    assert (base, tax) == (Decimal("27500.00"), Decimal("3575.00")) and "backed out" in notes[0]
+    base, tax, source, notes = m.reconcile_tax(None, None, Decimal("31075.00"), rate, "HST")
+    assert (base, tax, source) == (Decimal("27500.00"), Decimal("3575.00"), "DERIVED_FROM_TOTAL") and "backed out" in notes[0]
 
-    base, tax, notes = m.reconcile_tax(Decimal("10000.00"), Decimal("1000.00"), None, rate, "HST")
-    assert tax == Decimal("1000.00") and "expected 1300.00" in notes[0]
+    base, tax, source, notes = m.reconcile_tax(Decimal("10000.00"), Decimal("1000.00"), None, rate, "HST")
+    assert (tax, source) == (Decimal("1000.00"), "RECORDED") and "expected 1300.00" in notes[0]
 
     with pytest.raises(m.RowError, match="doesn't equal"):
         m.reconcile_tax(Decimal("27500.00"), Decimal("3575.00"), Decimal("31000.00"), rate, "HST")
@@ -123,6 +124,17 @@ def test_trust_entry_classification_uses_direction_not_just_keywords():
 def test_business_days_skip_weekends():
     assert m.business_days_between(date(2026, 10, 2), date(2026, 10, 9)) == 5
     assert m.business_days_between(date(2026, 10, 2), date(2026, 10, 12)) == 6
+
+
+def test_error_log_rows_are_redacted():
+    row = m.redact_row({
+        "Agent ID": "A1", "Email": "Jane.Smith@x.test", "Cell": "416-555-0101", "Seller": "Ann Lee",
+        "Bank Account #": "004-12345-6789012", "Date of Birth": "1970-01-01", "Memo": "acct 12345678901", "Amount": "12345678.00",
+    })
+    assert row == {
+        "Agent ID": "A1", "Email": "J***@x.test", "Cell": "***0101", "Seller": "A. L.",
+        "Bank Account #": "***9012", "Date of Birth": "[redacted]", "Memo": "acct ****8901", "Amount": "12345678.00",
+    }
 
 
 def test_database_url_accepts_prisma_style():

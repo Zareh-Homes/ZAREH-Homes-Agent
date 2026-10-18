@@ -303,7 +303,7 @@ export async function finalizeClosing(
             ${formatCents(a.allocatedBaseGci)}::numeric, ${formatCents(a.houseSplitBase)}::numeric,
             ${formatCents(a.split.base)}::numeric, ${formatCents(a.split.hst)}::numeric,
             ${formatCents(a.feesTotal.base)}::numeric, ${formatCents(a.feesTotal.hst)}::numeric,
-            ${formatCents(a.payout)}::numeric, ${formatCents(a.wiredByPayer)}::numeric, ${formatCents(a.coveredByTrust)}::numeric)`;
+            ${formatCents(a.payout)}::numeric, 0, ${formatCents(a.payout)}::numeric)`;
       }
 
       return {

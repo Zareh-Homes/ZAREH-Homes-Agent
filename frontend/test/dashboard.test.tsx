@@ -38,11 +38,11 @@ describe("role-based layout", () => {
 });
 
 describe("admin widgets", () => {
-  test("financial summary: company dollar, volume, HST to remit", () => {
+  test("financial summary: company dollar, volume, net HST estimate", () => {
     const t = text(<Dashboard data={demoResponses.admin!} />);
     expect(t).toContain("$186,425");
     expect(t).toContain("$42.2M");
-    expect(t).toContain("HST to remit to CRA YTD $24,235");
+    expect(t).toContain("Net HST on closed deals YTD (est.) $24,235");
   });
 
   test("trust widget: total and every deal past closing still holding funds", () => {

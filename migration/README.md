@@ -17,15 +17,16 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ## Cutover runbook
 
-1. **Freeze Lone Wolf** (no new entries), then export the three files.
+1. **Freeze Lone Wolf** (no new entries), then export the three files. Keep Lone Wolf available read-only until the books are reconciled.
 2. **Dry run.** It validates everything and writes nothing:
    ```bash
    .venv/bin/python lonewolf_migrate.py --dry-run \
      --broker-email broker@zarehhomes.ca --trust-account 4321
    ```
 3. **Review** `ontario_migration_errors.log` and `migration_out/rejected_*.csv`. Each rejected row is saved with its row number and the reason. Fix the data in Lone Wolf or in the CSV, then dry-run again.
-4. **Run for real.** Drop `--dry-run` and point `DATABASE_URL` (or `--database-url`) at production.
-5. **Re-run when needed.** Fix the rejected rows and run again. Rows already imported are recognized and skipped, so nothing is duplicated.
+4. **Back up the database**, and confirm the backup restores, so the run can be rolled back.
+5. **Run for real.** Drop `--dry-run` and point `DATABASE_URL` (or `--database-url`) at production.
+6. **Re-run when needed.** Fix the rejected rows and run again. Rows already imported are recognized and skipped, so nothing is duplicated.
 
 Exit codes:
 
@@ -61,11 +62,11 @@ Headers are matched loosely: case, spaces and punctuation are ignored. Common Lo
   - `DD/MM/YYYY` is read day-first. `MM-DD-YY` is read month-first. Switch either with `--slash-dates` or `--dash-dates`.
   - A date that only makes sense the other way round (`11/30/2024`) is read that way, with a warning.
   - An impossible date (`31/02/2024`) rejects the row.
-- **Tax.**
-  - The rate follows the closing date: 13% HST from July 1, 2010, and 5%, 6% or 7% GST before that.
-  - If tax was recorded, it's checked against the rate. A mismatch is kept as recorded and flagged for review.
-  - If tax is missing, it's backfilled at the rate in effect on that date.
-  - If only a combined total exists, the tax is backed out of it.
+- **Tax.** Historical tax is never invented. Each deal's `hstSource` says where its figure came from.
+  - The expected rate follows the closing date: 13% HST from July 1, 2010, and 5%, 6% or 7% GST before that.
+  - `RECORDED`: tax was in the export. It's checked against the rate; a mismatch is kept as recorded and flagged for review.
+  - `DERIVED_FROM_TOTAL`: only a combined total was exported, so it was split by arithmetic, with a warning to confirm.
+  - `MISSING`: no tax in the export. `hstOnGci` is left blank, and the warning shows what the rate would give. Fill it in once it's checked against the original statement.
   - Non-Ontario deals are rejected.
 - **PREC.** An agent is marked `is_prec` only when the corporation name contains "Personal Real Estate Corporation". Any other company name (for example "Shah Holdings Inc.") is imported as an individual, with a warning.
 - **HST numbers** must look like `123456789RT0001`. Anything else is left blank, with a warning.
@@ -82,8 +83,8 @@ Headers are matched loosely: case, spaces and punctuation are ignored. Common Lo
 
 | File | What |
 |---|---|
-| `ontario_migration_errors.log` | One JSON line per problem: source, row number, severity, reason and the full original row |
-| `migration_out/rejected_{agents,deals,trust}.csv` | Rejected rows, with `_row_number` and `_error` columns |
+| `ontario_migration_errors.log` | One JSON line per problem: source, row number, severity, reason and the row with personal and banking details redacted (emails, phones, client names, account and ID numbers, long digit runs) |
+| `migration_out/rejected_{agents,deals,trust}.csv` | Rejected rows **unredacted**, with `_row_number` and `_error` columns, so they can be fixed. Keep them on a secure drive and delete them after cutover |
 | `migration_out/migration_report.json` | Counts read, rejected, warned and written, plus validated trust totals |
 
 ## Not migrated
@@ -91,6 +92,8 @@ Headers are matched loosely: case, spaces and punctuation are ignored. Common Lo
 - **Commission plans and caps.** Set these up per agent in the new system.
 - **Managing broker and admin roles.** Agents come in as `AGENT`. Promote roles manually.
 - **Documents and attachments.** Slots are created for open deals; the files need uploading.
+
+A clean import isn't a reconciled one: before cutover, open-deal trust balances must match the bank and the source statements.
 
 Read through the warnings once. They're imported as-is, but each one is something worth a second look.
 

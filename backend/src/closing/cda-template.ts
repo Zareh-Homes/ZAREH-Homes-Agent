@@ -54,7 +54,7 @@ function taxedRow(label: string, t: Taxed, note = ""): string {
     <td class="num">${money(t.base)}</td><td class="num">${money(t.hst)}</td><td class="num">${money(t.total)}</td></tr>`;
 }
 
-function agentStatement(a: AgentClosingLine, rate: number): string {
+function agentStatement(a: AgentClosingLine, rate: number, brokerageName: string): string {
   const feeRows = a.fees.map((f) =>
     `<tr><td class="indent">Less: ${esc(f.name)}</td><td class="num">−${money(f.base)}</td><td class="num">−${money(f.hst)}</td><td class="num">−${money(f.total)}</td></tr>`).join("");
   const cap = a.capReachedOnThisDeal
@@ -73,7 +73,7 @@ function agentStatement(a: AgentClosingLine, rate: number): string {
         <tr class="total"><td>Net agent payout</td><td class="num">${money(a.net.base)}</td><td class="num">${money(a.net.hst)}</td><td class="num">${money(a.payout)}</td></tr>
       </tbody>
     </table>
-    <p class="meta">Wired by the payer: ${money(a.wiredByPayer)} · Paid by the brokerage from funds held: ${money(a.coveredByTrust)}
+    <p class="meta">Paid by ${esc(brokerageName)} once the commission is received and the payout is approved
       ${a.owes > 0 ? ` · <strong>Agent owes ${money(a.owes)} in fees</strong>` : ""} · House share ${money(a.houseSplitBase)}. ${esc(cap)}</p>
   </div>`;
 }
@@ -103,9 +103,7 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
     <tr>
       <td>${i + 1}</td>
       <td><strong>${esc(w.payeeName)}</strong>
-        <div class="note">${w.to === "BROKERAGE"
-          ? `Brokerage commission incl. HST · HST Reg. ${esc(b.hstNumber)}`
-          : `Agent commission incl. HST${w.hstNumber ? ` · HST Reg. ${esc(w.hstNumber)}` : ""} · paid on behalf of and as directed by ${esc(b.legalName)}`}</div></td>
+        <div class="note">Total commission incl. HST · HST Reg. ${esc(b.hstNumber)}</div></td>
       <td class="num">${money(w.owed.base)}</td>
       <td class="num">${money(w.owed.hst)}</td>
       <td class="num">${w.lessFromTrust ? `−${money(w.lessFromTrust)}` : "—"}</td>
@@ -115,7 +113,7 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
   const internal = opts.audience === "internal" ? `
   <section class="page-break">
     <h2>5. Agent commission statements <span class="tag internal">Internal – do not send</span></h2>
-    ${c.agents.map((a) => agentStatement(a, c.hstRate)).join("")}
+    ${c.agents.map((a) => agentStatement(a, c.hstRate, b.legalName)).join("")}
     <h3>Brokerage</h3>
     <table>
       <tbody>
@@ -123,7 +121,8 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
         <tr><td>Fees charged to agents (base)</td><td class="num">${money(c.brokerage.feesChargedBase)}</td></tr>
         ${c.brokerage.referral ? `<tr><td>Outside referral to ${esc(c.brokerage.referral.payee)} (incl. HST)</td><td class="num">${money(c.brokerage.referral.total)}</td></tr>` : ""}
         <tr><td>Brokerage net earned share (base + HST)</td><td class="num">${money(c.brokerage.netEarnedShare.base)} + ${money(c.brokerage.netEarnedShare.hst)}</td></tr>
-        <tr class="total"><td>Net HST to remit to CRA for this deal</td><td class="num">${money(c.brokerage.hstRemittance)}</td></tr>
+        <tr><td>Agent payouts owed by the brokerage (paid after funds are received)</td><td class="num">${money(c.brokerage.agentPayablesTotal)}</td></tr>
+        <tr class="total"><td>Estimated net HST on this deal<div class="note">HST charged less HST paid to agents and referrals. Not the brokerage's HST return: other input tax credits apply.</div></td><td class="num">${money(c.brokerage.netHstEstimate)}</td></tr>
       </tbody>
     </table>
     ${c.warnings.length ? `<p class="warning"><strong>Warnings:</strong> ${c.warnings.map(esc).join(" · ")}</p>` : ""}
@@ -258,7 +257,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
   </section>
 
   <section>
-    <h2>4. Payment instructions${c.wires.length ? ` – ${c.wires.length} wire${c.wires.length > 1 ? "s" : ""}` : ""}</h2>
+    <h2>4. Payment instructions</h2>
     ${c.wires.length ? `
     <table>
       <thead><tr><th>#</th><th>Pay to</th><th class="num">Base</th><th class="num">HST</th><th class="num">Less from trust</th><th class="num">Wire amount</th></tr></thead>
@@ -266,7 +265,9 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
         ${wireRows}
         <tr class="total"><td></td><td colspan="4">Total to be paid by ${esc(c.payer.name)}</td><td class="num">${money(c.wiresTotal)}</td></tr>
       </tbody>
-    </table>` : `<p>No payment is required from ${esc(c.payer.name)}: the deposit held in trust covers the full commission${c.trust.balanceDueToLawyer > 0 ? `, and ${money(c.trust.balanceDueToLawyer)} will be returned to you in trust` : ""}.</p>`}
+    </table>
+    <p>Pay the full amount to ${esc(b.legalName)} only. Do not pay any salesperson, broker or personal real estate corporation directly;
+      the brokerage pays its agents.</p>` : `<p>No payment is required from ${esc(c.payer.name)}: the deposit held in trust covers the full commission${c.trust.balanceDueToLawyer > 0 ? `, and ${money(c.trust.balanceDueToLawyer)} will be returned to you in trust` : ""}.</p>`}
     <div class="fraud"><strong>Wire fraud warning.</strong> Banking details are provided separately and are never changed by email.
       Before sending any funds, confirm the instructions by phone with ${esc(b.legalName)} at ${esc(b.phone)}.</div>
   </section>

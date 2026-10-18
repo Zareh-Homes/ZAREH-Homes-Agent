@@ -27,10 +27,10 @@
  *       D ≥ O : Balance due TO lawyer   = D − O, no wires needed
  *       D < O : Balance due FROM lawyer = O − D
  *
- *  5. Wires from the payer (lawyer, or the listing brokerage on buyer-side deals)
- *       To each agent / PREC  = Payoutᵢ − part of Payoutᵢ already covered by D
- *       To the brokerage      = R − part of R already covered by D
- *       Σ wires = O − min(D, O)
+ *  5. Payment from the payer (lawyer, or the listing brokerage on buyer-side deals)
+ *       One payment, to the brokerage only = O − min(D, O)
+ *       The payer never pays agents or PRECs directly. The brokerage pays each
+ *       agent Payoutᵢ itself, as a separate approved payout once the funds are in.
  *
  *  6. Safety audits (throw ClosingAuditError)
  *       • every FINTRAC record on the deal is Approved
@@ -128,8 +128,6 @@ export interface AgentClosingLine {
   effectiveSplitBps: number;
   capReachedOnThisDeal: boolean;
   capRemainingAfter: Cents | null;
-  coveredByTrust: Cents; // paid by the brokerage out of the deposit it holds
-  wiredByPayer: Cents; // wired directly by the lawyer / listing brokerage
 }
 
 export interface TrustDistribution {
@@ -140,11 +138,9 @@ export interface TrustDistribution {
 }
 
 export interface Wire {
-  to: "BROKERAGE" | "AGENT";
-  userId: string | null;
+  to: "BROKERAGE";
   payeeName: string;
-  hstNumber: string | null;
-  /** The full amount owed to this payee, before anything paid from trust */
+  /** The full commission payable, before anything applied from trust */
   owed: Taxed;
   lessFromTrust: Cents;
   amount: Cents;
@@ -167,7 +163,10 @@ export interface ClosingComputation {
     houseSplitBase: Cents;
     feesChargedBase: Cents;
     referral: (Taxed & { payee: string }) | null;
-    hstRemittance: Cents; // HST on GCI + on fees − HST paid to agents and referral
+    /** HST charged on GCI and fees, less HST paid to agents and the referral. An estimate for this
+     *  deal only: the brokerage's actual net tax also depends on its other input tax credits. */
+    netHstEstimate: Cents;
+    agentPayablesTotal: Cents; // P, paid by the brokerage after the funds are received
   };
   trust: {
     held: Cents;
@@ -292,7 +291,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
         total: referralRuns.reduce((s, x) => s + x.r.referral!.total, 0),
       }
     : null;
-  const hstRemittance =
+  const netHstEstimate =
     commission.hst
     + runs.reduce((s, x) => s + x.r.agent.feesTotal.hst, 0)
     - runs.reduce((s, x) => s + x.r.agent.split.hst, 0)
@@ -365,18 +364,8 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     );
   }
 
-  // ── 5. Wires from the payer ──────────────────────────────────────────────
-  const brokerageOwed: Taxed = {
-    base: coop.base + netEarnedShare.base,
-    hst: coop.hst + netEarnedShare.hst,
-    total: coop.total + netEarnedShare.total,
-  };
-  const brokerageFromTrust = fromTrustToCoop + fromTrustToBrokerage;
-
-  let trustLeftForAgents = fromTrustForAgents;
+  // ── 5. One payment from the payer, to the brokerage ─────────────────────
   const agents: AgentClosingLine[] = runs.map(({ agent, base, r }) => {
-    const coveredByTrust = Math.min(trustLeftForAgents, r.agent.payout);
-    trustLeftForAgents -= coveredByTrust;
     return {
       userId: agent.userId,
       name: agent.name,
@@ -394,39 +383,21 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       effectiveSplitBps: r.agent.effectiveSplitRate,
       capReachedOnThisDeal: r.cap.reachedOnThisDeal,
       capRemainingAfter: r.cap.remainingAfter,
-      coveredByTrust,
-      wiredByPayer: r.agent.payout - coveredByTrust,
     };
   });
 
+  const applied = held - toLawyer;
   const wires: Wire[] = [];
-  const brokerageWire = brokerageOwed.total - brokerageFromTrust;
-  if (brokerageWire > 0) {
+  if (totalPayable > applied) {
     wires.push({
       to: "BROKERAGE",
-      userId: null,
       payeeName: brokerageName,
-      hstNumber: null,
-      owed: brokerageOwed,
-      lessFromTrust: brokerageFromTrust,
-      amount: brokerageWire,
+      owed: { base: commission.base + coop.base, hst: commission.hst + coop.hst, total: totalPayable },
+      lessFromTrust: applied,
+      amount: totalPayable - applied,
     });
   }
-  for (const a of agents) {
-    if (a.wiredByPayer > 0) {
-      wires.push({
-        to: "AGENT",
-        userId: a.userId,
-        payeeName: a.payeeName,
-        hstNumber: a.hstNumber,
-        owed: a.net,
-        lessFromTrust: a.coveredByTrust,
-        amount: a.wiredByPayer,
-      });
-    }
-  }
   const wiresTotal = wires.reduce((s, w) => s + w.amount, 0);
-  const applied = held - toLawyer;
 
   // Every cent of the payable is either applied from trust or wired
   if (applied + wiresTotal !== totalPayable) {
@@ -448,7 +419,8 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       houseSplitBase: runs.reduce((s, x) => s + x.r.brokerage.split, 0),
       feesChargedBase: runs.reduce((s, x) => s + x.r.brokerage.feesCharged.base, 0),
       referral,
-      hstRemittance,
+      netHstEstimate,
+      agentPayablesTotal: agentPayouts,
     },
     trust: {
       held,

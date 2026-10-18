@@ -20,10 +20,10 @@ export function FinancialSummary({ financials: f, year }: { financials: Brokerag
         detail={<>{f.closedDeals} closed deal{f.closedDeals === 1 ? "" : "s"}</>}
       />
       <StatTile
-        label="HST to remit to CRA YTD"
-        value={dollars(f.hstToRemitCents)}
-        title={money(f.hstToRemitCents)}
-        detail={<>Collected {dollars(f.hstCollectedCents)}, less HST paid to agents</>}
+        label="Net HST on closed deals YTD (est.)"
+        value={dollars(f.netHstEstimateCents)}
+        title={money(f.netHstEstimateCents)}
+        detail={<>Collected {dollars(f.hstCollectedCents)}, less HST paid to agents. Your HST return also counts other input tax credits.</>}
       />
     </dl>
   );

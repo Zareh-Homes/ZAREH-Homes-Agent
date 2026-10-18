@@ -182,6 +182,8 @@ model User {
   commissionPlan     CommissionPlan?
   closingsFinalized  ClosingStatement[]    @relation("ClosingFinalizedBy")
   closingPayouts     ClosingAgentPayout[]
+  commissionReceipts CommissionReceipt[]
+  payoutEvents       AgentPayoutEvent[]
   trustEntriesMade   TrustLedgerEntry[]    @relation("EnteredBy")
   trustEntriesSigned TrustLedgerEntry[]    @relation("AuthorizedBy")
   trustHoldsFlagged  TrustHold[]           @relation("HoldFlaggedBy")
@@ -249,16 +251,17 @@ model Transaction {
   trustDepositHolder DepositHolder
   depositStatus      DepositStatus @default(AWAITING)
 
-  totalGci             Decimal  @db.Decimal(12, 2) // gross commission to our brokerage, pre-split, excl. HST
-  hstOnGci             Decimal  @default(0) @db.Decimal(12, 2) // 13% Ontario HST collected on totalGci
-  commissionRatePct    Decimal? @db.Decimal(5, 3)
+  totalGci             Decimal         @db.Decimal(12, 2) // gross commission to our brokerage, pre-split, excl. HST
+  hstOnGci             Decimal?        @default(0) @db.Decimal(12, 2) // 13% Ontario HST collected on totalGci; NULL only when hstSource is MISSING
+  hstSource            TaxAmountSource @default(CALCULATED) // migration 007
+  commissionRatePct    Decimal?        @db.Decimal(5, 3)
   coopBrokerageName    String?
   coopAgentName        String?
   // Listing side: the co-operating brokerage's commission (base, excl. HST), paid out of the
   // total the seller owes us. Zero on buyer-side and dual deals.
-  coopCommission       Decimal  @default(0) @db.Decimal(12, 2)
+  coopCommission       Decimal         @default(0) @db.Decimal(12, 2)
   outsideReferralPayee String?
-  outsideReferralPct   Decimal? @db.Decimal(5, 2) // % of base GCI owed to an outside referring brokerage
+  outsideReferralPct   Decimal?        @db.Decimal(5, 2) // % of base GCI owed to an outside referring brokerage
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -584,6 +587,7 @@ model ClosingStatement {
   transaction Transaction          @relation(fields: [transactionId], references: [id])
   finalizedBy User                 @relation("ClosingFinalizedBy", fields: [finalizedById], references: [id])
   payouts     ClosingAgentPayout[]
+  receipts    CommissionReceipt[]
 }
 
 // One row per agent per finalized closing; also the source of cap year-to-date totals.
@@ -600,11 +604,57 @@ model ClosingAgentPayout {
   feesBase         Decimal  @db.Decimal(12, 2)
   feesHst          Decimal  @db.Decimal(12, 2)
   netPayout        Decimal  @db.Decimal(12, 2)
-  wiredByLawyer    Decimal  @db.Decimal(12, 2) // part of the payout wired directly
-  paidByBrokerage  Decimal  @db.Decimal(12, 2) // part paid by the brokerage from funds it received
+  wiredByLawyer    Decimal  @db.Decimal(12, 2) // always 0 since migration 006: payers never pay agents directly
+  paidByBrokerage  Decimal  @db.Decimal(12, 2) // the whole payout, paid by the brokerage
 
-  closing ClosingStatement @relation(fields: [closingId], references: [id])
-  user    User             @relation(fields: [userId], references: [id])
+  closing ClosingStatement   @relation(fields: [closingId], references: [id])
+  user    User               @relation(fields: [userId], references: [id])
+  events  AgentPayoutEvent[]
 
   @@index([userId, closeDate])
+}
+
+// Commission the brokerage actually received for a finalized closing. Append-only (migration 006).
+model CommissionReceipt {
+  id           String   @id @default(uuid()) @db.Uuid
+  closingId    String   @db.Uuid
+  amount       Decimal  @db.Decimal(12, 2)
+  receivedDate DateTime @db.Date
+  reference    String // bank reference for the incoming payment
+  recordedById String   @db.Uuid
+  recordedAt   DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  closing    ClosingStatement @relation(fields: [closingId], references: [id])
+  recordedBy User             @relation(fields: [recordedById], references: [id])
+
+  @@index([closingId])
+}
+
+enum TaxAmountSource {
+  CALCULATED
+  RECORDED
+  DERIVED_FROM_TOTAL
+  MISSING
+}
+
+enum PayoutEventKind {
+  APPROVED
+  PAID
+}
+
+// Broker approval, then payment, of an agent payout. Append-only (migration 006).
+model AgentPayoutEvent {
+  id        String          @id @default(uuid()) @db.Uuid
+  payoutId  String          @db.Uuid
+  kind      PayoutEventKind
+  actorId   String          @db.Uuid
+  eventDate DateTime        @db.Date
+  reference String? // payment reference, required for PAID
+  note      String?
+  createdAt DateTime        @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  payout ClosingAgentPayout @relation(fields: [payoutId], references: [id])
+  actor  User               @relation(fields: [actorId], references: [id])
+
+  @@unique([payoutId, kind])
 }

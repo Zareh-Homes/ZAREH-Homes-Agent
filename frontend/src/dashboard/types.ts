@@ -15,7 +15,7 @@ export interface BrokerageDashboard {
     closedVolumeCents: number;
     closedDeals: number;
     hstCollectedCents: number;
-    hstToRemitCents: number;
+    netHstEstimateCents: number;
     finalizedClosings: number;
   };
   trust: {

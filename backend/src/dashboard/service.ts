@@ -33,7 +33,7 @@ export interface BrokerageDashboard {
     closedVolumeCents: number;
     closedDeals: number;
     hstCollectedCents: number; // on commissions invoiced
-    hstToRemitCents: number; // collected + on agent fees − paid to agents and referrals (ITCs)
+    netHstEstimateCents: number; // charged on GCI and fees − paid to agents and referrals; not the HST return, other ITCs apply
     finalizedClosings: number;
   };
   trust: {
@@ -95,10 +95,10 @@ async function brokerageDashboard(db: PrismaClient, today: string): Promise<Brok
   const yearStart = `${today.slice(0, 4)}-01-01`;
   const yearEnd = nextYear(yearStart);
 
-  const [money] = await db.$queryRaw<{ companyDollar: string; hstToRemit: string; hstCollected: string; n: number }[]>`
+  const [money] = await db.$queryRaw<{ companyDollar: string; netHst: string; hstCollected: string; n: number }[]>`
     SELECT COALESCE(SUM((c.computation #>> '{brokerage,netEarnedShare,base}')::bigint
                         - COALESCE((c.computation #>> '{brokerage,referral,base}')::bigint, 0)), 0)::text AS "companyDollar",
-           COALESCE(SUM((c.computation #>> '{brokerage,hstRemittance}')::bigint), 0)::text AS "hstToRemit",
+           COALESCE(SUM(COALESCE(c.computation #>> '{brokerage,netHstEstimate}', c.computation #>> '{brokerage,hstRemittance}')::bigint), 0)::text AS "netHst",
            COALESCE(SUM((c.computation #>> '{incoming,commission,hst}')::bigint), 0)::text AS "hstCollected",
            COUNT(*)::int AS n
       FROM "ClosingStatement" c JOIN "Transaction" t ON t.id = c."transactionId"
@@ -154,7 +154,7 @@ async function brokerageDashboard(db: PrismaClient, today: string): Promise<Brok
       closedVolumeCents: toCents(volume!.total),
       closedDeals: volume!.n,
       hstCollectedCents: centsSum(money!.hstCollected),
-      hstToRemitCents: centsSum(money!.hstToRemit),
+      netHstEstimateCents: centsSum(money!.netHst),
       finalizedClosings: money!.n,
     },
     trust: {
