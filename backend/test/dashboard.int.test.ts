@@ -63,6 +63,7 @@ describe("dashboard API", { skip }, () => {
 
     // A finalized closing this year: $1M sale, $27,500 GCI, agent 80/20
     deals.closed = (await openDeal("2031-03-01")).deal.id;
+    await prisma.transaction.update({ where: { id: deals.closed }, data: { status: "FIRM" } });
     await prisma.transaction.update({ where: { id: deals.closed }, data: { status: "CLOSED" } });
     const computation = {
       incoming: { commission: { base: 2_750_000, hst: 357_500, total: 3_107_500 } },

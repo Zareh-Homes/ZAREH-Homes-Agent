@@ -1,0 +1,218 @@
+/**
+ * Trade record sheet (O. Reg. 579/05 s.17), migration 015.
+ *
+ *   Prepared   items 1–9 generated from the deal: nature of the trade, property, true
+ *              consideration, parties, lawyers, registrants, deposit, our remuneration and who
+ *              pays it, remuneration to another brokerage and its name. Anything the deal doesn't
+ *              have is listed as missing; nothing is guessed.
+ *   Corrected  each correction is appended with a reason and the initials of whoever made it;
+ *              the original entry stays legible (s.17(4)).
+ *   Signed     by the agent representing the client once no conditions remain (s.17(3)), then
+ *              by the broker of record after review (s.17(5)). Frozen once the broker signs.
+ */
+
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { PrismaClient } from "@prisma/client";
+import { loadActor, type Actor, type ResolveUserId } from "../auth.ts";
+import { ConflictError, DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
+import { Reader } from "../lib/reader.ts";
+import { validatePathUuid } from "../trust/validation.ts";
+import { assertDealAccess } from "./lifecycle.ts";
+
+export const TRS_ITEMS = [
+  "natureOfTrade", "property", "consideration", "parties", "lawyers", "registrants", "deposit", "brokerageRemuneration",
+  "otherBrokerageRemuneration", "additionalItems",
+] as const;
+export type TrsItem = (typeof TRS_ITEMS)[number];
+type Items = Record<TrsItem, unknown>;
+
+const LABEL: Record<TrsItem, string> = {
+  natureOfTrade: "1. Nature of the trade", property: "2. Property", consideration: "3. True consideration", parties: "4. Parties",
+  lawyers: "5. Lawyers acting for the parties", registrants: "6. Registrants representing the parties", deposit: "7. Deposit",
+  brokerageRemuneration: "8. Our remuneration and who pays it", otherBrokerageRemuneration: "9. Remuneration to another brokerage",
+  additionalItems: "Further items (s.17 list beyond item 9 not yet verified)",
+};
+
+const NATURE: Record<string, string> = {
+  LISTING: "Sale of real property: the brokerage represents the seller",
+  BUYER: "Purchase of real property: the brokerage represents the buyer",
+  DUAL: "Sale of real property: the brokerage represents both the seller and the buyer (multiple representation)",
+  LANDLORD: "Lease of real property: the brokerage represents the landlord",
+  TENANT: "Lease of real property: the brokerage represents the tenant",
+};
+
+function rethrow(err: unknown): never {
+  if (err instanceof DomainError) throw err;
+  if ((err as { meta?: { code?: string } })?.meta?.code === "23505") throw new ConflictError("ALREADY_PREPARED", "This deal already has a trade record sheet");
+  throw fromDatabaseError(err) ?? err;
+}
+
+/** Items 1–9 from the deal as it stands; missing items are reported, never filled in. */
+export async function generateItems(prisma: PrismaClient, dealId: string): Promise<Items> {
+  const deal = await prisma.transaction.findUnique({
+    where: { id: dealId },
+    include: { parties: true, agents: { include: { user: true } } },
+  });
+  if (!deal) throw new NotFoundError("Deal", dealId);
+  const byRole = (...roles: string[]) => deal.parties.filter((p) => roles.includes(p.role));
+  const principals = deal.side === "LANDLORD" || deal.side === "TENANT" ? ["LANDLORD", "TENANT"] : ["SELLER", "BUYER"];
+  const coop = byRole("COOP_BROKERAGE")[0]?.fullName ?? deal.coopBrokerageName ?? null;
+  const listingSide = ["LISTING", "DUAL", "LANDLORD"].includes(deal.side);
+  const payers = listingSide ? byRole(principals[0]!).map((p) => p.fullName) : coop ? [coop] : [];
+  return {
+    natureOfTrade: NATURE[deal.side] ?? deal.side,
+    property: { address: deal.streetAddress, unit: deal.unit, city: deal.city, province: deal.province, mlsNumber: deal.mlsNumber },
+    consideration: deal.salePrice.toFixed(2),
+    parties: byRole(...principals).map((p) => ({ role: p.role, name: p.fullName, entityType: p.entityType })),
+    lawyers: byRole("SELLER_LAWYER", "BUYER_LAWYER").map((p) => ({ role: p.role, name: p.fullName, email: p.email, phone: p.phone })),
+    registrants: [
+      ...deal.agents.map((a) => ({
+        side: deal.side === "DUAL" ? "BOTH" : listingSide ? principals[0] : principals[1], brokerage: "this brokerage",
+        name: `${a.user.firstName} ${a.user.lastName}`, recoRegistrationNo: a.user.recoRegistrationNo, email: a.user.email, phone: a.user.phone,
+      })),
+      ...(deal.side !== "DUAL" && coop ? [{ side: listingSide ? principals[1] : principals[0], brokerage: coop, name: null, email: null, phone: null }] : []),
+    ],
+    deposit: { amount: deal.depositAmount.toFixed(2), heldBy: deal.trustDepositHolder },
+    brokerageRemuneration: { amount: deal.totalGci.toFixed(2), payer: payers.length ? payers.join(", ") : null, taxExtra: true },
+    otherBrokerageRemuneration: listingSide && deal.side !== "DUAL" && coop
+      ? { amount: deal.coopCommission.toFixed(2), brokerage: coop }
+      : { amount: "0.00", brokerage: null },
+    additionalItems: null,
+  };
+}
+
+export function missingItems(items: Items): { item: TrsItem; reason: string }[] {
+  const out: { item: TrsItem; reason: string }[] = [];
+  const parties = items.parties as { role: string }[];
+  const roles = new Set(parties.map((p) => p.role));
+  if (!(roles.has("SELLER") && roles.has("BUYER")) && !(roles.has("LANDLORD") && roles.has("TENANT"))) {
+    out.push({ item: "parties", reason: "both sides of the trade must be named" });
+  }
+  if ((items.lawyers as unknown[]).length === 0) out.push({ item: "lawyers", reason: "name the lawyers acting, or correct this item to state that none act" });
+  const registrants = items.registrants as { name: string | null; email: string | null; phone: string | null; brokerage: string }[];
+  for (const r of registrants) {
+    if (!r.name || !(r.email || r.phone)) out.push({ item: "registrants", reason: `name and contact details of the registrant at ${r.brokerage}` });
+  }
+  const pay = items.brokerageRemuneration as { payer: string | null } | null;
+  if (!pay?.payer) out.push({ item: "brokerageRemuneration", reason: "who pays the brokerage's remuneration" });
+  const other = items.otherBrokerageRemuneration as { amount: string; brokerage: string | null } | null;
+  if (other && Number(other.amount) > 0 && !other.brokerage) out.push({ item: "otherBrokerageRemuneration", reason: "the name of the other brokerage" });
+  return out;
+}
+
+function effectiveItems(sheet: { items: unknown; corrections: { item: string; newValue: unknown }[] }): Items {
+  const items = { ...(sheet.items as Items) };
+  for (const c of sheet.corrections) items[c.item as TrsItem] = c.newValue;
+  return items;
+}
+
+export async function tradeRecordView(prisma: PrismaClient, dealId: string) {
+  const sheet = await prisma.tradeRecordSheet.findUnique({
+    where: { transactionId: dealId },
+    include: {
+      corrections: { orderBy: { createdAt: "asc" }, include: { initialledBy: { select: { firstName: true, lastName: true } } } },
+      preparedBy: { select: { firstName: true, lastName: true } },
+      agentSigner: { select: { firstName: true, lastName: true } },
+      brokerSigner: { select: { firstName: true, lastName: true } },
+    },
+  });
+  if (!sheet) throw new NotFoundError("Trade record sheet for deal", dealId);
+  const items = effectiveItems(sheet);
+  const current = await generateItems(prisma, dealId);
+  // The deal changed after the sheet was prepared (an amendment): flag it, don't rewrite the record
+  const drift = (["consideration", "deposit", "otherBrokerageRemuneration", "brokerageRemuneration"] as const)
+    .filter((k) => JSON.stringify(items[k]) !== JSON.stringify(current[k]))
+    .map((k) => `${LABEL[k]}: the deal now shows ${JSON.stringify(current[k])}`);
+  const name = (u: { firstName: string; lastName: string } | null) => (u ? `${u.firstName} ${u.lastName}` : null);
+  const initials = (u: { firstName: string; lastName: string }) => `${u.firstName[0]}${u.lastName[0]}`.toUpperCase();
+  return {
+    id: sheet.id, dealId,
+    status: sheet.brokerSignedAt ? "SIGNED_BY_BROKER_OF_RECORD" : sheet.agentSignedAt ? "SIGNED_BY_AGENT" : "PREPARED",
+    items: TRS_ITEMS.map((k) => ({
+      item: k, label: LABEL[k], value: items[k],
+      history: [
+        { value: (sheet.items as Items)[k], by: name(sheet.preparedBy), at: sheet.preparedAt.toISOString(), reason: "As prepared", initials: null },
+        ...sheet.corrections.filter((c) => c.item === k).map((c) => ({
+          value: c.newValue, by: name(c.initialledBy), at: c.createdAt.toISOString(), reason: c.reason, initials: initials(c.initialledBy),
+        })),
+      ],
+    })),
+    missing: sheet.missing,
+    differsFromDeal: drift,
+    agentSignedBy: name(sheet.agentSigner), agentSignedAt: sheet.agentSignedAt?.toISOString() ?? null,
+    brokerSignedBy: name(sheet.brokerSigner), brokerSignedAt: sheet.brokerSignedAt?.toISOString() ?? null,
+    retainUntil: sheet.brokerSignedAt ? `${sheet.brokerSignedAt.getUTCFullYear() + 6}${sheet.brokerSignedAt.toISOString().slice(4, 10)}` : null,
+  };
+}
+
+export async function prepareTradeRecord(prisma: PrismaClient, actor: Actor, dealId: string) {
+  await assertDealAccess(prisma, actor, dealId);
+  const items = await generateItems(prisma, dealId);
+  try {
+    await prisma.$executeRaw`
+      INSERT INTO "TradeRecordSheet" (id, "transactionId", items, missing, "preparedById")
+      VALUES (gen_random_uuid(), ${dealId}::uuid, ${JSON.stringify(items)}::jsonb, ${JSON.stringify(missingItems(items))}::jsonb, ${actor.id}::uuid)`;
+  } catch (err) {
+    rethrow(err);
+  }
+  return tradeRecordView(prisma, dealId);
+}
+
+export async function correctTradeRecord(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown) {
+  await assertDealAccess(prisma, actor, dealId);
+  const r = new Reader(body, ["item", "value", "reason"]);
+  const item = r.oneOf("item", TRS_ITEMS);
+  r.check(r.raw("value") !== undefined, "value", "is required");
+  const reason = r.text("reason", 1000);
+  r.done();
+  const sheet = await prisma.tradeRecordSheet.findUnique({ where: { transactionId: dealId }, include: { corrections: { orderBy: { createdAt: "asc" } } } });
+  if (!sheet) throw new NotFoundError("Trade record sheet for deal", dealId);
+  const value = r.raw("value");
+  const next = effectiveItems({ items: sheet.items, corrections: [...sheet.corrections, { item, newValue: value }] });
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        INSERT INTO "TradeRecordCorrection" (id, "sheetId", item, "newValue", reason, "initialledById")
+        VALUES (gen_random_uuid(), ${sheet.id}::uuid, ${item}, ${JSON.stringify(value)}::jsonb, ${reason}, ${actor.id}::uuid)`;
+      await tx.$executeRaw`UPDATE "TradeRecordSheet" SET missing = ${JSON.stringify(missingItems(next))}::jsonb WHERE id = ${sheet.id}::uuid`;
+    });
+  } catch (err) {
+    rethrow(err);
+  }
+  return tradeRecordView(prisma, dealId);
+}
+
+export async function signTradeRecord(prisma: PrismaClient, actor: Actor, dealId: string, as: "agent" | "broker", body: unknown) {
+  const r = new Reader(body ?? {}, ["exceptionReason"]);
+  const exceptionReason = r.optionalText("exceptionReason", 500);
+  r.done();
+  const sheet = await prisma.tradeRecordSheet.findUnique({ where: { transactionId: dealId }, select: { id: true } });
+  if (!sheet) throw new NotFoundError("Trade record sheet for deal", dealId);
+  try {
+    if (as === "agent") {
+      await prisma.$executeRaw`UPDATE "TradeRecordSheet" SET "agentSignedById" = ${actor.id}::uuid, "agentSignedAt" = clock_timestamp() WHERE id = ${sheet.id}::uuid`;
+    } else {
+      await prisma.$executeRaw`
+        UPDATE "TradeRecordSheet" SET "brokerSignedById" = ${actor.id}::uuid, "brokerSignedAt" = clock_timestamp(), "brokerExceptionReason" = ${exceptionReason}
+         WHERE id = ${sheet.id}::uuid`;
+    }
+  } catch (err) {
+    rethrow(err);
+  }
+  return tradeRecordView(prisma, dealId);
+}
+
+export async function tradeRecordRoutes(app: FastifyInstance, opts: { prisma: PrismaClient; resolveUserId: ResolveUserId }) {
+  const actorOf = async (req: FastifyRequest) => loadActor(opts.prisma, await opts.resolveUserId(req));
+  type P = { Params: Record<string, string> };
+  const id = (req: { params: Record<string, string> }) => validatePathUuid(req.params.dealId!, "dealId");
+  app.get<P>("/api/deals/:dealId/trade-record", async (req) => {
+    await assertDealAccess(opts.prisma, await actorOf(req), id(req));
+    return tradeRecordView(opts.prisma, id(req));
+  });
+  app.post<P>("/api/deals/:dealId/trade-record", async (req, reply) => reply.code(201).send(await prepareTradeRecord(opts.prisma, await actorOf(req), id(req))));
+  app.post<P>("/api/deals/:dealId/trade-record/corrections", async (req, reply) =>
+    reply.code(201).send(await correctTradeRecord(opts.prisma, await actorOf(req), id(req), req.body)));
+  app.post<P>("/api/deals/:dealId/trade-record/sign", async (req) => signTradeRecord(opts.prisma, await actorOf(req), id(req), "agent", req.body));
+  app.post<P>("/api/deals/:dealId/trade-record/broker-sign", async (req) => signTradeRecord(opts.prisma, await actorOf(req), id(req), "broker", req.body));
+}

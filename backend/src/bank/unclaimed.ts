@@ -247,11 +247,7 @@ export async function remittancePackage(prisma: PrismaClient, actor: Actor, fund
   const aps = await prisma.documentSlot.findFirst({
     where: { transactionId: v.dealId, documentType: { code: "APS" }, status: "APPROVED" }, select: { id: true },
   });
-  const trs = await prisma.$queryRaw<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM information_schema.tables WHERE table_name = 'TradeRecordSheet'`;
-  const tradeRecord = trs[0]!.n > 0
-    ? (await prisma.$queryRaw<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM "TradeRecordSheet" WHERE "transactionId" = ${v.dealId}::uuid AND "brokerSignedAt" IS NOT NULL`)[0]!.n > 0
-    : false;
+  const tradeRecord = (await prisma.tradeRecordSheet.count({ where: { transactionId: v.dealId, brokerSignedAt: { not: null } } })) > 0;
   const ledger = await prisma.trustLedgerEntry.findMany({
     where: { transactionId: v.dealId, trustAccountId: v.trustAccountId }, orderBy: { createdAt: "asc" },
     select: { id: true, entryType: true, amount: true, direction: true, effectiveDate: true, receiptNumber: true, counterparty: true },

@@ -44,7 +44,9 @@ describe("pipeline API", { skip }, () => {
     });
     assert.equal(res.statusCode, 201, res.body);
     const id = res.json().deal.id as string;
-    await prisma.transaction.update({ where: { id }, data: { status } });
+    // Deals are created conditional and move forward one step at a time
+    if (status !== "CONDITIONAL") await prisma.transaction.update({ where: { id }, data: { status: "FIRM" } });
+    if (status === "CLOSED") await prisma.transaction.update({ where: { id }, data: { status } });
     return id;
   }
 
@@ -74,9 +76,7 @@ describe("pipeline API", { skip }, () => {
 
     // Conditional, deposit banked on time
     ids.conditional = await deal(u.agent, "CONDITIONAL", { conditionsDueDate: "2032-03-22" });
-    await prisma.transaction.update({ where: { id: ids.conditional }, data: { status: "FIRM" } }); // deposits need an active deal
     await deposit(ids.conditional, "2032-03-08", "2032-03-12");
-    await prisma.transaction.update({ where: { id: ids.conditional }, data: { status: "CONDITIONAL" } });
 
     // Firm, received Mon Mar 1 but banked Wed Mar 10: 7 business days
     ids.firmLate = await deal(u.agent, "FIRM", { closeDate: "2032-04-30" });

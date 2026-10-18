@@ -15,6 +15,8 @@ import { privacyRoutes } from "./security/privacy.ts";
 import { unclaimedRoutes } from "./bank/unclaimed.ts";
 import { fundsRoutes } from "./accounting/funds.ts";
 import { commissionRoutes } from "./commission/service.ts";
+import { lifecycleRoutes } from "./deals/lifecycle.ts";
+import { tradeRecordRoutes } from "./deals/trade-record.ts";
 import type { AccountingAdapter } from "./accounting/adapter.ts";
 import type { AccountRole } from "./accounting/journal.ts";
 import type { AuthService } from "./security/auth-service.ts";
@@ -92,6 +94,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.register(privacyRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(unclaimedRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(commissionRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(lifecycleRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(tradeRecordRoutes, { prisma: opts.prisma, resolveUserId });
   app.register(fundsRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today, accounting: opts.accounting ?? null, accountMap: opts.accountMap });
   return app;
 }

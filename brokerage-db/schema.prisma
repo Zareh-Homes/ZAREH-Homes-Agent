@@ -206,6 +206,16 @@ model User {
   adjustmentsCreated      CommissionAdjustment[]       @relation("AdjustmentCreatedBy")
   adjustmentsApproved     CommissionAdjustment[]       @relation("AdjustmentApprovedBy")
   adjustmentsWithdrawn    CommissionAdjustment[]       @relation("AdjustmentWithdrawnBy")
+  conditionsCreated       DealCondition[]              @relation("ConditionCreatedBy")
+  conditionEvents         DealConditionEvent[]         @relation("ConditionEventActor")
+  amendments              DealAmendment[]              @relation("AmendmentActor")
+  terminations            DealTermination[]            @relation("TerminationActor")
+  offersRecorded          Offer[]                      @relation("OfferRecordedBy")
+  offerEvents             OfferEvent[]                 @relation("OfferEventActor")
+  trsPrepared             TradeRecordSheet[]           @relation("TrsPreparedBy")
+  trsAgentSigned          TradeRecordSheet[]           @relation("TrsAgentSigner")
+  trsBrokerSigned         TradeRecordSheet[]           @relation("TrsBrokerSigner")
+  trsCorrections          TradeRecordCorrection[]      @relation("TrsCorrectionBy")
   payoutEvents            PayoutEvent[]
   receiptReversals        CommissionReceiptReversal[]
   closingVoids            ClosingVoid[]
@@ -309,6 +319,11 @@ model Transaction {
   legalHolds     LegalHold[]
   unclaimedFunds UnclaimedTrustFund[]
   adjustments    CommissionAdjustment[]
+  conditions     DealCondition[]
+  amendments     DealAmendment[]
+  termination    DealTermination?
+  offers         Offer[]
+  tradeRecord    TradeRecordSheet?
   province       String                 @default("ON") @db.Char(2) // migration 014: the property's province, for GST/HST
   documentSlots  DocumentSlot[]
 
@@ -762,6 +777,10 @@ model DocumentFile {
   uploadedBy        User                 @relation(fields: [uploadedById], references: [id])
   reviews           DocumentReview[]
   unclaimedEvidence UnclaimedFundEvent[]
+  conditionEvidence DealConditionEvent[] @relation("ConditionEvidence")
+  amendmentDocs     DealAmendment[]      @relation("AmendmentDocument")
+  terminationDocs   DealTermination[]    @relation("TerminationDocument")
+  offerDocs         Offer[]              @relation("OfferDocument")
 
   @@unique([slotId, version])
 }
@@ -1365,4 +1384,183 @@ model CommissionAdjustment {
   withdrawnBy User?          @relation("AdjustmentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
 
   @@index([transactionId])
+}
+
+enum ConditionKind {
+  FINANCING
+  INSPECTION
+  STATUS_CERTIFICATE
+  SALE_OF_BUYERS_PROPERTY
+  LAWYER_REVIEW
+  INSURANCE
+  OTHER
+}
+
+enum ConditionOutcome {
+  FULFILLED
+  WAIVED
+  EXTENDED
+  FAILED
+}
+
+// A condition in the agreement and its deadline (migration 015). The deal can't go firm while one is open.
+model DealCondition {
+  id            String        @id @default(uuid()) @db.Uuid
+  transactionId String        @db.Uuid
+  kind          ConditionKind
+  description   String
+  forBenefitOf  String // BUYER, SELLER, BOTH, LANDLORD, TENANT
+  dueAt         DateTime      @db.Timestamptz(6)
+  createdById   String        @db.Uuid
+  createdAt     DateTime      @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction Transaction          @relation(fields: [transactionId], references: [id])
+  createdBy   User                 @relation("ConditionCreatedBy", fields: [createdById], references: [id])
+  events      DealConditionEvent[]
+
+  @@index([transactionId])
+}
+
+model DealConditionEvent {
+  id             String           @id @default(uuid()) @db.Uuid
+  conditionId    String           @db.Uuid
+  outcome        ConditionOutcome
+  eventAt        DateTime         @db.Timestamptz(6)
+  newDueAt       DateTime?        @db.Timestamptz(6)
+  reference      String // waiver, notice of fulfillment or amendment form
+  documentFileId String?          @db.Uuid
+  note           String?
+  actorId        String           @db.Uuid
+  createdAt      DateTime         @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  condition    DealCondition @relation(fields: [conditionId], references: [id])
+  documentFile DocumentFile? @relation("ConditionEvidence", fields: [documentFileId], references: [id], onDelete: Restrict)
+  actor        User          @relation("ConditionEventActor", fields: [actorId], references: [id])
+
+  @@index([conditionId])
+}
+
+// A change to the agreement (migration 015): price, closing date, deposit. History, never edited.
+model DealAmendment {
+  id             String   @id @default(uuid()) @db.Uuid
+  transactionId  String   @db.Uuid
+  field          String // SALE_PRICE, CLOSE_DATE, DEPOSIT_AMOUNT, DEPOSIT_DUE_DATE, OTHER
+  oldValue       String?
+  newValue       String
+  effectiveDate  DateTime @db.Date
+  reference      String
+  documentFileId String?  @db.Uuid
+  actorId        String   @db.Uuid
+  createdAt      DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction  Transaction   @relation(fields: [transactionId], references: [id])
+  documentFile DocumentFile? @relation("AmendmentDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  actor        User          @relation("AmendmentActor", fields: [actorId], references: [id])
+
+  @@index([transactionId])
+}
+
+enum TerminationReason {
+  CONDITION_NOT_MET
+  MUTUAL_RELEASE
+  BUYER_DEFAULT
+  SELLER_DEFAULT
+  OTHER
+}
+
+model DealTermination {
+  transactionId  String            @id @db.Uuid
+  reason         TerminationReason
+  terminatedOn   DateTime          @db.Date
+  reference      String
+  documentFileId String?           @db.Uuid
+  note           String
+  actorId        String            @db.Uuid
+  createdAt      DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction  Transaction   @relation(fields: [transactionId], references: [id])
+  documentFile DocumentFile? @relation("TerminationDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  actor        User          @relation("TerminationActor", fields: [actorId], references: [id])
+}
+
+enum OfferStatus {
+  RECEIVED
+  SIGNED_BACK
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  WITHDRAWN
+}
+
+// Every written offer received on a listing (migration 015); unaccepted ones kept a year from receipt.
+model Offer {
+  id                     String   @id @default(uuid()) @db.Uuid
+  listingDealId          String   @db.Uuid
+  receivedAt             DateTime @db.Timestamptz(6)
+  written                Boolean
+  offerorBrokerage       String?
+  offerorSelfRepresented Boolean  @default(false)
+  price                  Decimal? @db.Decimal(14, 2)
+  documentFileId         String?  @db.Uuid
+  recordedById           String   @db.Uuid
+  createdAt              DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  listingDeal  Transaction   @relation(fields: [listingDealId], references: [id])
+  documentFile DocumentFile? @relation("OfferDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy   User          @relation("OfferRecordedBy", fields: [recordedById], references: [id])
+  events       OfferEvent[]
+
+  @@index([listingDealId])
+}
+
+model OfferEvent {
+  id        String      @id @default(uuid()) @db.Uuid
+  offerId   String      @db.Uuid
+  status    OfferStatus
+  eventAt   DateTime    @db.Timestamptz(6)
+  note      String?
+  actorId   String      @db.Uuid
+  createdAt DateTime    @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  offer Offer @relation(fields: [offerId], references: [id])
+  actor User  @relation("OfferEventActor", fields: [actorId], references: [id])
+
+  @@index([offerId])
+}
+
+// O. Reg. 579/05 s.17 trade record sheet (migration 015). Items as generated; corrections appended and initialled.
+model TradeRecordSheet {
+  id                         String    @id @default(uuid()) @db.Uuid
+  transactionId              String    @unique @db.Uuid
+  items                      Json
+  missing                    Json      @default("[]")
+  preparedById               String    @db.Uuid
+  preparedAt                 DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  agentSignedById            String?   @db.Uuid
+  agentSignedAt              DateTime? @db.Timestamptz(6)
+  brokerSignedById           String?   @db.Uuid
+  brokerSignedAt             DateTime? @db.Timestamptz(6)
+  brokerSegregationException Boolean   @default(false)
+  brokerExceptionReason      String?
+
+  transaction  Transaction             @relation(fields: [transactionId], references: [id])
+  preparedBy   User                    @relation("TrsPreparedBy", fields: [preparedById], references: [id])
+  agentSigner  User?                   @relation("TrsAgentSigner", fields: [agentSignedById], references: [id], onDelete: Restrict)
+  brokerSigner User?                   @relation("TrsBrokerSigner", fields: [brokerSignedById], references: [id], onDelete: Restrict)
+  corrections  TradeRecordCorrection[]
+}
+
+model TradeRecordCorrection {
+  id             String   @id @default(uuid()) @db.Uuid
+  sheetId        String   @db.Uuid
+  item           String
+  newValue       Json
+  reason         String
+  initialledById String   @db.Uuid
+  createdAt      DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  sheet        TradeRecordSheet @relation(fields: [sheetId], references: [id])
+  initialledBy User             @relation("TrsCorrectionBy", fields: [initialledById], references: [id])
+
+  @@index([sheetId])
 }
