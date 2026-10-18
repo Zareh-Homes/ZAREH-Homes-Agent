@@ -22,6 +22,14 @@ export interface BrokerageDashboard {
     totalCents: number;
     accounts: { id: string; name: string; bankName: string; accountLast4: string; balanceCents: number }[];
     pastClosing: (DealRef & { balanceCents: number; daysPastClose: number; status: string; onHold: boolean })[];
+    unclearedCents: number;
+    reconciliations: {
+      trustAccountId: string;
+      name: string;
+      lastStatementEnd: string | null;
+      lastSignedPeriodEnd: string | null;
+      awaitingSignature: { periodEnd: string; dueBy: string; overdue: boolean }[];
+    }[];
   };
   complianceQueue: (DealRef & {
     daysToClose: number;

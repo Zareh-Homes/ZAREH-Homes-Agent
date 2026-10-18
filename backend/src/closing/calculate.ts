@@ -34,6 +34,7 @@
  *
  *  6. Safety audits (throw ClosingAuditError)
  *       • every FINTRAC record on the deal is Approved
+ *       • every dollar distributed from trust has cleared the bank (matched to a statement line)
  *       • trust ledger balance − Σ proposed trust distributions = $0.00
  */
 
@@ -96,6 +97,7 @@ export interface ClosingInput {
   trust: {
     accountId: string | null;
     balance: Cents;
+    cleared: Cents; // part of the balance whose deposits have been matched to the bank statement
     accountsWithFunds: number;
     activeHold: boolean;
     deposits: { receiptNumber: number | null; amount: Cents; date: string; payor: string }[];
@@ -308,6 +310,14 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     );
   }
   if (appliesDeposit && held !== deal.expectedDeposit) warnings.push("TRUST_BALANCE_DIFFERS_FROM_DEPOSIT_AMOUNT");
+  if (held > 0 && input.trust.cleared < held) {
+    throw new ClosingAuditError(
+      "FUNDS_NOT_CLEARED",
+      `Deal ${deal.dealNumber} holds $${(held / 100).toFixed(2)} in trust, but only $${(input.trust.cleared / 100).toFixed(2)} ` +
+        "has been matched to the bank statement. Import the latest trust statement and match the deposit before closing.",
+      { held, cleared: input.trust.cleared },
+    );
+  }
 
   const distributions: TrustDistribution[] = [];
   let fromTrustToCoop = 0;

@@ -114,6 +114,10 @@ export function fromDatabaseError(err: unknown): DomainError | null {
       return new DomainError("APPEND_ONLY", 405, message);
     case "ZD004":
       return new RuleViolationError("PAYOUT_RULE", message);
+    case "ZT007":
+      return new DomainError("FUNDS_NOT_CLEARED", 409, message);
+    case "ZB001":
+      return new RuleViolationError("BANK_RULE", message);
     default:
       return null;
   }

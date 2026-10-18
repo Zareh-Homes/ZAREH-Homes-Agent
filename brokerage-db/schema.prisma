@@ -173,23 +173,26 @@ model User {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  listings           Listing[]             @relation("ListingAgent")
-  dealAgents         TransactionAgent[]
-  reviewedDocuments  DocumentSlot[]        @relation("Reviewer")
-  uploadedFiles      DocumentFile[]
-  documentReviews    DocumentReview[]      @relation("DocumentReviewer")
-  notifications      Notification[]
-  commissionPlan     CommissionPlan?
-  closingsFinalized  ClosingStatement[]    @relation("ClosingFinalizedBy")
-  closingPayouts     ClosingAgentPayout[]
-  commissionReceipts CommissionReceipt[]
-  payoutEvents       AgentPayoutEvent[]
-  trustEntriesMade   TrustLedgerEntry[]    @relation("EnteredBy")
-  trustEntriesSigned TrustLedgerEntry[]    @relation("AuthorizedBy")
-  trustHoldsFlagged  TrustHold[]           @relation("HoldFlaggedBy")
-  trustHoldsReleased TrustHold[]           @relation("HoldReleasedBy")
-  reconciliations    TrustReconciliation[]
-  auditLogs          AuditLog[]
+  listings                Listing[]             @relation("ListingAgent")
+  dealAgents              TransactionAgent[]
+  reviewedDocuments       DocumentSlot[]        @relation("Reviewer")
+  uploadedFiles           DocumentFile[]
+  documentReviews         DocumentReview[]      @relation("DocumentReviewer")
+  notifications           Notification[]
+  commissionPlan          CommissionPlan?
+  closingsFinalized       ClosingStatement[]    @relation("ClosingFinalizedBy")
+  closingPayouts          ClosingAgentPayout[]
+  commissionReceipts      CommissionReceipt[]
+  payoutEvents            AgentPayoutEvent[]
+  trustEntriesMade        TrustLedgerEntry[]    @relation("EnteredBy")
+  trustEntriesSigned      TrustLedgerEntry[]    @relation("AuthorizedBy")
+  trustHoldsFlagged       TrustHold[]           @relation("HoldFlaggedBy")
+  trustHoldsReleased      TrustHold[]           @relation("HoldReleasedBy")
+  reconciliationsPrepared TrustReconciliation[] @relation("ReconciliationPreparedBy")
+  reconciliationsSigned   TrustReconciliation[] @relation("ReconciliationSignedBy")
+  bankStatements          BankStatement[]
+  bankMatches             BankMatch[]
+  auditLogs               AuditLog[]
 
   @@index([role, isActive])
 }
@@ -332,6 +335,7 @@ model TrustAccount {
 
   entries         TrustLedgerEntry[]
   reconciliations TrustReconciliation[]
+  bankStatements  BankStatement[]
 }
 
 // Append-only. The database rejects every UPDATE, DELETE and TRUNCATE
@@ -362,6 +366,7 @@ model TrustLedgerEntry {
   transaction  Transaction       @relation(fields: [transactionId], references: [id])
   reverses     TrustLedgerEntry? @relation("Reversal", fields: [reversesEntryId], references: [id])
   reversedBy   TrustLedgerEntry? @relation("Reversal")
+  bankMatch    BankMatch?
   enteredBy    User              @relation("EnteredBy", fields: [enteredById], references: [id])
   authorizedBy User              @relation("AuthorizedBy", fields: [authorizedById], references: [id])
   holds        TrustHold[]
@@ -392,22 +397,110 @@ model TrustHold {
   @@index([transactionId])
 }
 
+// Monthly trust reconciliation (O. Reg. 579/05 s.13): bank balance adjusted for
+// outstanding items vs. the ledger vs. what's owed to each deal. Prepared by
+// admin, signed by a managing broker, frozen once signed (migration 008).
 model TrustReconciliation {
-  id               String   @id @default(uuid()) @db.Uuid
-  trustAccountId   String   @db.Uuid
-  periodEnd        DateTime @db.Date
-  bankBalance      Decimal  @db.Decimal(12, 2)
-  ledgerBalance    Decimal  @db.Decimal(12, 2)
-  outstandingItems Decimal  @default(0) @db.Decimal(12, 2)
-  isBalanced       Boolean
-  completedById    String   @db.Uuid
-  completedAt      DateTime @default(now())
-  notes            String?
+  id                       String    @id @default(uuid()) @db.Uuid
+  trustAccountId           String    @db.Uuid
+  statementId              String    @db.Uuid
+  periodEnd                DateTime  @db.Date
+  bankClosingBalance       Decimal   @db.Decimal(14, 2)
+  outstandingDeposits      Decimal   @db.Decimal(14, 2) // in the ledger, not yet at the bank
+  outstandingDisbursements Decimal   @db.Decimal(14, 2) // paid in the ledger, not yet cleared the bank
+  unrecordedBankItems      Decimal   @db.Decimal(14, 2) // at the bank, not in the ledger (fees, returned items)
+  adjustedBankBalance      Decimal   @db.Decimal(14, 2)
+  ledgerBalance            Decimal   @db.Decimal(14, 2)
+  clientLiabilities        Decimal   @db.Decimal(14, 2) // sum of every deal's trust balance
+  difference               Decimal   @db.Decimal(14, 2)
+  isBalanced               Boolean
+  details                  Json // per-deal balances and every outstanding / unrecorded item
+  explanation              String?
+  preparedById             String    @db.Uuid
+  preparedAt               DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  signedById               String?   @db.Uuid
+  signedAt                 DateTime? @db.Timestamptz(6)
+  signatureNote            String?
 
-  trustAccount TrustAccount @relation(fields: [trustAccountId], references: [id])
-  completedBy  User         @relation(fields: [completedById], references: [id])
+  trustAccount TrustAccount  @relation(fields: [trustAccountId], references: [id])
+  statement    BankStatement @relation(fields: [statementId], references: [id])
+  preparedBy   User          @relation("ReconciliationPreparedBy", fields: [preparedById], references: [id])
+  signedBy     User?         @relation("ReconciliationSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
 
-  @@unique([trustAccountId, periodEnd])
+  @@index([trustAccountId, periodEnd])
+}
+
+// The brokerage's general (operating) account, where commission is received.
+model OperatingAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  bankName     String
+  accountLast4 String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  bankStatements BankStatement[]
+}
+
+// A monthly bank statement imported from CSV. Consecutive, balanced, append-only (migration 008).
+model BankStatement {
+  id                 String   @id @default(uuid()) @db.Uuid
+  trustAccountId     String?  @db.Uuid
+  operatingAccountId String?  @db.Uuid
+  periodStart        DateTime @db.Date
+  periodEnd          DateTime @db.Date
+  openingBalance     Decimal  @db.Decimal(14, 2)
+  closingBalance     Decimal  @db.Decimal(14, 2)
+  fileName           String
+  fileSha256         String
+  importedById       String   @db.Uuid
+  importedAt         DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  trustAccount     TrustAccount?         @relation(fields: [trustAccountId], references: [id], onDelete: Restrict)
+  operatingAccount OperatingAccount?     @relation(fields: [operatingAccountId], references: [id], onDelete: Restrict)
+  importedBy       User                  @relation(fields: [importedById], references: [id])
+  lines            BankTransaction[]
+  reconciliations  TrustReconciliation[]
+
+  @@index([trustAccountId, periodEnd])
+  @@index([operatingAccountId, periodEnd])
+}
+
+model BankTransaction {
+  id          String   @id @default(uuid()) @db.Uuid
+  statementId String   @db.Uuid
+  lineNumber  Int
+  postedDate  DateTime @db.Date
+  amount      Decimal  @db.Decimal(14, 2) // + money in, − money out
+  description String
+  reference   String?
+
+  statement BankStatement @relation(fields: [statementId], references: [id])
+  match     BankMatch?
+
+  @@unique([statementId, lineNumber])
+}
+
+enum ClearanceBasis {
+  BANK_STATEMENT
+  PRE_CUTOVER
+}
+
+// Proof a ledger entry or commission receipt went through the bank (migration 008).
+model BankMatch {
+  id                  String         @id @default(uuid()) @db.Uuid
+  basis               ClearanceBasis
+  bankTransactionId   String?        @unique @db.Uuid
+  trustEntryId        String?        @unique @db.Uuid
+  commissionReceiptId String?        @unique @db.Uuid
+  note                String?
+  matchedById         String         @db.Uuid
+  matchedAt           DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  bankTransaction   BankTransaction?   @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  trustEntry        TrustLedgerEntry?  @relation(fields: [trustEntryId], references: [id], onDelete: Restrict)
+  commissionReceipt CommissionReceipt? @relation(fields: [commissionReceiptId], references: [id], onDelete: Restrict)
+  matchedBy         User               @relation(fields: [matchedById], references: [id])
 }
 
 // ─────────────────────────────────────────────
@@ -626,6 +719,7 @@ model CommissionReceipt {
 
   closing    ClosingStatement @relation(fields: [closingId], references: [id])
   recordedBy User             @relation(fields: [recordedById], references: [id])
+  bankMatch  BankMatch?
 
   @@index([closingId])
 }

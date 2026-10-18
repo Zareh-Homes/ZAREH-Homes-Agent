@@ -80,7 +80,7 @@ def test_3_report_counts(migrated):
     assert report["rows_rejected"] == {"agents": 2, "deals": 6, "trust": 7}
     assert report["written"] == {
         "agents_inserted": 4, "agents_existing": 0, "deals_inserted": 5, "deals_existing": 0,
-        "trust_inserted": 8, "trust_existing": 0,
+        "trust_inserted": 8, "trust_existing": 0, "trust_attested_pre_cutover": 8,
     }
 
 
@@ -162,6 +162,10 @@ def test_7_trust_ledgers_balance_and_link_reversals(engine, setup, migrated):
     assert all(e["memo"].startswith("Migrated from Lone Wolf entry") for e in entries)
     broker = q(engine, 'SELECT id::text FROM "User" WHERE email = :e', e=setup["broker"])[0]["id"]
     assert all(e["by"] == broker for e in entries)
+    attested = q(engine, """SELECT m.basis::text AS basis, m."matchedById"::text AS by FROM "BankMatch" m
+                             JOIN "TrustLedgerEntry" e ON e.id = m."trustEntryId" JOIN "Transaction" t ON t.id = e."transactionId"
+                            WHERE t."dealNumber" LIKE :p""", p=f"LW-T%{run}")
+    assert len(attested) == len(entries) and all(a["basis"] == "PRE_CUTOVER" and a["by"] == broker for a in attested)
 
 
 def test_8_error_log_and_rejected_files(setup, migrated):
@@ -201,7 +205,7 @@ def test_9_rerun_is_idempotent(engine, setup, migrated):
     report = json.loads((setup["work"] / "out" / "migration_report.json").read_text())
     assert report["written"] == {
         "agents_inserted": 0, "agents_existing": 4, "deals_inserted": 0, "deals_existing": 5,
-        "trust_inserted": 0, "trust_existing": 8,
+        "trust_inserted": 0, "trust_existing": 8, "trust_attested_pre_cutover": 0,
     }
     count = q(engine, """SELECT COUNT(*) AS n FROM "TrustLedgerEntry" e JOIN "Transaction" t ON t.id = e."transactionId"
                          WHERE t."dealNumber" LIKE :p""", p=f"LW-T%{setup['run']}")[0]["n"]

@@ -26,6 +26,12 @@ export const demoBrokerage: BrokerageDashboard = {
       { id: "d1", dealNumber: "2026-0117", address: "41 Ridge Rd, Stoney Creek", closeDate: "2026-09-30", balanceCents: 4_000_000, daysPastClose: 17, status: "COLLAPSED", onHold: true },
       { id: "d2", dealNumber: "2026-0131", address: "1205 – 88 Queens Quay W, Toronto", closeDate: "2026-10-10", balanceCents: 6_065_000, daysPastClose: 7, status: "FIRM", onHold: false },
     ],
+    unclearedCents: 5_000_000,
+    reconciliations: [
+      { trustAccountId: "a1", name: "Real Estate Trust", lastStatementEnd: "2026-09-30", lastSignedPeriodEnd: "2026-08-31",
+        awaitingSignature: [{ periodEnd: "2026-09-30", dueBy: "2026-10-30", overdue: false }] },
+      { trustAccountId: "a2", name: "Pre-construction Trust", lastStatementEnd: "2026-09-30", lastSignedPeriodEnd: "2026-09-30", awaitingSignature: [] },
+    ],
   },
   complianceQueue: [
     { id: "d3", dealNumber: "2026-0148", address: "22 Main St E, Grimsby", closeDate: "2026-10-16", daysToClose: -1, primaryAgent: "Priya Shah",

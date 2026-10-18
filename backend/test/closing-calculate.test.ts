@@ -44,6 +44,7 @@ function toronto(deposit: number, holder: ClosingInput["deal"]["trustDepositHold
     trust: {
       accountId: holder === "OUR_BROKERAGE" ? "acct-1" : null,
       balance: holder === "OUR_BROKERAGE" ? $(deposit) : 0,
+      cleared: holder === "OUR_BROKERAGE" ? $(deposit) : 0,
       accountsWithFunds: holder === "OUR_BROKERAGE" ? 1 : 0,
       activeHold: false,
       deposits: holder === "OUR_BROKERAGE" ? [{ receiptNumber: 1042, amount: $(deposit), date: "2026-10-15", payor: "Bo Kim" }] : [],
@@ -153,7 +154,7 @@ test("4: audits — not FINTRAC approved, trust that won't net to $0, holds, mis
 
   // Deal says the co-op holds the deposit, but $1,000 is sitting in our trust for it
   const stray = toronto(0, "COOP_BROKERAGE");
-  stray.trust = { ...stray.trust, balance: $(1_000), accountsWithFunds: 1, accountId: "acct-1" };
+  stray.trust = { ...stray.trust, balance: $(1_000), cleared: $(1_000), accountsWithFunds: 1, accountId: "acct-1" };
   assert.equal(auditCode(() => computeClosing(stray, BROKERAGE)), "TRUST_WILL_NOT_BALANCE");
 
   const buyerSideDeposit = toronto(50_000, "OUR_BROKERAGE");
@@ -164,6 +165,10 @@ test("4: audits — not FINTRAC approved, trust that won't net to $0, holds, mis
   const empty = toronto(50_000, "OUR_BROKERAGE");
   empty.trust = { ...empty.trust, balance: 0, accountsWithFunds: 0 };
   assert.equal(auditCode(() => computeClosing(empty, BROKERAGE)), "DEPOSIT_NOT_IN_TRUST");
+
+  const uncleared = toronto(60_000, "OUR_BROKERAGE");
+  uncleared.trust.cleared = $(10_000);
+  assert.equal(auditCode(() => computeClosing(uncleared, BROKERAGE)), "FUNDS_NOT_CLEARED");
 
   const held = toronto(60_000, "OUR_BROKERAGE");
   held.trust.activeHold = true;

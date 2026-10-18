@@ -4,8 +4,8 @@ import { depositStatus, type DepositFacts } from "../src/pipeline/deposit-status
 
 // Thursday, Oct 15 2026
 const base: DepositFacts = { holder: "OUR_BROKERAGE", expectedCents: 5_000_000, dueDate: "2026-10-09", deposits: [], today: "2026-10-15" };
-const dep = (receivedDate: string, depositedDate: string, amountCents = 5_000_000) =>
-  ({ amountCents, receivedDate, depositedDate, receiptNumber: 1042 });
+const dep = (receivedDate: string, depositedDate: string, amountCents = 5_000_000, bankCleared = true) =>
+  ({ amountCents, receivedDate, depositedDate, receiptNumber: 1042, bankCleared });
 
 test("full deposit banked within 5 business days: green, Received & Cleared", () => {
   // Received Fri Oct 2, banked Fri Oct 9: Mon–Fri in between = 5 business days, on the limit
@@ -14,6 +14,14 @@ test("full deposit banked within 5 business days: green, Received & Cleared", ()
   assert.equal(b.tone, "good");
   assert.equal(b.label, "Deposit Received & Cleared");
   assert.equal(b.detail, "$50,000 in trust · receipt #1042");
+});
+
+test("recorded on time but not yet matched to the bank statement: amber, not yet cleared", () => {
+  const b = depositStatus({ ...base, deposits: [dep("2026-10-02", "2026-10-09", 5_000_000, false)] });
+  assert.equal(b.state, "AWAITING_BANK");
+  assert.equal(b.tone, "warning");
+  assert.equal(b.label, "Received – not yet cleared");
+  assert.equal(b.detail, "$50,000 recorded in trust but not yet matched to the bank statement");
 });
 
 test("banked on the 6th business day: red, late to trust", () => {

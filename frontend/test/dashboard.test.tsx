@@ -53,6 +53,13 @@ describe("admin widgets", () => {
     expect(t).toContain("On hold");
   });
 
+  test("trust widget: money not yet cleared at the bank, and each account's reconciliation status", () => {
+    const t = text(<Dashboard data={demoResponses.admin!} />);
+    expect(t).toContain("$50,000.00 recorded but not yet matched to the bank");
+    expect(t).toContain("1 month to sign · due Oct 30");
+    expect(t).toContain("Signed to Sep 30");
+  });
+
   test("compliance queue: overdue first, each missing record named with its client", () => {
     const t = text(<Dashboard data={demoResponses.admin!} />);
     expect(t).toContain("1 day overdue");

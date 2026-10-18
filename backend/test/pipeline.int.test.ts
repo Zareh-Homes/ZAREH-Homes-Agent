@@ -10,7 +10,7 @@ import { PrismaClient, type UserRole } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { TEST_BROKERAGE } from "./fixtures.ts";
+import { attestCleared, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2032-03-18";
@@ -48,13 +48,14 @@ describe("pipeline API", { skip }, () => {
     return id;
   }
 
-  async function deposit(dealId: string, received: string, deposited: string) {
+  async function deposit(dealId: string, received: string, deposited: string, cleared = true) {
     const res = await app.inject({
       method: "POST", url: "/api/trust/deposits", headers: { "x-user-id": u.broker, "idempotency-key": randomUUID() },
       payload: { dealId, trustAccountId: account, amount: "45000.00", method: "BANK_DRAFT",
         dateReceived: received, dateDeposited: deposited, payorName: "Bo Kim", bankReference: "D-1" },
     });
     assert.equal(res.statusCode, 201, res.body);
+    if (cleared) await attestCleared(app, u.broker, [res.json().entry.id]);
   }
 
   before(async () => {

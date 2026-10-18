@@ -1132,6 +1132,8 @@ def insert_trust(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: d
                                         {"d": deal_ids[deal_legacy]}).scalars())
                 conn.execute(text('SELECT 1 FROM "TrustAccount" WHERE id = CAST(:a AS uuid) FOR UPDATE'), {"a": account_id})
                 conn.execute(text("SELECT pg_advisory_xact_lock(hashtext('trust-receipt-number'))"))
+                first_statement = conn.execute(text('SELECT MIN("periodStart") FROM "BankStatement" WHERE "trustAccountId" = CAST(:a AS uuid)'),
+                                               {"a": account_id}).scalar()
                 for e in items:
                     if e.entry_id in done:
                         stats["trust_existing"] += 1
@@ -1165,6 +1167,13 @@ def insert_trust(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: d
                            "method": e.method, "reference": e.reference, "receipt": receipt, "counterparty": e.counterparty,
                            "received": e.received_date, "effective": e.effective_date, "auth": authorization, "auth_ref": auth_ref,
                            "memo": memo, "reverses": stable_id("trust", e.reverses) if e.reverses else None, "key": e.entry_id, "broker": broker_id})
+                    if first_statement is None or e.effective_date < first_statement:
+                        conn.execute(text("""
+                            INSERT INTO "BankMatch" (id, basis, "trustEntryId", note, "matchedById")
+                            VALUES (gen_random_uuid(), 'PRE_CUTOVER', CAST(:entry AS uuid), :note, CAST(:broker AS uuid))
+                        """), {"entry": e.entry_id, "broker": broker_id,
+                               "note": f"Pre-cutover history migrated from Lone Wolf entry {e.legacy_id}; cleared per the Lone Wolf records"})
+                        stats["trust_attested_pre_cutover"] += 1
                     stats["trust_inserted"] += 1
         except RowError as exc:
             for e in items:
@@ -1227,7 +1236,7 @@ def run(opts: argparse.Namespace) -> int:
     configure_logging(opts.error_log)
     log.info(json.dumps({"event": "start", "dry_run": opts.dry_run, "files": [str(opts.agents), str(opts.deals), str(opts.trust)]}))
     ledger = Ledger()
-    stats = {k: 0 for k in ("agents_inserted", "agents_existing", "deals_inserted", "deals_existing", "trust_inserted", "trust_existing")}
+    stats = {k: 0 for k in ("agents_inserted", "agents_existing", "deals_inserted", "deals_existing", "trust_inserted", "trust_existing", "trust_attested_pre_cutover")}
 
     try:
         overrides = json.loads(opts.column_map.read_text()) if opts.column_map else {}

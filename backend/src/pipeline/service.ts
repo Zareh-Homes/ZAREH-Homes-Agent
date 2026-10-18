@@ -70,7 +70,7 @@ interface DealRow {
   trustDepositHolder: "OUR_BROKERAGE" | "COOP_BROKERAGE" | "LAWYER" | "BUILDER";
   agentName: string | null;
   finalized: boolean;
-  deposits: { amount: string; receivedDate: string; depositedDate: string; receiptNumber: number | null }[] | null;
+  deposits: { amount: string; receivedDate: string; depositedDate: string; receiptNumber: number | null; bankCleared: boolean }[] | null;
 }
 
 export async function getPipeline(db: PrismaClient, actor: Actor, today = todayInToronto()): Promise<PipelineResponse> {
@@ -104,7 +104,8 @@ export async function getPipeline(db: PrismaClient, actor: Actor, today = todayI
                      'amount', d.amount::text,
                      'receivedDate', to_char(d."receivedDate", 'YYYY-MM-DD'),
                      'depositedDate', to_char(d."effectiveDate", 'YYYY-MM-DD'),
-                     'receiptNumber', d."receiptNumber") ORDER BY d."createdAt")
+                     'receiptNumber', d."receiptNumber",
+                     'bankCleared', EXISTS (SELECT 1 FROM "BankMatch" m WHERE m."trustEntryId" = d.id)) ORDER BY d."createdAt")
               FROM "TrustLedgerEntry" d
              WHERE d."transactionId" = t.id AND d."entryType" = 'DEPOSIT_RECEIVED'
                AND NOT EXISTS (SELECT 1 FROM "TrustLedgerEntry" r WHERE r."reversesEntryId" = d.id)) AS deposits
@@ -141,6 +142,7 @@ export async function getPipeline(db: PrismaClient, actor: Actor, today = todayI
           receivedDate: x.receivedDate,
           depositedDate: x.depositedDate,
           receiptNumber: x.receiptNumber,
+          bankCleared: x.bankCleared,
         })),
         today,
       }),

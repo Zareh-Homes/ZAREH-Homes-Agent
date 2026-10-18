@@ -3,7 +3,7 @@
 export type ColumnKey = "ACTIVE" | "CONDITIONAL" | "FIRM" | "CLOSED";
 
 export interface DepositBadgeData {
-  state: "CLEARED" | "LATE_TO_TRUST" | "OVERDUE" | "PARTIAL" | "DUE" | "NOT_RECORDED" | "HELD_ELSEWHERE";
+  state: "CLEARED" | "AWAITING_BANK" | "LATE_TO_TRUST" | "OVERDUE" | "PARTIAL" | "DUE" | "NOT_RECORDED" | "HELD_ELSEWHERE";
   tone: "good" | "critical" | "warning" | "neutral";
   label: string;
   detail: string;

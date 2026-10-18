@@ -11,6 +11,7 @@
 
 import type { PrismaClient, UserRole } from "@prisma/client";
 import type { Actor } from "../auth.ts";
+import { reconciliationStatus, type AccountReconStatus } from "../bank/service.ts";
 import { capYearStart } from "../closing/service.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { numericToCents } from "../lib/money.ts";
@@ -40,6 +41,8 @@ export interface BrokerageDashboard {
     totalCents: number;
     accounts: { id: string; name: string; bankName: string; accountLast4: string; balanceCents: number }[];
     pastClosing: (DealRef & { balanceCents: number; daysPastClose: number; status: string; onHold: boolean })[];
+    unclearedCents: number; // deposits recorded in the ledger, not yet matched to a bank statement
+    reconciliations: AccountReconStatus[];
   };
   complianceQueue: (DealRef & {
     daysToClose: number; // negative = past its closing date and still not closed
@@ -104,6 +107,13 @@ async function brokerageDashboard(db: PrismaClient, today: string): Promise<Brok
       FROM "ClosingStatement" c JOIN "Transaction" t ON t.id = c."transactionId"
      WHERE t."closeDate" >= ${yearStart}::date AND t."closeDate" < ${yearEnd}::date`;
 
+  const [uncleared] = await db.$queryRaw<{ total: string }[]>`
+    SELECT COALESCE(SUM(d.amount), 0)::text AS total
+      FROM "TrustLedgerEntry" d JOIN "TrustAccount" a ON a.id = d."trustAccountId"
+     WHERE a."isActive" AND d."entryType" = 'DEPOSIT_RECEIVED'
+       AND NOT EXISTS (SELECT 1 FROM "BankMatch" m WHERE m."trustEntryId" = d.id)
+       AND NOT EXISTS (SELECT 1 FROM "TrustLedgerEntry" r WHERE r."reversesEntryId" = d.id)`;
+
   const [volume] = await db.$queryRaw<{ total: string; n: number }[]>`
     SELECT COALESCE(SUM("salePrice"), 0)::text AS total, COUNT(*)::int AS n FROM "Transaction"
      WHERE status = 'CLOSED' AND "closeDate" >= ${yearStart}::date AND "closeDate" < ${yearEnd}::date`;
@@ -164,6 +174,8 @@ async function brokerageDashboard(db: PrismaClient, today: string): Promise<Brok
         id: d.id, dealNumber: d.dealNumber, address: address(d.streetAddress, d.unit, d.city), closeDate: d.closeDate,
         status: d.status, balanceCents: toCents(d.balance), daysPastClose: d.daysPastClose, onHold: d.onHold,
       })),
+      unclearedCents: toCents(uncleared!.total),
+      reconciliations: await reconciliationStatus(db, today),
     },
     complianceQueue: queue
       .filter((d) => d.fintracSlots === 0 || (d.missing?.length ?? 0) > 0)

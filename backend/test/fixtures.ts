@@ -31,3 +31,19 @@ export function multipart(file: { name: string; type: string; bytes: Buffer } | 
 }
 
 export const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+/**
+ * Marks trust entries as cleared by a broker's pre-cutover attestation, for tests
+ * about other rules. The real statement-and-match flow is in bank.int.test.ts.
+ */
+export async function attestCleared(
+  app: { inject: (opts: object) => Promise<{ statusCode: number; body: string }> },
+  brokerId: string,
+  entryIds: string[],
+): Promise<void> {
+  const res = await app.inject({
+    method: "POST", url: "/api/bank/pre-cutover", headers: { "x-user-id": brokerId },
+    payload: { trustEntryIds: entryIds, note: "Test: treated as cleared before any statement was imported" },
+  });
+  if (res.statusCode !== 201) throw new Error(`attestCleared failed: ${res.statusCode} ${res.body}`);
+}

@@ -4,7 +4,8 @@
  * steps, each recorded append-only and re-checked by the database (migration 006):
  *
  *   1. Commission received  admin / managing broker records the incoming payment
- *   2. Payout approved      managing broker, only once the commission is in full
+ *      (then matched to the operating account's bank statement, see bank/service.ts)
+ *   2. Payout approved      managing broker, only once the commission is in full and matched to the bank
  *   3. Payout paid          admin / managing broker, with the payment reference
  *
  * A closing paid entirely from the deposit in trust has nothing to receive,
@@ -21,7 +22,7 @@ import type { ClosingComputation } from "./calculate.ts";
 
 const PAYMENT_RECORDERS = ["ADMIN", "MANAGING_BROKER"] as const;
 
-export type PayoutStatus = "AWAITING_COMMISSION" | "READY_FOR_APPROVAL" | "APPROVED" | "PAID";
+export type PayoutStatus = "AWAITING_COMMISSION" | "AWAITING_BANK_MATCH" | "READY_FOR_APPROVAL" | "APPROVED" | "PAID";
 
 export interface PayoutView {
   id: string;
@@ -39,7 +40,7 @@ export interface PayoutsView {
   cdaNumber: string;
   commissionDue: string;
   commissionReceived: string;
-  receipts: { amount: string; receivedDate: string; reference: string }[];
+  receipts: { id: string; amount: string; receivedDate: string; reference: string; bankMatched: boolean }[];
   payouts: PayoutView[];
 }
 
@@ -55,7 +56,7 @@ async function statementFor(prisma: PrismaClient | Prisma.TransactionClient, dea
   const statement = await prisma.closingStatement.findUnique({
     where: { transactionId: dealId },
     include: {
-      receipts: { orderBy: { recordedAt: "asc" } },
+      receipts: { orderBy: { recordedAt: "asc" }, include: { bankMatch: { select: { id: true } } } },
       payouts: { orderBy: { payeeName: "asc" }, include: { events: true } },
     },
   });
@@ -68,16 +69,20 @@ export async function getPayouts(deps: Deps, actor: Actor, dealId: string): Prom
   const s = await statementFor(deps.prisma, dealId);
   const due: Cents = (s.computation as unknown as ClosingComputation).wiresTotal;
   const received = s.receipts.reduce((sum, r) => sum + centsOf(r.amount), 0);
+  const allMatched = s.receipts.every((r) => r.bankMatch !== null);
   return {
     closingId: s.id,
     cdaNumber: s.cdaNumber,
     commissionDue: formatCents(due),
     commissionReceived: formatCents(received),
-    receipts: s.receipts.map((r) => ({ amount: r.amount.toFixed(2), receivedDate: iso(r.receivedDate), reference: r.reference })),
+    receipts: s.receipts.map((r) => ({
+      id: r.id, amount: r.amount.toFixed(2), receivedDate: iso(r.receivedDate), reference: r.reference, bankMatched: r.bankMatch !== null,
+    })),
     payouts: s.payouts.map((p) => {
       const approved = p.events.find((e) => e.kind === "APPROVED");
       const paid = p.events.find((e) => e.kind === "PAID");
-      const status: PayoutStatus = paid ? "PAID" : approved ? "APPROVED" : received >= due ? "READY_FOR_APPROVAL" : "AWAITING_COMMISSION";
+      const status: PayoutStatus = paid ? "PAID" : approved ? "APPROVED"
+        : received < due ? "AWAITING_COMMISSION" : allMatched ? "READY_FOR_APPROVAL" : "AWAITING_BANK_MATCH";
       return {
         id: p.id,
         userId: p.userId,
@@ -146,6 +151,12 @@ export async function approvePayout(deps: Deps, actor: Actor, payoutId: string, 
     throw new RuleViolationError(
       "COMMISSION_NOT_RECEIVED",
       `The commission for ${view.cdaNumber} hasn't been received in full ($${view.commissionReceived} of $${view.commissionDue})`,
+    );
+  }
+  if (current.status === "AWAITING_BANK_MATCH") {
+    throw new RuleViolationError(
+      "COMMISSION_NOT_CLEARED",
+      `The commission for ${view.cdaNumber} is recorded but not yet matched to the operating account's bank statement`,
     );
   }
   if (current.status !== "READY_FOR_APPROVAL") throw new ConflictError("PAYOUT_ALREADY_APPROVED", "This payout is already approved");

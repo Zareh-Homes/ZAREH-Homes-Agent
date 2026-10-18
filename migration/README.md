@@ -78,6 +78,7 @@ Headers are matched loosely: case, spaces and punctuation are ignored. Common Lo
   - Deposits must be by bank draft, wire or certified cheque. A personal cheque or EFT deposit is rejected rather than relabelled.
   - A deposit banked more than 5 business days after receipt is imported as recorded, with a warning.
 - **Authorization.** The new ledger requires a managing broker on every trust entry. The `--broker-email` broker is recorded as authorizing the migrated entries, with "Migrated from Lone Wolf entry …" as the reference.
+- **Cleared funds.** The new ledger only pays out money that has cleared the bank. Each migrated trust entry dated before the account's first imported statement is recorded as a pre-cutover attestation by the `--broker-email` broker. The first monthly reconciliation after cutover is what proves the balances (see `docs/monthly-trust-reconciliation.md`).
 
 ## Outputs
 

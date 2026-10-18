@@ -6,6 +6,9 @@
  * for every deposit (receivedDate, effectiveDate), so a late deposit is
  * provable. A deposit that never arrives is caught by the APS due date.
  *
+ * "Cleared" means the deposit has been matched to the trust account's bank
+ * statement: money the bank actually holds, not just an entry in the ledger.
+ *
  * Statutory holidays aren't excluded from the 5-day count (weekends are), so
  * the clock can read a day short near a holiday, never long.
  */
@@ -16,7 +19,8 @@ import type { Cents } from "../lib/money.ts";
 export const TRUST_DEPOSIT_BUSINESS_DAYS = 5;
 
 export type DepositState =
-  | "CLEARED" // full deposit received, banked on time
+  | "CLEARED" // full deposit received, banked on time, matched to the bank statement
+  | "AWAITING_BANK" // full deposit recorded on time, not yet matched to the bank statement
   | "LATE_TO_TRUST" // received, but banked after 5 business days
   | "OVERDUE" // due date passed, deposit (or part of it) not received
   | "PARTIAL" // part received, rest not yet due
@@ -37,7 +41,7 @@ export interface DepositFacts {
   holder: "OUR_BROKERAGE" | "COOP_BROKERAGE" | "LAWYER" | "BUILDER";
   expectedCents: Cents;
   dueDate: string | null;
-  deposits: { amountCents: Cents; receivedDate: string; depositedDate: string; receiptNumber: number | null }[];
+  deposits: { amountCents: Cents; receivedDate: string; depositedDate: string; receiptNumber: number | null; bankCleared: boolean }[];
   today: string;
 }
 
@@ -78,6 +82,14 @@ export function depositStatus(f: DepositFacts): DepositBadge {
 
   if (received >= f.expectedCents && received > 0) {
     const receipts = f.deposits.map((d) => d.receiptNumber).filter((n) => n !== null);
+    const uncleared = f.deposits.filter((d) => !d.bankCleared).reduce((s, d) => s + d.amountCents, 0);
+    if (uncleared > 0) {
+      return {
+        ...base, state: "AWAITING_BANK", tone: "warning",
+        label: "Received – not yet cleared",
+        detail: `${dollars(uncleared)} recorded in trust but not yet matched to the bank statement`,
+      };
+    }
     return {
       ...base, state: "CLEARED", tone: "good",
       label: "Deposit Received & Cleared",

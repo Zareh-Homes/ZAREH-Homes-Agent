@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient, type DealStatus, type DepositHolder } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
-import { TEST_BROKERAGE } from "./fixtures.ts";
+import { attestCleared, TEST_BROKERAGE } from "./fixtures.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 
@@ -90,6 +90,13 @@ describe("trust ledger API", { skip }, () => {
     authorizationMethod: "CLOSING_COMPLETED",
     ...extra,
   });
+
+  /** A deposit that has cleared the bank, so it can be paid out */
+  async function clearedDeposit(dealId: string) {
+    const entry = (await post("/api/trust/deposits", depositBody(dealId))).json().entry;
+    await attestCleared(app, users.broker, [entry.id]);
+    return entry;
+  }
 
   async function balance(dealId: string): Promise<string> {
     const res = await app.inject({ method: "GET", url: `/api/deals/${dealId}/trust`, headers: { "x-user-id": users.broker } });
@@ -178,7 +185,7 @@ describe("trust ledger API", { skip }, () => {
 
   test("disbursement: 'closing' authority needs a CLOSED deal; full release marks the deposit RELEASED", async () => {
     const dealId = await newDeal({ status: "FIRM" });
-    await post("/api/trust/deposits", depositBody(dealId));
+    await clearedDeposit(dealId);
     const early = await post("/api/trust/disbursements", payoutBody(dealId, "27500.00"));
     assert.equal(early.statusCode, 422);
     assert.equal(early.json().error.code, "DEAL_NOT_CLOSED");
@@ -200,9 +207,20 @@ describe("trust ledger API", { skip }, () => {
     assert.equal(deal.depositStatus, "RELEASED");
   });
 
+  test("cleared funds: a deposit recorded but not matched to the bank can't be paid out", async () => {
+    const dealId = await newDeal({ status: "CLOSED" });
+    const entry = (await post("/api/trust/deposits", depositBody(dealId))).json().entry;
+    const blocked = await post("/api/trust/disbursements", payoutBody(dealId, "1.00"));
+    assert.equal(blocked.statusCode, 409);
+    assert.equal(blocked.json().error.code, "FUNDS_NOT_CLEARED");
+    assert.match(blocked.json().error.message, /only 0\.00 of this deal's trust money has cleared the bank/);
+    await attestCleared(app, users.broker, [entry.id]);
+    assert.equal((await post("/api/trust/disbursements", payoutBody(dealId, "1.00"))).statusCode, 201);
+  });
+
   test("concurrency: three simultaneous $15k payouts against $40k — exactly two succeed", async () => {
     const dealId = await newDeal({ status: "CLOSED" });
-    await post("/api/trust/deposits", depositBody(dealId));
+    await clearedDeposit(dealId);
     const results = await Promise.all(
       [1, 2, 3].map(() => post("/api/trust/disbursements", payoutBody(dealId, "15000.00"))),
     );
@@ -213,7 +231,7 @@ describe("trust ledger API", { skip }, () => {
 
   test("idempotency: a retried payout is returned, not paid twice; a reused key with new data is refused", async () => {
     const dealId = await newDeal({ status: "CLOSED" });
-    await post("/api/trust/deposits", depositBody(dealId));
+    await clearedDeposit(dealId);
     const key = randomUUID();
     const first = await post("/api/trust/disbursements", payoutBody(dealId, "5000.00"), users.broker, key);
     const retry = await post("/api/trust/disbursements", payoutBody(dealId, "5000.00"), users.broker, key);
@@ -232,7 +250,7 @@ describe("trust ledger API", { skip }, () => {
 
   test("hold: a disputed deposit blocks every payout until a broker releases it", async () => {
     const dealId = await newDeal({ status: "FIRM" });
-    const depositId = (await post("/api/trust/deposits", depositBody(dealId))).json().entry.id;
+    const depositId = (await clearedDeposit(dealId)).id;
     await prisma.transaction.update({ where: { id: dealId }, data: { status: "COLLAPSED" } });
 
     const holdUrl = `/api/deals/${dealId}/trust/holds`;
@@ -272,7 +290,7 @@ describe("trust ledger API", { skip }, () => {
 
   test("reversal: corrects by adding a row; can't be repeated, reversed, or overdraw the deal", async () => {
     const dealId = await newDeal({ status: "CLOSED" });
-    const deposit = (await post("/api/trust/deposits", depositBody(dealId))).json().entry;
+    const deposit = await clearedDeposit(dealId);
     const payout = (await post("/api/trust/disbursements", payoutBody(dealId, "30000.00"))).json().entry;
 
     // Pulling the $40k deposit back out would leave the deal at −$30k

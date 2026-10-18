@@ -70,6 +70,10 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
      WHERE d."transactionId" = ${dealId}::uuid AND d."entryType" = 'DEPOSIT_RECEIVED'
        AND NOT EXISTS (SELECT 1 FROM "TrustLedgerEntry" r WHERE r."reversesEntryId" = d.id)
      ORDER BY d."createdAt"`;
+  const [cleared] = withFunds.length === 1
+    ? await db.$queryRaw<{ cleared: string }[]>`
+        SELECT trust_cleared_balance(${dealId}::uuid, ${withFunds[0]!.trustAccountId}::uuid)::text AS cleared`
+    : [{ cleared: "0" }];
   const hold = await db.trustHold.findFirst({ where: { transactionId: dealId, releasedAt: null }, select: { id: true } });
 
   // FINTRAC: every FINTRAC record slot on the deal must be approved
@@ -141,6 +145,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
     trust: {
       accountId: withFunds[0]?.trustAccountId ?? null,
       balance: withFunds.reduce((s, b) => s + numericToCents(b.balance), 0),
+      cleared: numericToCents(cleared!.cleared),
       accountsWithFunds: withFunds.length,
       activeHold: hold !== null,
       deposits: deposits.map((d) => ({ ...d, amount: numericToCents(d.amount) })),

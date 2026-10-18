@@ -10,6 +10,7 @@ import { closingRoutes } from "./closing/routes.ts";
 import type { BrokerageProfile } from "./closing/cda-template.ts";
 import { dashboardRoutes } from "./dashboard/routes.ts";
 import { pipelineRoutes } from "./pipeline/routes.ts";
+import { bankRoutes } from "./bank/routes.ts";
 
 export interface AppOptions {
   prisma: PrismaClient;
@@ -37,11 +38,12 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return reply.code(500).send({ error: { code: "INTERNAL", message: "Something went wrong" } });
   });
 
+  const hub = opts.notificationHub ?? new NotificationHub();
   app.register(trustRoutes, { prisma: opts.prisma, resolveUserId: opts.resolveUserId, today: opts.today });
   app.register(complianceRoutes, {
     prisma: opts.prisma,
     store: opts.fileStore,
-    hub: opts.notificationHub ?? new NotificationHub(),
+    hub,
     resolveUserId: opts.resolveUserId,
     today: opts.today,
   });
@@ -53,5 +55,6 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
   app.register(dashboardRoutes, { prisma: opts.prisma, resolveUserId: opts.resolveUserId, today: opts.today });
   app.register(pipelineRoutes, { prisma: opts.prisma, resolveUserId: opts.resolveUserId, today: opts.today });
+  app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId: opts.resolveUserId, today: opts.today });
   return app;
 }

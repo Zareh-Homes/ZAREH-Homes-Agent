@@ -12,7 +12,7 @@ import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
+import { attestCleared, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-12-01";
@@ -24,6 +24,7 @@ describe("closing and CDA API", { skip }, () => {
   });
   const u = { broker: "", compliance: "", agent: "", admin: "" };
   let account = "";
+  let operating = "";
 
   before(async () => {
     const make = async (role: UserRole, extra: object = {}) =>
@@ -43,6 +44,7 @@ describe("closing and CDA API", { skip }, () => {
       },
     });
     account = (await prisma.trustAccount.create({ data: { name: "Trust", bankName: "TD", accountLast4: "4821" } })).id;
+    operating = (await prisma.operatingAccount.create({ data: { name: "General", bankName: "TD", accountLast4: "1177" } })).id;
   });
 
   after(async () => {
@@ -54,7 +56,7 @@ describe("closing and CDA API", { skip }, () => {
     app.inject({ method, url, headers: { "x-user-id": user, ...headers }, ...(body ? { payload: body } : {}) });
 
   /** A Toronto listing, FINTRAC-approved, with an optional deposit in our trust. */
-  async function torontoListing(opts: { deposit?: number; approveFintrac?: boolean } = {}) {
+  async function torontoListing(opts: { deposit?: number; approveFintrac?: boolean; cleared?: boolean } = {}) {
     const created = await as(u.agent, "POST", "/api/deals", {
       side: "LISTING", streetAddress: "88 Queens Quay W", unit: "1205", city: "Toronto", mlsNumber: "C1234567",
       salePrice: "1100000", offerDate: "2026-10-10", closeDate: "2026-11-30",
@@ -80,6 +82,7 @@ describe("closing and CDA API", { skip }, () => {
         dateReceived: "2026-10-12", dateDeposited: "2026-10-13", payorName: "Bo Kim", bankReference: "DRAFT-1",
       }, { "idempotency-key": randomUUID() });
       assert.equal(dep.statusCode, 201, dep.body);
+      if (opts.cleared !== false) await attestCleared(app, u.broker, [dep.json().entry.id]);
     }
 
     if (opts.approveFintrac !== false) {
@@ -205,7 +208,25 @@ describe("closing and CDA API", { skip }, () => {
     assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "COMMISSION_NOT_RECEIVED");
     const full = await receive("5935.00");
     assert.equal(full.json().commissionReceived, "15935.00");
-    assert.equal(full.json().payouts[0].status, "READY_FOR_APPROVAL");
+    assert.equal(full.json().payouts[0].status, "AWAITING_BANK_MATCH");
+    assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "COMMISSION_NOT_CLEARED");
+
+    // The lawyer's wires show up on the operating account statement; each is matched to its receipt
+    const imported = await as(u.admin, "POST", "/api/bank/statements", {
+      accountType: "OPERATING", accountId: operating, periodStart: "2026-11-01", periodEnd: "2026-11-30",
+      openingBalance: "0.00", closingBalance: "15935.00", fileName: "general-nov.csv", autoMatch: false,
+      csv: "Date,Description,Amount\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,10000.00\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,5935.00\n",
+    });
+    assert.equal(imported.statusCode, 201, imported.body);
+    const receipts: { id: string; amount: string }[] = full.json().receipts;
+    for (const line of imported.json().lines as { id: string; amount: string }[]) {
+      const receipt = receipts.find((r) => r.amount === line.amount)!;
+      const m = await as(u.admin, "POST", "/api/bank/matches", { bankTransactionId: line.id, commissionReceiptId: receipt.id });
+      assert.equal(m.statusCode, 201, m.body);
+    }
+    const ready = (await as(u.admin, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
+    assert.equal(ready.payouts[0].status, "READY_FOR_APPROVAL");
+    assert.ok(ready.receipts.every((r: { bankMatched: boolean }) => r.bankMatched));
 
     assert.equal((await as(u.admin, "POST", `/api/payouts/${payoutId}/approve`, {})).statusCode, 403); // broker only
     const approved = await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, { note: "Checked against CDA" });
@@ -238,6 +259,15 @@ describe("closing and CDA API", { skip }, () => {
     const view = (await as(u.broker, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
     assert.equal(view.commissionDue, "0.00");
     assert.equal(view.payouts[0].status, "READY_FOR_APPROVAL");
+  });
+
+  test("no closing distribution until the deposit has cleared the bank", async () => {
+    const dealId = await torontoListing({ deposit: 60_000, cleared: false });
+    await close(dealId);
+    const res = await finalize(dealId);
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.json().error.code, "FUNDS_NOT_CLEARED");
+    assert.match(res.json().error.message, /only \$0\.00 has been matched to the bank statement/);
   });
 
   test("cap: earlier finalized closings count toward the agent's cap year", async () => {

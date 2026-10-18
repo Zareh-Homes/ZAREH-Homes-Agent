@@ -33,12 +33,15 @@ export function FinancialSummary({ financials: f, year }: { financials: Brokerag
 
 export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard["trust"]; year: number }) {
   const late = trust.pastClosing;
+  const overdue = trust.reconciliations.some((a) => a.awaitingSignature.some((m) => m.overdue));
   return (
     <Panel
       id="trust"
       title={<><span className="text-ink-3"><LockIcon /></span>Statutory trust account</>}
       subtitle="All deals, all trust accounts"
-      action={late.length > 0 ? <StatusBadge tone="critical">{late.length} past closing</StatusBadge> : undefined}
+      action={overdue
+        ? <StatusBadge tone="critical">Reconciliation overdue</StatusBadge>
+        : late.length > 0 ? <StatusBadge tone="critical">{late.length} past closing</StatusBadge> : undefined}
     >
       <div className="px-4 pb-3 pt-4">
         <p className="text-xs font-medium text-ink-2">Held in trust now</p>
@@ -53,6 +56,31 @@ export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard[
             ))}
           </ul>
         )}
+        {trust.unclearedCents > 0 && (
+          <p className="mt-2 text-sm text-ink-2">
+            <span className="font-medium tabular-nums text-ink">{money(trust.unclearedCents)}</span> recorded but not yet matched to the bank. It can't be paid out until it is.
+          </p>
+        )}
+      </div>
+
+      <div className="border-t border-line">
+        <h3 className="px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-ink-3">Monthly reconciliation</h3>
+        <ul className="space-y-1.5 px-4 pb-3 text-sm">
+          {trust.reconciliations.map((a) => (
+            <li key={a.trustAccountId} className="flex flex-wrap items-center justify-between gap-2">
+              <span className="truncate text-ink-2">{a.name}</span>
+              {a.lastStatementEnd === null ? (
+                <StatusBadge tone="serious">No bank statement imported</StatusBadge>
+              ) : a.awaitingSignature.length === 0 ? (
+                <StatusBadge tone="good">Signed to {shortDate(a.lastSignedPeriodEnd!, year)}</StatusBadge>
+              ) : (
+                <StatusBadge tone={a.awaitingSignature.some((m) => m.overdue) ? "critical" : "serious"}>
+                  {a.awaitingSignature.length} month{a.awaitingSignature.length === 1 ? "" : "s"} to sign · due {shortDate(a.awaitingSignature[0]!.dueBy, year)}
+                </StatusBadge>
+              )}
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div className="border-t border-line">
