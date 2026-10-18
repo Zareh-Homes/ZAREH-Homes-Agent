@@ -1,6 +1,9 @@
 const LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/pipeline", label: "Pipeline" },
+  { href: "/oversight/me", label: "My compliance" },
+  { href: "/oversight/broker", label: "Broker of record" },
+  { href: "/oversight/accounting", label: "Accounting" },
 ];
 
 /** Top bar shared by every screen. */

@@ -245,6 +245,10 @@ model User {
   fintracReportEvents     FintracReportEvent[]         @relation("FintracReportEventActor")
   programRecordsAbout     ComplianceProgramRecord[]    @relation("ProgramSubject")
   programRecordsRecorded  ComplianceProgramRecord[]    @relation("ProgramRecordedBy")
+  recoYearsCreated        RecoFilingYear[]             @relation("RecoYearCreatedBy")
+  recoInputs              RecoFilingInput[]            @relation("RecoInputEnteredBy")
+  recoReviews             RecoAttestationReview[]      @relation("RecoReviewBy")
+  recoSubmissions         RecoFilingSubmission[]       @relation("RecoSubmittedBy")
 
   @@index([role, isActive])
 }
@@ -805,6 +809,7 @@ model DocumentFile {
   directionDocs     SellerOfferDirection[]    @relation("DirectionDocument")
   agreementDocs     RepresentationAgreement[] @relation("AgreementDocument")
   programDocs       ComplianceProgramRecord[] @relation("ProgramDocument")
+  recoInputDocs     RecoFilingInput[]         @relation("RecoInputDocument")
 
   @@unique([slotId, version])
 }
@@ -1790,4 +1795,61 @@ model ComplianceProgramRecord {
   recordedBy   User          @relation("ProgramRecordedBy", fields: [recordedById], references: [id])
 
   @@index([kind, effectiveDate])
+}
+
+// The brokerage's fiscal year for the RECO annual filing (migration 017)
+model RecoFilingYear {
+  fiscalYearEnd   DateTime @id @db.Date
+  fiscalYearStart DateTime @db.Date
+  createdById     String   @db.Uuid
+  createdAt       DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  createdBy  User                    @relation("RecoYearCreatedBy", fields: [createdById], references: [id])
+  inputs     RecoFilingInput[]
+  reviews    RecoAttestationReview[]
+  submission RecoFilingSubmission?
+}
+
+// A financial-statement figure for the filing, with its source (migration 017). Latest per field wins.
+model RecoFilingInput {
+  id             String   @id @default(uuid()) @db.Uuid
+  fiscalYearEnd  DateTime @db.Date
+  field          String
+  amount         Decimal? @db.Decimal(16, 2)
+  text           String?
+  source         String
+  documentFileId String?  @db.Uuid
+  enteredById    String   @db.Uuid
+  createdAt      DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  year         RecoFilingYear @relation(fields: [fiscalYearEnd], references: [fiscalYearEnd])
+  documentFile DocumentFile?  @relation("RecoInputDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  enteredBy    User           @relation("RecoInputEnteredBy", fields: [enteredById], references: [id])
+
+  @@index([fiscalYearEnd, field])
+}
+
+model RecoAttestationReview {
+  id            String   @id @default(uuid()) @db.Uuid
+  fiscalYearEnd DateTime @db.Date
+  item          String
+  note          String
+  reviewedById  String   @db.Uuid
+  createdAt     DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  year       RecoFilingYear @relation(fields: [fiscalYearEnd], references: [fiscalYearEnd])
+  reviewedBy User           @relation("RecoReviewBy", fields: [reviewedById], references: [id])
+}
+
+// The broker of record filed in MyWeb (migration 017); nothing is sent from here
+model RecoFilingSubmission {
+  fiscalYearEnd DateTime @id @db.Date
+  submittedOn   DateTime @db.Date
+  reference     String
+  note          String?
+  submittedById String   @db.Uuid
+  createdAt     DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  year        RecoFilingYear @relation(fields: [fiscalYearEnd], references: [fiscalYearEnd])
+  submittedBy User           @relation("RecoSubmittedBy", fields: [submittedById], references: [id])
 }

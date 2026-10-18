@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -1055,6 +1056,10 @@ def preflight(engine: Engine, broker_email: str, trust_account: str | None) -> t
             raise StructuralError(f"{broker_email} must be an active MANAGING_BROKER: the trust ledger records who authorized every entry")
         if conn.execute(text("SELECT to_regproc('is_broker_of_record')")).scalar() is None:
             raise StructuralError("database is missing migration 009 (money controls)")
+        for name, needed in (('"SalesTaxRate"', "014 (commission engine)"), ('"TradeRecordSheet"', "015 (trade lifecycle)"),
+                             ('"ReceiptOfFundsRecord"', "016 (TRESA and FINTRAC)")):
+            if conn.execute(text("SELECT to_regclass(:t)"), {"t": name}).scalar() is None:
+                raise StructuralError(f"database is missing migration {needed}; run the schema migrations through 016 first")
         if not conn.execute(text("SELECT is_broker_of_record(CAST(:b AS uuid), (now() AT TIME ZONE 'America/Toronto')::date)"),
                             {"b": str(broker["id"])}).scalar():
             raise StructuralError(f"{broker_email} must be designated broker of record (or substitute): they attest the migrated trust history")
@@ -1131,10 +1136,10 @@ def insert_deals(engine: Engine, deals: dict[str, Deal], user_ids: dict[str, str
                 conn.execute(text("""
                     INSERT INTO "Transaction" (id, "dealNumber", side, status, "streetAddress", unit, city, "mlsNumber", "salePrice",
                         "offerDate", "closeDate", "depositAmount", "trustDepositHolder", "depositStatus", "totalGci", "hstOnGci",
-                        "hstSource", "coopCommission", "updatedAt")
+                        "hstSource", "coopCommission", province, "updatedAt")
                     VALUES (CAST(:id AS uuid), :number, CAST(:side AS "DealSide"), CAST(:status AS "DealStatus"), :address, :unit, :city,
                         :mls, :price, :offer, :close, :deposit, CAST(:holder AS "DepositHolder"), CAST(:dstatus AS "DepositStatus"),
-                        :gci, :hst, CAST(:hst_source AS "TaxAmountSource"), :coop, now())
+                        :gci, :hst, CAST(:hst_source AS "TaxAmountSource"), :coop, 'ON', now())
                 """), {"id": d.deal_id, "number": d.deal_number, "side": d.side, "status": d.status, "address": d.address, "unit": d.unit,
                        "city": d.city, "mls": d.mls, "price": d.sale_price, "offer": d.offer_date, "close": d.close_date,
                        "deposit": deposit_amount, "holder": holder, "dstatus": deposit_status, "gci": d.base_gci, "hst": d.hst, "hst_source": d.hst_source, "coop": d.coop})
@@ -1147,9 +1152,12 @@ def insert_deals(engine: Engine, deals: dict[str, Deal], user_ids: dict[str, str
                 for role, names in (("SELLER", d.sellers), ("BUYER", d.buyers)):
                     for name in names:
                         conn.execute(text("""
-                            INSERT INTO "TransactionParty" (id, "transactionId", role, "entityType", "fullName")
-                            VALUES (gen_random_uuid(), CAST(:deal AS uuid), CAST(:role AS "PartyRole"), CAST(:entity AS "PartyEntityType"), :name)
-                        """), {"deal": d.deal_id, "role": role, "entity": "CORPORATION" if corporate.search(name) else "INDIVIDUAL", "name": name})
+                            INSERT INTO "TransactionParty" (id, "transactionId", role, "entityType", "fullName", representation)
+                            VALUES (gen_random_uuid(), CAST(:deal AS uuid), CAST(:role AS "PartyRole"), CAST(:entity AS "PartyEntityType"), :name,
+                                    :representation)
+                        """), {"deal": d.deal_id, "role": role, "entity": "CORPORATION" if corporate.search(name) else "INDIVIDUAL", "name": name,
+                               # Our side is our client; the export doesn't say how the other side was represented, so that stays unrecorded
+                               "representation": "OUR_CLIENT" if role in CLIENT_ROLES[d.side] else None})
                 if d.status in {"CONDITIONAL", "FIRM"}:
                     conn.execute(SLOT_SQL, {"deal": d.deal_id, "side": d.side})
                     conn.execute(PARTY_SLOT_SQL, {"deal": d.deal_id, "side": d.side, "client_roles": CLIENT_ROLES[d.side]})
@@ -1232,6 +1240,42 @@ def insert_trust(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: d
         except (DBAPIError, SQLAlchemyError) as exc:
             for e in items:
                 ledger.reject("trust", e.row_number, e.legacy_id, db_reason(exc), e.row)
+
+
+def verify_written(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: dict[str, str], rejected_trust: set[str]) -> dict[str, Any]:
+    """After writing: the database must hold exactly the validated trust history for every migrated deal."""
+    mismatches = []
+    expected_total = Decimal("0")
+    with engine.connect() as conn:
+        for legacy, items in trust.items():
+            if legacy not in deal_ids:
+                continue
+            kept = [e for e in items if e.legacy_id not in rejected_trust]
+            expected = sum((e.amount * e.direction for e in kept), Decimal("0"))
+            expected_total += expected
+            row = conn.execute(text("""
+                SELECT COUNT(*) AS n, COALESCE(SUM(amount * direction), 0) AS balance FROM "TrustLedgerEntry"
+                 WHERE "transactionId" = CAST(:d AS uuid) AND "idempotencyKey" = ANY(CAST(:keys AS uuid[]))
+            """), {"d": deal_ids[legacy], "keys": [e.entry_id for e in kept]}).mappings().one()
+            if row["n"] != len(kept) or Decimal(row["balance"]) != expected:
+                mismatches.append({"deal": legacy, "expected_entries": len(kept), "found_entries": row["n"],
+                                   "expected_balance": str(expected), "found_balance": str(row["balance"])})
+    return {"deals_checked": sum(1 for k in trust if k in deal_ids), "expected_trust_balance": str(expected_total),
+            "mismatches": mismatches, "matches": not mismatches}
+
+
+def file_fingerprints(paths: list[Path]) -> dict[str, str]:
+    return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+
+
+def record_run(engine: Engine, broker_id: str, report: dict[str, Any]) -> None:
+    """One audit-log entry per migration run: what was read (by hash) and what was written."""
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO "AuditLog" ("userId", entity, "entityId", action, outcome, changes)
+            VALUES (CAST(:u AS uuid), 'Migration', :run, 'LONE_WOLF_IMPORT', :outcome, CAST(:changes AS jsonb))
+        """), {"u": broker_id, "run": report["run_id"], "outcome": "SUCCESS" if report["verification"]["matches"] else "FAILED",
+               "changes": json.dumps({k: report[k] for k in ("files", "rows_read", "rows_rejected", "written", "verification")})})
 
 
 def write_rejects(out_dir: Path, frames: dict[str, pd.DataFrame], ledger: Ledger) -> dict[str, str]:
@@ -1323,6 +1367,10 @@ def run(opts: argparse.Namespace) -> int:
           f"{rejected_rows} of {total_rows} rows rejected ({reject_rate:.1%})")
 
     exit_code = 0
+    run_id = str(uuid.uuid4())
+    verification: dict[str, Any] = {"matches": None, "note": "nothing written"}
+    engine: Engine | None = None
+    broker_id = ""
     if opts.dry_run:
         print("Dry run: nothing written.")
     elif reject_rate > opts.max_reject_rate and not opts.force:
@@ -1340,7 +1388,13 @@ def run(opts: argparse.Namespace) -> int:
         user_ids = insert_agents(engine, agents, ledger, stats)
         deal_ids = insert_deals(engine, deals, user_ids, trust, ledger, stats)
         insert_trust(engine, trust, deal_ids, deals, broker_id, accounts, ledger, stats)
-        engine.dispose()
+        rejected_trust = {i.key for i in ledger.issues if i.source == "trust" and i.severity == "ERROR"}
+        verification = verify_written(engine, trust, deal_ids, rejected_trust)
+        if not verification["matches"]:
+            log.critical(json.dumps({"event": "verification_failure", **verification}))
+            print("VERIFICATION FAILED: the database doesn't hold exactly the validated trust history; see migration_report.json",
+                  file=sys.stderr)
+            exit_code = 4
 
     rejects = write_rejects(opts.out_dir, frames, ledger)
     trust_totals: dict[str, str] = {}
@@ -1348,6 +1402,9 @@ def run(opts: argparse.Namespace) -> int:
         for e in items:
             trust_totals[e.entry_type] = str(Decimal(trust_totals.get(e.entry_type, "0")) + e.amount)
     report = {
+        "run_id": run_id,
+        "files": file_fingerprints([opts.agents, opts.deals, opts.trust]),
+        "verification": verification,
         "dry_run": opts.dry_run,
         "rows_read": {k: len(v) for k, v in frames.items()},
         "rows_rejected": {k: len({n for n, _, _ in v}) for k, v in ledger.rejected.items()},
@@ -1358,6 +1415,9 @@ def run(opts: argparse.Namespace) -> int:
         "error_log": str(opts.error_log),
     }
     (opts.out_dir / "migration_report.json").write_text(json.dumps(report, indent=2))
+    if engine is not None:
+        record_run(engine, broker_id, report)
+        engine.dispose()
     log.info(json.dumps({"event": "finish", **report}))
     print(json.dumps(report, indent=2))
     if exit_code == 0 and any(report["rows_rejected"].values()):

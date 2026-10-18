@@ -89,6 +89,23 @@ def test_3_report_counts(migrated):
         "agents_inserted": 4, "agents_existing": 0, "deals_inserted": 5, "deals_existing": 0,
         "trust_inserted": 8, "trust_existing": 0, "trust_attested_pre_cutover": 8,
     }
+    # What landed in the database is exactly what was validated, and the source files are fingerprinted
+    assert report["verification"]["matches"] is True
+    assert report["verification"]["deals_checked"] >= 1
+    assert all(len(h) == 64 for h in report["files"].values())
+
+
+def test_3b_run_is_on_the_audit_trail_and_our_clients_are_marked(engine, setup, migrated):
+    _, report = migrated
+    run = q(engine, """SELECT action, outcome, changes->'verification'->>'matches' AS matches FROM "AuditLog"
+                       WHERE entity = 'Migration' AND "entityId" = :r""", r=report["run_id"])
+    assert [dict(r) for r in run] == [{"action": "LONE_WOLF_IMPORT", "outcome": "SUCCESS", "matches": "true"}]
+    reps = q(engine, """SELECT p.role::text AS role, p.representation, t.side::text AS side, t.province FROM "TransactionParty" p
+                        JOIN "Transaction" t ON t.id = p."transactionId" WHERE t."dealNumber" LIKE :p""", p=f"LW-T%{setup['run']}")
+    assert reps and all(r["province"] == "ON" for r in reps)
+    for r in reps:
+        ours = r["role"] in m.CLIENT_ROLES[r["side"]]
+        assert r["representation"] == ("OUR_CLIENT" if ours else None)
 
 
 def test_4_agents_prec_and_hst_alignment(engine, setup, migrated):

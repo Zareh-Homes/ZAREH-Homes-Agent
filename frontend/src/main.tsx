@@ -6,6 +6,7 @@ import { Dashboard, DashboardPage } from "./dashboard/components/Dashboard.tsx";
 import { useDashboard } from "./dashboard/useDashboard.ts";
 import { PipelineBoard, PipelinePage } from "./pipeline/components/PipelineBoard.tsx";
 import { usePipeline } from "./pipeline/usePipeline.ts";
+import { LiveOversight } from "./oversight/OversightPanel.tsx";
 
 function LiveDashboard() {
   const { state, reload } = useDashboard();
@@ -36,7 +37,10 @@ async function boot() {
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
 
   const route = location.pathname.replace(/\/+$/, "") || "/";
-  let screen: ReactNode = route === "/pipeline" ? <LivePipeline /> : <LiveDashboard />;
+  const oversight = { "/oversight/broker": "broker", "/oversight/accounting": "accounting", "/oversight/me": "agent" } as const;
+  let screen: ReactNode = route === "/pipeline" ? <LivePipeline />
+    : route in oversight ? <LiveOversight view={oversight[route as keyof typeof oversight]} />
+    : <LiveDashboard />;
 
   const demoKey = params.get("demo");
   const demoAllowed = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO === "true";
