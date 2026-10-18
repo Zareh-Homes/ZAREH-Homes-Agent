@@ -14,6 +14,7 @@ import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
 import { validatePathUuid } from "../trust/validation.ts";
+import { requireOfferDisclosures } from "../obligations/service.ts";
 
 const STAFF = new Set(["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"]);
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -285,6 +286,8 @@ export async function offerEvent(prisma: PrismaClient, actor: Actor, offerId: st
     eventAt: r.has("eventAt") ? timestamp(r, "eventAt") : new Date().toISOString(), note: r.optionalText("note", 1000),
   };
   r.done();
+  // s.22.7 / s.22.0.3: every other offeror is owed their disclosures before an offer is accepted
+  if (input.status === "ACCEPTED") await requireOfferDisclosures(prisma, offer.listingDealId, offerId, todayInToronto());
   try {
     await prisma.$executeRaw`
       INSERT INTO "OfferEvent" (id, "offerId", status, "eventAt", note, "actorId")

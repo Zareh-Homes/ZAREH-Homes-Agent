@@ -10,7 +10,7 @@ import { PrismaClient, type UserRole } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { designateBroker, TEST_BROKERAGE } from "./fixtures.ts";
+import { designateBroker, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-10-18";
@@ -18,7 +18,7 @@ const TODAY = "2026-10-18";
 describe("deal lifecycle and trade record sheet", { skip }, () => {
   const prisma = new PrismaClient();
   const app = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), brokerage: TEST_BROKERAGE, today: () => TODAY });
-  const u = { agent: "", other: "", broker: "", admin: "" };
+  const u = { agent: "", other: "", broker: "", admin: "", compliance: "" };
 
   const as = (user: string, method: "GET" | "POST", url: string, body?: object) =>
     app.inject({ method, url, headers: { "x-user-id": user }, ...(body ? { payload: body } : {}) });
@@ -40,6 +40,32 @@ describe("deal lifecycle and trade record sheet", { skip }, () => {
     return id;
   }
 
+  /** What TRESA and FINTRAC need on file for the seller (our client) on these listings. */
+  async function sellerCompliance(deal: string) {
+    const parties = await prisma.transactionParty.findMany({ where: { transactionId: deal } });
+    const seller = parties.find((p) => p.role === "SELLER")!;
+    const ok = async (res: Promise<{ statusCode: number; body: string }>) => { const r = await res; assert.ok(r.statusCode < 300, r.body); };
+    await ok(as(u.agent, "POST", `/api/deals/${deal}/disclosures`, {
+      kind: "INFORMATION_GUIDE", partyId: seller.id, deliveredAt: "2026-09-01T10:00:00-04:00", explainedAt: "2026-09-01T10:30:00-04:00",
+      method: "RECO guide link by email, explained at listing appointment" }));
+    await ok(as(u.agent, "POST", `/api/deals/${deal}/representation-agreements`, {
+      partyId: seller.id, type: "BROKERAGE", signedAt: "2026-09-01T11:00:00-04:00", effectiveFrom: "2026-09-01", expiresOn: "2027-02-28",
+      remunerationTerms: "2.5% of the sale price plus HST; 2% co-operating", services: "Listing, marketing, offer presentation and negotiation",
+      terminationTerms: "Either party on 30 days' written notice" }));
+    for (const kind of ["PEP_HIO", "BUSINESS_RELATIONSHIP"]) {
+      await ok(as(u.agent, "POST", `/api/parties/${seller.id}/fintrac-determinations`, {
+        kind, result: kind === "PEP_HIO" ? "NONE" : "Sale of principal residence", riskRating: "LOW", details: "Asked and recorded at the listing appointment" }));
+    }
+    const slot = await prisma.documentSlot.findFirstOrThrow({ where: { transactionId: deal, partyId: seller.id } });
+    const { payload, contentType } = multipart({ name: "id.jpg", type: "image/jpeg", bytes: JPEG }, {
+      verificationDate: "2026-10-10", fullLegalName: "Ann Lee", dateOfBirth: "1970-01-01", address: "41 Main St E, Grimsby",
+      occupation: "Engineer", idType: "PASSPORT", idNumber: "AB123456", issuingJurisdiction: "Canada", expiryDate: "2030-01-01",
+      thirdPartyDetermination: false });
+    const up = await app.inject({ method: "POST", url: `/api/documents/slots/${slot.id}/files`, payload, headers: { "x-user-id": u.agent, "content-type": contentType } });
+    assert.equal(up.statusCode, 201, up.body);
+    await ok(as(u.compliance, "POST", `/api/documents/slots/${slot.id}/review`, { decision: "APPROVED", fileId: up.json().fileId }));
+  }
+
   before(async () => {
     const make = async (role: UserRole) => (await prisma.user.create({
       data: { email: `${role.toLowerCase()}-${randomUUID()}@zareh.test`, firstName: "Life", lastName: role, role, phone: "905-555-0199" },
@@ -48,6 +74,7 @@ describe("deal lifecycle and trade record sheet", { skip }, () => {
     u.other = await make("AGENT");
     u.broker = await make("MANAGING_BROKER");
     u.admin = await make("ADMIN");
+    u.compliance = await make("COMPLIANCE_ADMIN");
     await designateBroker(app, prisma, u.broker);
   });
 
@@ -118,6 +145,14 @@ describe("deal lifecycle and trade record sheet", { skip }, () => {
     const offers = (await record(null, "2026-10-09T19:30:00-04:00")).json().offers;
     assert.equal(offers.length, 2);
     const [a, b] = offers;
+    // Two written offers: each offeror must be told the number before any is accepted (s.22.7)
+    const blocked = await as(u.agent, "POST", `/api/offers/${a.id}/events`, { status: "ACCEPTED" });
+    assert.equal(blocked.json().error.code, "OFFER_DISCLOSURES_OUTSTANDING");
+    assert.equal(blocked.json().error.details.outstanding.length, 2);
+    for (const o of offers) {
+      await as(u.agent, "POST", `/api/deals/${deal}/disclosures`, {
+        kind: "COMPETING_OFFERS_NUMBER", offerId: o.id, deliveredAt: "2026-10-09T20:00:00-04:00", method: "Email to the buyer's agent", numberDisclosed: 2 });
+    }
     assert.equal((await as(u.agent, "POST", `/api/offers/${a.id}/events`, { status: "ACCEPTED" })).statusCode, 201);
     assert.match((await as(u.agent, "POST", `/api/offers/${b.id}/events`, { status: "ACCEPTED" })).json().error.message, /already accepted/);
     const after = (await as(u.agent, "POST", `/api/offers/${b.id}/events`, { status: "REJECTED", note: "Seller accepted another offer" })).json().offers;
@@ -166,6 +201,11 @@ describe("deal lifecycle and trade record sheet", { skip }, () => {
 
     // A later amendment shows up as a difference, without rewriting the record
     await as(u.agent, "POST", `/api/deals/${deal}/amendments`, { field: "SALE_PRICE", newValue: "845000", reference: "Form 120 price amendment" });
+    // The broker of record's review includes the deal's TRESA and FINTRAC obligations
+    const outstanding = await as(u.broker, "POST", `/api/deals/${deal}/trade-record/broker-sign`);
+    assert.equal(outstanding.json().error.code, "COMPLIANCE_OUTSTANDING");
+    assert.ok(outstanding.json().error.details.outstanding.some((o: { rule: string }) => o.rule === "INFORMATION_GUIDE"));
+    await sellerCompliance(deal);
     const final = await as(u.broker, "POST", `/api/deals/${deal}/trade-record/broker-sign`);
     assert.equal(final.statusCode, 200, final.body);
     assert.equal(final.json().status, "SIGNED_BY_BROKER_OF_RECORD");

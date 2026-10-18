@@ -118,6 +118,8 @@ enum PaymentMethod {
   BANK_DRAFT
   EFT
   WIRE
+  CASH // migration 016: FINTRAC large cash
+  VIRTUAL_CURRENCY
 }
 
 // Missing -> Pending Review -> Approved | Needs Revision (-> Pending Review again).
@@ -234,6 +236,15 @@ model User {
   bankStatements          BankStatement[]
   bankMatches             BankMatch[]
   auditLogs               AuditLog[]
+  disclosuresRecorded     TresaDisclosure[]            @relation("DisclosureRecordedBy")
+  directionsRecorded      SellerOfferDirection[]       @relation("DirectionRecordedBy")
+  agreementsRecorded      RepresentationAgreement[]    @relation("AgreementRecordedBy")
+  determinationsRecorded  FintracDetermination[]       @relation("DeterminationRecordedBy")
+  receiptsOfFunds         ReceiptOfFundsRecord[]       @relation("RofRecordedBy")
+  fintracReportsOpened    FintracReport[]              @relation("FintracReportOpenedBy")
+  fintracReportEvents     FintracReportEvent[]         @relation("FintracReportEventActor")
+  programRecordsAbout     ComplianceProgramRecord[]    @relation("ProgramSubject")
+  programRecordsRecorded  ComplianceProgramRecord[]    @relation("ProgramRecordedBy")
 
   @@index([role, isActive])
 }
@@ -310,22 +321,26 @@ model Transaction {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  listing        Listing?               @relation(fields: [listingId], references: [id])
-  agents         TransactionAgent[]
-  parties        TransactionParty[]
-  trustEntries   TrustLedgerEntry[]
-  trustHolds     TrustHold[]
-  closings       ClosingStatement[]
-  legalHolds     LegalHold[]
-  unclaimedFunds UnclaimedTrustFund[]
-  adjustments    CommissionAdjustment[]
-  conditions     DealCondition[]
-  amendments     DealAmendment[]
-  termination    DealTermination?
-  offers         Offer[]
-  tradeRecord    TradeRecordSheet?
-  province       String                 @default("ON") @db.Char(2) // migration 014: the property's province, for GST/HST
-  documentSlots  DocumentSlot[]
+  listing         Listing?                  @relation(fields: [listingId], references: [id])
+  agents          TransactionAgent[]
+  parties         TransactionParty[]
+  trustEntries    TrustLedgerEntry[]
+  trustHolds      TrustHold[]
+  closings        ClosingStatement[]
+  legalHolds      LegalHold[]
+  unclaimedFunds  UnclaimedTrustFund[]
+  adjustments     CommissionAdjustment[]
+  conditions      DealCondition[]
+  amendments      DealAmendment[]
+  termination     DealTermination?
+  offers          Offer[]
+  tradeRecord     TradeRecordSheet?
+  province        String                    @default("ON") @db.Char(2) // migration 014: the property's province, for GST/HST
+  documentSlots   DocumentSlot[]
+  disclosures     TresaDisclosure[]
+  offerDirections SellerOfferDirection[]
+  agreements      RepresentationAgreement[]
+  fintracReports  FintracReport[]
 
   @@index([status])
   @@index([closeDate])
@@ -365,8 +380,12 @@ model TransactionParty {
   fintracIdVerifiedAt DateTime?
   fintracIdMethod     String? // e.g. "Government photo ID", "Dual process"
 
-  transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  documentSlots DocumentSlot[]
+  transaction    Transaction               @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  documentSlots  DocumentSlot[]
+  representation String? // migration 016: OUR_CLIENT, REPRESENTED_ELSEWHERE, SELF_REPRESENTED
+  disclosures    TresaDisclosure[]
+  agreements     RepresentationAgreement[]
+  determinations FintracDetermination[]
 
   @@index([transactionId, role])
 }
@@ -422,14 +441,15 @@ model TrustLedgerEntry {
   authorizedById         String              @db.Uuid // Broker of Record who authorized it
   createdAt              DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  trustAccount TrustAccount      @relation(fields: [trustAccountId], references: [id])
-  transaction  Transaction       @relation(fields: [transactionId], references: [id])
-  reverses     TrustLedgerEntry? @relation("Reversal", fields: [reversesEntryId], references: [id])
-  reversedBy   TrustLedgerEntry? @relation("Reversal")
-  bankMatches  BankMatch[]
-  enteredBy    User              @relation("EnteredBy", fields: [enteredById], references: [id])
-  authorizedBy User              @relation("AuthorizedBy", fields: [authorizedById], references: [id])
-  holds        TrustHold[]
+  trustAccount   TrustAccount          @relation(fields: [trustAccountId], references: [id])
+  transaction    Transaction           @relation(fields: [transactionId], references: [id])
+  reverses       TrustLedgerEntry?     @relation("Reversal", fields: [reversesEntryId], references: [id])
+  reversedBy     TrustLedgerEntry?     @relation("Reversal")
+  bankMatches    BankMatch[]
+  enteredBy      User                  @relation("EnteredBy", fields: [enteredById], references: [id])
+  authorizedBy   User                  @relation("AuthorizedBy", fields: [authorizedById], references: [id])
+  holds          TrustHold[]
+  receiptOfFunds ReceiptOfFundsRecord?
 
   @@index([transactionId, trustAccountId, createdAt])
   @@index([trustAccountId, effectiveDate])
@@ -773,14 +793,18 @@ model DocumentFile {
   uploadedById String               @db.Uuid
   uploadedAt   DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  slot              DocumentSlot         @relation(fields: [slotId], references: [id], onDelete: Cascade)
-  uploadedBy        User                 @relation(fields: [uploadedById], references: [id])
+  slot              DocumentSlot              @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  uploadedBy        User                      @relation(fields: [uploadedById], references: [id])
   reviews           DocumentReview[]
   unclaimedEvidence UnclaimedFundEvent[]
-  conditionEvidence DealConditionEvent[] @relation("ConditionEvidence")
-  amendmentDocs     DealAmendment[]      @relation("AmendmentDocument")
-  terminationDocs   DealTermination[]    @relation("TerminationDocument")
-  offerDocs         Offer[]              @relation("OfferDocument")
+  conditionEvidence DealConditionEvent[]      @relation("ConditionEvidence")
+  amendmentDocs     DealAmendment[]           @relation("AmendmentDocument")
+  terminationDocs   DealTermination[]         @relation("TerminationDocument")
+  offerDocs         Offer[]                   @relation("OfferDocument")
+  disclosureDocs    TresaDisclosure[]         @relation("DisclosureDocument")
+  directionDocs     SellerOfferDirection[]    @relation("DirectionDocument")
+  agreementDocs     RepresentationAgreement[] @relation("AgreementDocument")
+  programDocs       ComplianceProgramRecord[] @relation("ProgramDocument")
 
   @@unique([slotId, version])
 }
@@ -1505,10 +1529,12 @@ model Offer {
   recordedById           String   @db.Uuid
   createdAt              DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  listingDeal  Transaction   @relation(fields: [listingDealId], references: [id])
-  documentFile DocumentFile? @relation("OfferDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
-  recordedBy   User          @relation("OfferRecordedBy", fields: [recordedById], references: [id])
-  events       OfferEvent[]
+  listingDeal      Transaction       @relation(fields: [listingDealId], references: [id])
+  documentFile     DocumentFile?     @relation("OfferDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy       User              @relation("OfferRecordedBy", fields: [recordedById], references: [id])
+  events           OfferEvent[]
+  fromOurBrokerage Boolean           @default(false) // migration 016: a buyer our brokerage also represents
+  disclosures      TresaDisclosure[]
 
   @@index([listingDealId])
 }
@@ -1563,4 +1589,205 @@ model TradeRecordCorrection {
   initialledBy User             @relation("TrsCorrectionBy", fields: [initialledById], references: [id])
 
   @@index([sheetId])
+}
+
+enum DisclosureKind {
+  INFORMATION_GUIDE
+  SELF_REPRESENTED_PARTY_FORM
+  MULTIPLE_REPRESENTATION_DISCLOSURE
+  MULTIPLE_REPRESENTATION_CONSENT
+  COMPETING_OFFERS_NUMBER
+  COMPETING_OFFERS_CONTENT
+  SAME_BROKERAGE_REPRESENTATION
+}
+
+// TRESA / O. Reg. 567/05 disclosures to a party or an offeror (migration 016). Append-only.
+model TresaDisclosure {
+  id              String         @id @default(uuid()) @db.Uuid
+  transactionId   String         @db.Uuid
+  kind            DisclosureKind
+  partyId         String?        @db.Uuid
+  offerId         String?        @db.Uuid
+  deliveredAt     DateTime       @db.Timestamptz(6)
+  method          String
+  explainedAt     DateTime?      @db.Timestamptz(6)
+  acknowledgedAt  DateTime?      @db.Timestamptz(6)
+  bestEffortsNote String?
+  formVersion     String?
+  numberDisclosed Int?
+  content         String?
+  directionId     String?        @db.Uuid
+  documentFileId  String?        @db.Uuid
+  recordedById    String         @db.Uuid
+  createdAt       DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction  Transaction           @relation(fields: [transactionId], references: [id])
+  party        TransactionParty?     @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  offer        Offer?                @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  direction    SellerOfferDirection? @relation(fields: [directionId], references: [id], onDelete: Restrict)
+  documentFile DocumentFile?         @relation("DisclosureDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy   User                  @relation("DisclosureRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([transactionId])
+}
+
+// The seller's written direction on sharing offer content (s.22.7), versioned (migration 016)
+model SellerOfferDirection {
+  id             String   @id @default(uuid()) @db.Uuid
+  listingDealId  String   @db.Uuid
+  givenAt        DateTime @db.Timestamptz(6)
+  shareContent   Boolean
+  scope          String?
+  documentFileId String?  @db.Uuid
+  recordedById   String   @db.Uuid
+  createdAt      DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  listingDeal  Transaction       @relation(fields: [listingDealId], references: [id])
+  documentFile DocumentFile?     @relation("DirectionDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy   User              @relation("DirectionRecordedBy", fields: [recordedById], references: [id])
+  disclosures  TresaDisclosure[]
+
+  @@index([listingDealId])
+}
+
+// A buyer or seller representation agreement with the s.13.4 terms (migration 016)
+model RepresentationAgreement {
+  id                          String   @id @default(uuid()) @db.Uuid
+  transactionId               String   @db.Uuid
+  partyId                     String   @db.Uuid
+  type                        String // BROKERAGE or DESIGNATED
+  designatedRepresentativeIds String[] @default([]) @db.Uuid
+  signedAt                    DateTime @db.Timestamptz(6)
+  effectiveFrom               DateTime @db.Date
+  expiresOn                   DateTime @db.Date
+  remunerationTerms           String
+  services                    String
+  terminationTerms            String
+  documentFileId              String?  @db.Uuid
+  recordedById                String   @db.Uuid
+  createdAt                   DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction  Transaction      @relation(fields: [transactionId], references: [id])
+  party        TransactionParty @relation(fields: [partyId], references: [id])
+  documentFile DocumentFile?    @relation("AgreementDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy   User             @relation("AgreementRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([partyId])
+}
+
+enum FintracDeterminationKind {
+  PEP_HIO
+  BUSINESS_RELATIONSHIP
+  BENEFICIAL_OWNERSHIP_CONFIRMED
+  ENTITY_EXISTENCE_CONFIRMED
+}
+
+// FINTRAC determinations per party (migration 016). Append-only; the latest of each kind applies.
+model FintracDetermination {
+  id           String                   @id @default(uuid()) @db.Uuid
+  partyId      String                   @db.Uuid
+  kind         FintracDeterminationKind
+  determinedAt DateTime                 @db.Timestamptz(6)
+  result       String
+  riskRating   String?
+  details      String
+  recordedById String                   @db.Uuid
+  createdAt    DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  party      TransactionParty @relation(fields: [partyId], references: [id])
+  recordedBy User             @relation("DeterminationRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([partyId])
+}
+
+// FINTRAC receipt of funds record, for every deposit (migration 016). Personal details encrypted.
+model ReceiptOfFundsRecord {
+  trustEntryId    String   @id @db.Uuid
+  payerType       String // PERSON, ENTITY, FINANCIAL_ENTITY, PUBLIC_BODY
+  payerName       String
+  payerDetailsEnc String?
+  cashAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  currency        String   @default("CAD")
+  sourceAccount   String?
+  onBehalfOf      String?
+  exemptReason    String?
+  recordedById    String   @db.Uuid
+  createdAt       DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  trustEntry TrustLedgerEntry @relation(fields: [trustEntryId], references: [id])
+  recordedBy User             @relation("RofRecordedBy", fields: [recordedById], references: [id])
+}
+
+enum FintracReportKind {
+  LARGE_CASH
+  LARGE_VIRTUAL_CURRENCY
+  SUSPICIOUS_TRANSACTION
+  LISTED_PERSON_PROPERTY
+}
+
+enum FintracReportStatus {
+  OPEN
+  FILED
+  NOT_REQUIRED
+}
+
+// A FINTRAC report that has to be filed (migration 016). Filed by a person in FINTRAC's system; never sent from here.
+model FintracReport {
+  id            String            @id @default(uuid()) @db.Uuid
+  kind          FintracReportKind
+  transactionId String?           @db.Uuid
+  trustEntryIds String[]          @default([]) @db.Uuid
+  triggeredAt   DateTime          @db.Timestamptz(6)
+  dueAt         DateTime          @db.Timestamptz(6)
+  summary       String
+  openedById    String?           @db.Uuid
+  createdAt     DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction Transaction?         @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  openedBy    User?                @relation("FintracReportOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  events      FintracReportEvent[]
+
+  @@index([transactionId])
+}
+
+model FintracReportEvent {
+  id        String              @id @default(uuid()) @db.Uuid
+  reportId  String              @db.Uuid
+  status    FintracReportStatus
+  reference String?
+  note      String
+  actorId   String              @db.Uuid
+  createdAt DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  report FintracReport @relation(fields: [reportId], references: [id])
+  actor  User          @relation("FintracReportEventActor", fields: [actorId], references: [id])
+
+  @@index([reportId])
+}
+
+enum ComplianceProgramKind {
+  COMPLIANCE_OFFICER
+  POLICIES_APPROVED
+  RISK_ASSESSMENT
+  TRAINING
+  EFFECTIVENESS_REVIEW
+}
+
+// FINTRAC compliance program evidence (migration 016)
+model ComplianceProgramRecord {
+  id             String                @id @default(uuid()) @db.Uuid
+  kind           ComplianceProgramKind
+  effectiveDate  DateTime              @db.Date
+  subjectUserId  String?               @db.Uuid
+  title          String
+  details        String
+  documentFileId String?               @db.Uuid
+  recordedById   String                @db.Uuid
+  createdAt      DateTime              @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  subject      User?         @relation("ProgramSubject", fields: [subjectUserId], references: [id], onDelete: Restrict)
+  documentFile DocumentFile? @relation("ProgramDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy   User          @relation("ProgramRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([kind, effectiveDate])
 }

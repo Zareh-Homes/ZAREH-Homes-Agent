@@ -10,7 +10,8 @@ import { isUuid, Reader } from "../lib/reader.ts";
 
 export { isUuid };
 
-export const DEPOSIT_METHODS = ["BANK_DRAFT", "WIRE", "CERTIFIED_CHEQUE"] as const;
+// Cash and virtual currency are recorded as received; they open FINTRAC large-transaction report tasks
+export const DEPOSIT_METHODS = ["BANK_DRAFT", "WIRE", "CERTIFIED_CHEQUE", "CASH", "VIRTUAL_CURRENCY"] as const;
 export const DISBURSEMENT_METHODS = ["CHEQUE", "EFT", "WIRE", "BANK_DRAFT"] as const;
 export const PAYEE_TYPES = ["OUR_BROKERAGE", "COOP_BROKERAGE", "LAWYER", "PAYOR_REFUND"] as const;
 export const AUTHORIZATION_METHODS = ["CLOSING_COMPLETED", "MUTUAL_RELEASE", "COURT_ORDER"] as const;

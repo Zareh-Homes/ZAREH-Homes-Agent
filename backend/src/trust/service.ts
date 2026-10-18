@@ -25,6 +25,7 @@ import {
 } from "../errors.ts";
 import { businessDaysBetween } from "../lib/dates.ts";
 import { loadBusinessCalendar } from "../lib/calendar-store.ts";
+import { checkLargeTransaction } from "../obligations/service.ts";
 import { formatCents, numericToCents, type Cents } from "../lib/money.ts";
 import {
   PAYEE_ENTRY_TYPE,
@@ -297,6 +298,8 @@ export async function recordDeposit(
       if (balanceAfter > numericToCents(deal.depositAmount)) {
         warnings.push("EXCEEDS_EXPECTED_DEPOSIT");
       }
+      // FINTRAC: $10,000+ in cash or virtual currency within 24 hours opens a report task (due in 15 days)
+      if (await checkLargeTransaction(tx, entry!.id)) warnings.push("FINTRAC_LARGE_TRANSACTION_REPORT_OPENED");
       return { entry: entry!, balanceAfter, warnings };
     },
   );

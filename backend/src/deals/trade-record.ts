@@ -13,11 +13,13 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@prisma/client";
-import { loadActor, type Actor, type ResolveUserId } from "../auth.ts";
+import { loadActor, requireRole, type Actor, type ResolveUserId } from "../auth.ts";
 import { ConflictError, DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
 import { Reader } from "../lib/reader.ts";
 import { validatePathUuid } from "../trust/validation.ts";
 import { assertDealAccess } from "./lifecycle.ts";
+import { requireNoBlockingFindings } from "../obligations/service.ts";
+import { todayInToronto } from "../lib/dates.ts";
 
 export const TRS_ITEMS = [
   "natureOfTrade", "property", "consideration", "parties", "lawyers", "registrants", "deposit", "brokerageRemuneration",
@@ -182,12 +184,17 @@ export async function correctTradeRecord(prisma: PrismaClient, actor: Actor, dea
   return tradeRecordView(prisma, dealId);
 }
 
-export async function signTradeRecord(prisma: PrismaClient, actor: Actor, dealId: string, as: "agent" | "broker", body: unknown) {
+export async function signTradeRecord(prisma: PrismaClient, actor: Actor, dealId: string, as: "agent" | "broker", body: unknown, today = todayInToronto()) {
   const r = new Reader(body ?? {}, ["exceptionReason"]);
   const exceptionReason = r.optionalText("exceptionReason", 500);
   r.done();
   const sheet = await prisma.tradeRecordSheet.findUnique({ where: { transactionId: dealId }, select: { id: true } });
   if (!sheet) throw new NotFoundError("Trade record sheet for deal", dealId);
+  // The broker of record's review covers the deal's TRESA and FINTRAC obligations too
+  if (as === "broker") {
+    requireRole(actor, ["MANAGING_BROKER"], "Signing the trade record sheet as broker of record"); // the database checks the designation
+    await requireNoBlockingFindings(prisma, dealId, today, "Signing the trade record sheet");
+  }
   try {
     if (as === "agent") {
       await prisma.$executeRaw`UPDATE "TradeRecordSheet" SET "agentSignedById" = ${actor.id}::uuid, "agentSignedAt" = clock_timestamp() WHERE id = ${sheet.id}::uuid`;
@@ -202,7 +209,7 @@ export async function signTradeRecord(prisma: PrismaClient, actor: Actor, dealId
   return tradeRecordView(prisma, dealId);
 }
 
-export async function tradeRecordRoutes(app: FastifyInstance, opts: { prisma: PrismaClient; resolveUserId: ResolveUserId }) {
+export async function tradeRecordRoutes(app: FastifyInstance, opts: { prisma: PrismaClient; resolveUserId: ResolveUserId; today?: () => string }) {
   const actorOf = async (req: FastifyRequest) => loadActor(opts.prisma, await opts.resolveUserId(req));
   type P = { Params: Record<string, string> };
   const id = (req: { params: Record<string, string> }) => validatePathUuid(req.params.dealId!, "dealId");
@@ -214,5 +221,6 @@ export async function tradeRecordRoutes(app: FastifyInstance, opts: { prisma: Pr
   app.post<P>("/api/deals/:dealId/trade-record/corrections", async (req, reply) =>
     reply.code(201).send(await correctTradeRecord(opts.prisma, await actorOf(req), id(req), req.body)));
   app.post<P>("/api/deals/:dealId/trade-record/sign", async (req) => signTradeRecord(opts.prisma, await actorOf(req), id(req), "agent", req.body));
-  app.post<P>("/api/deals/:dealId/trade-record/broker-sign", async (req) => signTradeRecord(opts.prisma, await actorOf(req), id(req), "broker", req.body));
+  app.post<P>("/api/deals/:dealId/trade-record/broker-sign", async (req) =>
+    signTradeRecord(opts.prisma, await actorOf(req), id(req), "broker", req.body, opts.today?.() ?? todayInToronto()));
 }

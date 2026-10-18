@@ -222,7 +222,7 @@ function rethrow(err: unknown): never {
 export async function ensureComplianceSlots(tx: Tx, dealId: string): Promise<number> {
   const deal = await tx.transaction.findUniqueOrThrow({
     where: { id: dealId },
-    select: { side: true, parties: { select: { id: true, role: true, entityType: true } } },
+    select: { side: true, parties: { select: { id: true, role: true, entityType: true, representation: true } } },
   });
   const types = await tx.documentType.findMany({
     select: { id: true, code: true, requiredFor: true, slotScope: true, isActive: true },

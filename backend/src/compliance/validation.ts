@@ -20,6 +20,7 @@ export interface PartyInput {
   role: PartyRole;
   entityType: PartyEntityType;
   fullName: string;
+  representation?: "OUR_CLIENT" | "REPRESENTED_ELSEWHERE" | "SELF_REPRESENTED";
   email: string | null;
   phone: string | null;
 }
@@ -66,6 +67,7 @@ function readParty(p: Reader): PartyInput {
     fullName: p.text("fullName", 300, 2),
     email: p.optionalText("email", 200),
     phone: p.optionalText("phone", 40),
+    ...(p.has("representation") ? { representation: p.oneOf("representation", ["OUR_CLIENT", "REPRESENTED_ELSEWHERE", "SELF_REPRESENTED"] as const) } : {}),
   };
   if (party.email) p.check(EMAIL.test(party.email), "email", "is not a valid email address");
   return party;
@@ -78,7 +80,7 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
     "coopBrokerageName", "agents", "parties",
   ]);
   const agentReaders = r.objects("agents", ["userId", "role", "splitPct"], { min: 1, max: 4 });
-  const partyReaders = r.objects("parties", ["role", "entityType", "fullName", "email", "phone"], { min: 1, max: 20 });
+  const partyReaders = r.objects("parties", ["role", "entityType", "fullName", "email", "phone", "representation"], { min: 1, max: 20 });
 
   const input: CreateDealInput = {
     side: r.oneOf("side", SIDES),
@@ -125,7 +127,7 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
 }
 
 export function validateAddParty(body: unknown): PartyInput {
-  const r = new Reader(body, ["role", "entityType", "fullName", "email", "phone"]);
+  const r = new Reader(body, ["role", "entityType", "fullName", "email", "phone", "representation"]);
   const party = readParty(r);
   r.done();
   return party;

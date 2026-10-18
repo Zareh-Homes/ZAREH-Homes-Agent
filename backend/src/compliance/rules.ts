@@ -26,6 +26,7 @@ export interface PartyForRules {
   id: string;
   role: PartyRole;
   entityType: PartyEntityType;
+  representation?: string | null;
 }
 
 export interface SlotSpec {
@@ -34,13 +35,18 @@ export interface SlotSpec {
   partyId: string | null;
 }
 
+/** The buyer and seller (or landlord and tenant): the principals to the trade. */
+const PRINCIPALS: readonly PartyRole[] = ["BUYER", "SELLER", "LANDLORD", "TENANT"];
+
 /**
  * The full set of slots a deal should have. Deal-level documents once per
  * deal; FINTRAC records once per individual client and once per corporate
- * client on our side of the trade.
+ * client on our side of the trade, and for any self-represented party on the
+ * other side (FINTRAC, in force 2025-10-01).
  */
 export function requiredSlots(side: DealSide, parties: PartyForRules[], types: DocumentTypeRule[]): SlotSpec[] {
-  const clients = parties.filter((p) => CLIENT_ROLES[side].includes(p.role));
+  const clients = parties.filter((p) => CLIENT_ROLES[side].includes(p.role)
+    || (PRINCIPALS.includes(p.role) && p.representation === "SELF_REPRESENTED"));
   const specs: SlotSpec[] = [];
   for (const type of types) {
     if (!type.isActive || !type.requiredFor.includes(side)) continue;
