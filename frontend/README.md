@@ -24,6 +24,21 @@ npm run build        # demo data is excluded unless VITE_ENABLE_DEMO=true
 
 Colours are tokens in `src/index.css` (light and dark chosen separately, `data-theme` overrides the OS setting). Status colours always come with an icon and a text label.
 
+## Pipeline
+
+```
+src/pipeline/
+  types.ts                      GET /api/pipeline response
+  usePipeline.ts                loads it; refreshes every 2 minutes while the tab is visible
+  filter.ts                     search by agent, MLS® number or street address (every word must match)
+  components/PipelineBoard.tsx  four columns, deal cards, deposit badge, search
+  demo-data.ts                  fictional board for previews and tests
+```
+
+Open `/pipeline` (`/pipeline?demo=1` for demo data). Press `/` to jump to search, `Esc` to clear it. `?q=smith` opens the board already filtered, so a search can be shared as a link. Below 1280px wide the columns scroll sideways, with chips to jump between them.
+
+Cards aren't draggable: a deal moves columns when its status changes on the deal itself (going firm needs a signed waiver or Notice of Fulfillment).
+
 ## Compliance module state
 
 Framework-agnostic TypeScript. Screens read state through selectors and call the controller; they never call `fetch` themselves.
@@ -82,6 +97,6 @@ Start live notifications once after sign-in: `const stop = await compliance.star
 
 ```bash
 npm install
-npm test            # state tests (node:test) + component tests (Vitest)
+npm test            # state + filter tests (node:test), component tests (Vitest)
 npm run typecheck
 ```

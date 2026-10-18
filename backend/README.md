@@ -126,3 +126,19 @@ Agent splits come from the deal (`TransactionAgent.splitPct`); the annual cap an
 | `personal` | Agent, managing broker | Volume, gross GCI and net payouts (YTD); PREC HST received; cap progress; documents sent back with the reviewer's comment |
 
 Money is integer cents (`…Cents`). Financial figures come from finalized closings, so they always match the issued CDAs.
+
+## Pipeline endpoint
+
+`GET /api/pipeline` returns the deal board: active listings, conditional deals, firm deals, and deals closed this calendar month (Toronto time). Agents get their own listings and deals; admins, compliance admins and the managing broker get everyone's.
+
+Each deal card carries a deposit badge worked out from the trust ledger (`src/pipeline/deposit-status.ts`):
+
+| State | Badge | When |
+|---|---|---|
+| `CLEARED` | green, "Deposit Received & Cleared" | Full deposit in trust, banked within 5 business days of receipt |
+| `LATE_TO_TRUST` | red | Banked more than 5 business days after it was received (TRESA) |
+| `OVERDUE` | red, "Deposit Missing / Overdue" | The APS due date passed and the deposit, or part of it, isn't in trust |
+| `PARTIAL` | amber | Part received, balance not yet due |
+| `DUE` | neutral | Nothing received, due date still ahead |
+| `NOT_RECORDED` | amber | Nothing received and no due date on the deal |
+| `HELD_ELSEWHERE` | neutral | The co-op brokerage, a lawyer or the builder holds it |
