@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { buildApp } from "./app.ts";
+import { ACCOUNT_ROLES, type AccountRole } from "./accounting/journal.ts";
 import { devHeaderResolver } from "./auth.ts";
 import { EncryptedStore, LocalDiskStore } from "./compliance/storage.ts";
 import type { BrokerageProfile } from "./closing/cda-template.ts";
@@ -57,7 +58,25 @@ if (security.production && !fileKey) {
 const fileStore = fileKey ? new EncryptedStore(uploads, fileKey) : uploads;
 
 if (security.mode === "dev-header") console.warn("WARNING: trusting the x-user-id header. Development only; refused in production.");
+// Account role → chart of accounts code, from the accountant: {"BANK_OPERATING":"1010", ...}
+function accountMap(): Partial<Record<AccountRole, string>> {
+  const raw = process.env.ACCOUNTING_ACCOUNT_MAP;
+  if (!raw) return {};
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const bad = Object.keys(parsed).filter((k) => !(ACCOUNT_ROLES as readonly string[]).includes(k) || typeof parsed[k] !== "string");
+  if (bad.length) throw new Error(`ACCOUNTING_ACCOUNT_MAP has unknown roles or non-string codes: ${bad.join(", ")}`);
+  return parsed as Partial<Record<AccountRole, string>>;
+}
+
+// The QuickBooks Online / Xero adapters are mock-tested only. A live connection needs the OAuth app,
+// the brokerage's authorization and token storage, none of which this release sets up.
+if (process.env.ACCOUNTING_PROVIDER) {
+  console.warn(`ACCOUNTING_PROVIDER=${process.env.ACCOUNTING_PROVIDER} is set, but live accounting connections aren't enabled in this release; ` +
+    "obligations must come from the manual procedure.");
+}
+
 const app = buildApp({
+  accountMap: accountMap(),
   prisma,
   ...(security.mode === "session" ? { auth: new AuthService(prisma, security) } : { resolveUserId: devHeaderResolver, fieldCipher: security.fieldCipher }),
   fileStore,

@@ -10,8 +10,11 @@
  *                            (a same-day interim file is enough; see bank/service.ts)
  *   3. Approved              managing broker who didn't record or match the commission, with a
  *                            fresh verified balance showing the money is actually available
- *   4. Paid                  someone other than the approver, with the payment reference
- *   (5. Payment reversed     a returned EFT; it can then be paid again, or the approval cancelled)
+ *   4. Sent                  someone other than the approver records the payment and its reference
+ *                            (status PAID; nothing here sends money)
+ *   5. Confirmed             the payment is matched to a line of a bank file verified by someone
+ *                            other than whoever recorded it (paymentConfirmed)
+ *   (6. Payment reversed     a returned EFT; it can then be paid again, or the approval cancelled)
  *
  * Co-op and referral payables can't be approved until the THIRD_PARTY_PAYABLES
  * policy has counsel / accountant sign-off. No money is moved by this code.
@@ -49,6 +52,8 @@ export interface PayoutLine {
   approvedAt: string | null;
   paidAt: string | null;
   paymentReference: string | null;
+  /** Sent (PAID) is a person's record; confirmed is independent bank evidence. null until sent. */
+  paymentConfirmed: boolean | null;
   recoveryRequired: boolean; // paid, but the commission behind it was later reversed
   history: { kind: string; eventDate: string; amount: string | null; reference: string | null; note: string | null; by: string }[];
 }
@@ -118,6 +123,9 @@ export async function getPayouts(deps: Deps, actor: Actor, dealId: string): Prom
   ]);
 
   type Ev = (typeof agents)[number]["events"][number];
+  const paidIds = [...agents, ...payables].map((p) => p.events.at(-1)).filter((e) => e?.kind === "PAID").map((e) => e!.id);
+  const confirmed = new Set(paidIds.length === 0 ? [] : (await deps.prisma.$queryRaw<{ id: string }[]>`
+    SELECT id::text FROM unnest(${paidIds}::uuid[]) AS id WHERE payout_event_confirmed(id)`).map((r) => r.id));
   const line = (
     p: { id: string; payeeName: string; carriedForward: { toFixed(n: number): string } },
     kind: PayoutLine["kind"], userId: string | null, amount: Cents, events: Ev[],
@@ -143,6 +151,7 @@ export async function getPayouts(deps: Deps, actor: Actor, dealId: string): Prom
       approvedAt: approved && last?.kind !== "CANCELLED" ? iso(approved.eventDate) : null,
       paidAt: paid ? iso(paid.eventDate) : null,
       paymentReference: paid?.reference ?? null,
+      paymentConfirmed: paid ? confirmed.has(paid.id) : null,
       recoveryRequired: status === "PAID" && received < due,
       history: events.map((e) => ({
         kind: e.kind, eventDate: iso(e.eventDate), amount: e.amount?.toFixed(2) ?? null, reference: e.reference, note: e.note,

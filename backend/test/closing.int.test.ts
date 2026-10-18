@@ -12,7 +12,7 @@ import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { attestCleared, designateBroker, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
+import { attestCleared, attestedObligations, designateBroker, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-12-01";
@@ -46,6 +46,7 @@ describe("closing and CDA API", { skip }, () => {
     });
     account = (await prisma.trustAccount.create({ data: { name: "Trust", bankName: "TD", accountLast4: "4821" } })).id;
     operating = (await prisma.operatingAccount.create({ data: { name: "General", bankName: "TD", accountLast4: "1177" } })).id;
+    await attestedObligations(prisma, operating, TODAY);
   });
 
   after(async () => {

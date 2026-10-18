@@ -12,9 +12,10 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { PrismaClient, type UserRole } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
+import { QuickBooksOnlineAdapter } from "../src/accounting/adapter.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { designateBroker, TEST_BROKERAGE } from "./fixtures.ts";
+import { attestedObligations, designateBroker, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-12-10";
@@ -28,8 +29,12 @@ describe("money controls", { skip }, () => {
   const as = (user: string, method: "GET" | "POST", url: string, body?: object) =>
     app.inject({ method, url, headers: { "x-user-id": user, "idempotency-key": randomUUID() }, ...(body ? { payload: body } : {}) });
 
-  const operatingAccount = async () =>
-    (await prisma.operatingAccount.create({ data: { name: `General ${randomUUID().slice(0, 4)}`, bankName: "TD", accountLast4: "1177" } })).id;
+  // With a current attested obligations figure (none outstanding), as the accounting system would report it
+  const operatingAccount = async () => {
+    const id = (await prisma.operatingAccount.create({ data: { name: `General ${randomUUID().slice(0, 4)}`, bankName: "TD", accountLast4: "1177" } })).id;
+    await attestedObligations(prisma, id, TODAY);
+    return id;
+  };
 
   /** A finalized closing seeded directly: what's due from the payer, one agent payout, optional third-party payables. */
   async function seededClosing(opts: { due: string; payout: string; payables?: { type: "COOP_BROKERAGE" | "REFERRAL"; amount: string }[] }) {
@@ -122,7 +127,7 @@ describe("money controls", { skip }, () => {
     const policies = (await as(u.admin, "GET", "/api/financial-policies")).json().policies;
     assert.deepEqual(policies.map((p: { policy: string; enabled: boolean }) => [p.policy, p.enabled]),
       [["SOLE_OPERATOR_EXCEPTION", false], ["THIRD_PARTY_PAYABLES", false], ["COMMISSION_TRUST_ACCOUNT", false],
-        ["CIVIC_HOLIDAY_IS_HOLIDAY", false], ["UNCLAIMED_MONEY_REMITTANCE", false]]);
+        ["CIVIC_HOLIDAY_IS_HOLIDAY", false], ["UNCLAIMED_MONEY_REMITTANCE", false], ["MANUAL_OBLIGATIONS_PROCEDURE", false]]);
   });
 
   test("interim bank record: commission verified the day it lands; overlapping files never double-count a line", async () => {
@@ -165,6 +170,113 @@ describe("money controls", { skip }, () => {
     const results = await Promise.all([a, b].map((x) => as(u.broker, "POST", `/api/payouts/${x.payoutId}/approve`, {})));
     assert.deepEqual(results.map((r) => r.statusCode).sort(), [200, 409]);
     assert.match(results.find((r) => r.statusCode === 409)!.json().error.message, /5000\.00 is available in the paying account/);
+  });
+
+  test("obligations: no approval from the operating account without a current attested figure; manual figures need the policy and a second person", async () => {
+    const account = (await prisma.operatingAccount.create({ data: { name: `General ${randomUUID().slice(0, 4)}`, bankName: "TD", accountLast4: "1177" } })).id;
+    const c = await seededClosing({ due: "8000.00", payout: "6000.00" });
+    await receive(c.dealId, "8000.00", account, u.admin, "WIRE-OB");
+    await interim(account, "8000.00", [["WIRE IN WIRE-OB", "8000.00"]]);
+    const blocked = await as(u.broker, "POST", `/api/payouts/${c.payoutId}/approve`, {});
+    assert.equal(blocked.json().error.code, "FUNDS_NOT_AVAILABLE");
+    assert.match(blocked.json().error.message, /no attested obligations figure/);
+
+    const manual = { operatingAccountId: account, asOf: TODAY, procedureReference: "Obligations procedure v1, signed by accountant 2026-11-01",
+      lines: [{ description: "December payroll", amount: "2000.00", dueDate: "2026-12-15", sourceDocument: "Payroll register Dec 1" }] };
+    assert.equal((await as(u.admin, "POST", "/api/funds/obligations", manual)).json().error.code, "POLICY_NOT_APPROVED");
+    assert.equal((await setPolicy("MANUAL_OBLIGATIONS_PROCEDURE", true)).statusCode, 200);
+    try {
+      const snap = await as(u.admin, "POST", "/api/funds/obligations", manual);
+      assert.equal(snap.statusCode, 201, snap.body);
+      assert.deepEqual([snap.json().amount, snap.json().source, snap.json().attestation], ["2000.00", "MANUAL", null]);
+      const attest = (user: string) => as(user, "POST", `/api/funds/obligations/${snap.json().id}/attest`, { note: "Checked against payroll and AP" });
+      assert.equal((await attest(u.admin)).statusCode, 403); // the preparer can't attest their own figure
+      assert.equal((await attest(u.admin2)).statusCode, 200);
+
+      const funds = (await as(u.broker, "GET", `/api/funds/availability?accountType=OPERATING&accountId=${account}`)).json();
+      assert.deepEqual([funds.bankBalance, funds.obligations.amount, funds.available, funds.blockedBecause], ["8000.00", "2000.00", "6000.00", []]);
+      assert.equal((await as(u.broker, "POST", `/api/payouts/${c.payoutId}/approve`, {})).statusCode, 200);
+    } finally {
+      await setPolicy("MANUAL_OBLIGATIONS_PROCEDURE", false);
+    }
+  });
+
+  test("a payment sent isn't gone until the bank shows it; it's confirmed only by a bank file someone else verified", async () => {
+    const early = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), brokerage: TEST_BROKERAGE, today: () => "2026-12-08" });
+    try {
+      const account = (await prisma.operatingAccount.create({ data: { name: `General ${randomUUID().slice(0, 4)}`, bankName: "TD", accountLast4: "1177" } })).id;
+      await attestedObligations(prisma, account, "2026-12-08");
+      const c = await seededClosing({ due: "5000.00", payout: "6000.00" });
+      const d = await seededClosing({ due: "5000.00", payout: "6000.00" });
+      const asEarly = (user: string, url: string, body: object) =>
+        early.inject({ method: "POST", url, headers: { "x-user-id": user }, payload: body });
+      for (const [x, ref] of [[c, "WIRE-C"], [d, "WIRE-D2"]] as const) {
+        assert.equal((await asEarly(u.admin, `/api/deals/${x.dealId}/closing/commission-received`,
+          { amount: "5000.00", receivedDate: "2026-12-08", reference: ref, account: { type: "OPERATING", id: account } })).statusCode, 201);
+      }
+      await interim(account, "10000.00", [["WIRE IN WIRE-C", "5000.00"], ["WIRE IN WIRE-D2", "5000.00"]], { asOf: "2026-12-08" });
+      // Dec 8: approved, and the cheque is written
+      assert.equal((await asEarly(u.broker, `/api/payouts/${c.payoutId}/approve`, {})).statusCode, 200);
+      assert.equal((await asEarly(u.admin, `/api/payouts/${c.payoutId}/paid`, { paidDate: "2026-12-08", reference: "CHQ-101" })).statusCode, 200);
+
+      // Dec 10: the bank shows $11,000 (a $1,000 deposit came in), but $6,000 of it is the uncashed cheque
+      await interim(account, "11000.00", [["COUNTER DEPOSIT", "1000.00"]], { asOf: TODAY });
+      const funds = (await as(u.broker, "GET", `/api/funds/availability?accountType=OPERATING&accountId=${account}`)).json();
+      assert.deepEqual([funds.bankBalance, funds.unpresentedPayments, funds.available], ["11000.00", "6000.00", "5000.00"]);
+      const refused = await as(u.broker, "POST", `/api/payouts/${d.payoutId}/approve`, {});
+      assert.match(refused.json().error.message, /5000\.00 is available in the paying account/);
+
+      const sent = (await as(u.admin, "GET", `/api/deals/${c.dealId}/closing/payouts`)).json().payouts[0];
+      assert.deepEqual([sent.status, sent.paymentConfirmed], ["PAID", false]);
+      // The cheque clears: matched automatically to the payment; confirmed because Abe (not Ada, who recorded it) verified the file
+      await interim(account, "5000.00", [["CHEQUE 101", "-6000.00"]], { asOf: TODAY });
+      const confirmed = (await as(u.admin, "GET", `/api/deals/${c.dealId}/closing/payouts`)).json().payouts[0];
+      assert.equal(confirmed.paymentConfirmed, true);
+      const after = (await as(u.broker, "GET", `/api/funds/availability?accountType=OPERATING&accountId=${account}`)).json();
+      assert.deepEqual([after.bankBalance, after.unpresentedPayments, after.available], ["5000.00", "0.00", "5000.00"]);
+    } finally {
+      await early.close();
+    }
+  });
+
+  test("accounting: obligations are read from the accounting system; the journal is exported, never posted", async () => {
+    const bills = { QueryResponse: { Bill: [
+      { Id: "145", DocNumber: "INV-88", VendorRef: { name: "Hamilton Hydro" }, Balance: 412.37, DueDate: "2026-12-20" },
+      { Id: "146", VendorRef: { name: "CRA" }, Balance: 3100, DueDate: "2026-12-31" },
+    ] } };
+    const calls: string[] = [];
+    const qbo = new QuickBooksOnlineAdapter({
+      realmId: "9130", accessToken: async () => "test-token",
+      fetch: async (url, init) => { calls.push(`${init.headers.Authorization} ${url}`); return { ok: true, status: 200, json: async () => bills }; },
+    });
+    const connected = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), brokerage: TEST_BROKERAGE, today: () => TODAY,
+      accounting: qbo, accountMap: { BANK_OPERATING: "1010", COMMISSION_CLEARING: "2150" } });
+    try {
+      const account = (await prisma.operatingAccount.create({ data: { name: `General ${randomUUID().slice(0, 4)}`, bankName: "TD", accountLast4: "1177" } })).id;
+      assert.equal((await as(u.admin, "POST", "/api/funds/obligations/pull", { operatingAccountId: account })).json().error.code, "ACCOUNTING_NOT_CONNECTED");
+      const pulled = await connected.inject({ method: "POST", url: "/api/funds/obligations/pull", headers: { "x-user-id": u.admin }, payload: { operatingAccountId: account } });
+      assert.equal(pulled.statusCode, 201, pulled.body);
+      assert.deepEqual([pulled.json().amount, pulled.json().source, pulled.json().lines.length], ["3512.37", "ACCOUNTING_SYSTEM", 2]);
+      assert.match(pulled.json().sourceReference, /QuickBooks Online company 9130: 2 unpaid bills/);
+      assert.match(calls[0]!, /^Bearer test-token https:\/\/quickbooks\.api\.intuit\.com\/v3\/company\/9130\/query\?query=SELECT/);
+
+      const c = await seededClosing({ due: "2500.00", payout: "2000.00" });
+      await receive(c.dealId, "2500.00", account, u.admin, "WIRE-J");
+      const j = await connected.inject({ method: "GET", url: `/api/accounting/journal?from=${TODAY}&to=${TODAY}`, headers: { "x-user-id": u.broker } });
+      const entry = j.json().entries.find((e: { reference: string }) => e.reference === "WIRE-J");
+      assert.deepEqual(entry.lines.map((l: { role: string; accountCode: string; debit: string; credit: string }) => [l.role, l.accountCode, l.debit, l.credit]),
+        [["BANK_OPERATING", "1010", "2500.00", "0.00"], ["COMMISSION_CLEARING", "2150", "0.00", "2500.00"]]);
+      assert.equal(entry.ready, true);
+      assert.ok(j.json().unmappedRoles.includes("AGENT_COMMISSION_PAYABLE"));
+      const csv = await connected.inject({ method: "GET", url: `/api/accounting/journal?from=${TODAY}&to=${TODAY}&format=csv`, headers: { "x-user-id": u.broker } });
+      assert.match(csv.headers["content-disposition"] as string, /attachment; filename="journal-/);
+      assert.match(csv.body, /WIRE-J,BANK_OPERATING,1010,2500\.00,0\.00/);
+      assert.equal((await as(u.agent, "GET", `/api/accounting/journal?from=${TODAY}&to=${TODAY}`)).statusCode, 403);
+      const post = await connected.inject({ method: "POST", url: "/api/accounting/journal/post", headers: { "x-user-id": u.broker }, payload: {} });
+      assert.deepEqual([post.statusCode, post.json().error.code], [409, "ACCOUNTING_POSTING_DISABLED"]);
+    } finally {
+      await connected.close();
+    }
   });
 
   test("simultaneous duplicate payment records: exactly one is accepted", async () => {

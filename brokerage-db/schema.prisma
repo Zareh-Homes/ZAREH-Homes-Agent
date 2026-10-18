@@ -173,42 +173,44 @@ model User {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  listings                Listing[]                   @relation("ListingAgent")
+  listings                Listing[]                    @relation("ListingAgent")
   dealAgents              TransactionAgent[]
-  reviewedDocuments       DocumentSlot[]              @relation("Reviewer")
+  reviewedDocuments       DocumentSlot[]               @relation("Reviewer")
   uploadedFiles           DocumentFile[]
-  documentReviews         DocumentReview[]            @relation("DocumentReviewer")
+  documentReviews         DocumentReview[]             @relation("DocumentReviewer")
   notifications           Notification[]
   commissionPlan          CommissionPlan?
-  closingsFinalized       ClosingStatement[]          @relation("ClosingFinalizedBy")
+  closingsFinalized       ClosingStatement[]           @relation("ClosingFinalizedBy")
   closingPayouts          ClosingAgentPayout[]
   commissionReceipts      CommissionReceipt[]
   credential              UserCredential?
   sessions                Session[]
-  authTokens              AuthToken[]                 @relation("AuthTokenFor")
-  authTokensIssued        AuthToken[]                 @relation("AuthTokenIssuedBy")
-  legalHoldsPlaced        LegalHold[]                 @relation("LegalHoldPlacedBy")
-  legalHoldsReleased      LegalHold[]                 @relation("LegalHoldReleasedBy")
+  authTokens              AuthToken[]                  @relation("AuthTokenFor")
+  authTokensIssued        AuthToken[]                  @relation("AuthTokenIssuedBy")
+  legalHoldsPlaced        LegalHold[]                  @relation("LegalHoldPlacedBy")
+  legalHoldsReleased      LegalHold[]                  @relation("LegalHoldReleasedBy")
   privacyBreaches         PrivacyBreach[]
   privacyBreachEvents     PrivacyBreachEvent[]
   proclaimedHolidays      ProclaimedHoliday[]
   unclaimedFundsOpened    UnclaimedTrustFund[]
   unclaimedFundEvents     UnclaimedFundEvent[]
+  obligationsPrepared     FundsObligationSnapshot[]    @relation("ObligationPreparedBy")
+  obligationsAttested     FundsObligationAttestation[] @relation("ObligationAttestedBy")
   payoutEvents            PayoutEvent[]
   receiptReversals        CommissionReceiptReversal[]
   closingVoids            ClosingVoid[]
   statementVerifications  BankStatementVerification[]
-  designations            BrokerOfRecordDesignation[] @relation("Designated")
-  designationsRecorded    BrokerOfRecordDesignation[] @relation("DesignationRecordedBy")
+  designations            BrokerOfRecordDesignation[]  @relation("Designated")
+  designationsRecorded    BrokerOfRecordDesignation[]  @relation("DesignationRecordedBy")
   policyDecisions         FinancialPolicyDecision[]
   incidentsDetected       TrustIncident[]
   incidentEvents          TrustIncidentEvent[]
-  trustEntriesMade        TrustLedgerEntry[]          @relation("EnteredBy")
-  trustEntriesSigned      TrustLedgerEntry[]          @relation("AuthorizedBy")
-  trustHoldsFlagged       TrustHold[]                 @relation("HoldFlaggedBy")
-  trustHoldsReleased      TrustHold[]                 @relation("HoldReleasedBy")
-  reconciliationsPrepared TrustReconciliation[]       @relation("ReconciliationPreparedBy")
-  reconciliationsSigned   TrustReconciliation[]       @relation("ReconciliationSignedBy")
+  trustEntriesMade        TrustLedgerEntry[]           @relation("EnteredBy")
+  trustEntriesSigned      TrustLedgerEntry[]           @relation("AuthorizedBy")
+  trustHoldsFlagged       TrustHold[]                  @relation("HoldFlaggedBy")
+  trustHoldsReleased      TrustHold[]                  @relation("HoldReleasedBy")
+  reconciliationsPrepared TrustReconciliation[]        @relation("ReconciliationPreparedBy")
+  reconciliationsSigned   TrustReconciliation[]        @relation("ReconciliationSignedBy")
   bankStatements          BankStatement[]
   bankMatches             BankMatch[]
   auditLogs               AuditLog[]
@@ -481,6 +483,7 @@ model OperatingAccount {
   bankStatements     BankStatement[]
   commissionReceipts CommissionReceipt[]
   payoutEventsFrom   PayoutEvent[]
+  obligations        FundsObligationSnapshot[]
 }
 
 // A monthly bank statement imported from CSV. Consecutive, balanced, append-only (migration 008).
@@ -1207,4 +1210,36 @@ model UnclaimedFundEvent {
   actor        User               @relation(fields: [actorId], references: [id])
 
   @@index([fundId])
+}
+
+// The operating account's other obligations (payroll, HST, rent: anything this system doesn't pay), from the
+// accounting system or the documented manual procedure; usable once a second person attests it (migration 013).
+model FundsObligationSnapshot {
+  id                 String   @id @default(uuid()) @db.Uuid
+  operatingAccountId String   @db.Uuid
+  asOf               DateTime @db.Date
+  amount             Decimal  @db.Decimal(14, 2)
+  source             String // ACCOUNTING_SYSTEM or MANUAL
+  sourceReference    String
+  lines              Json     @default("[]")
+  preparedById       String   @db.Uuid
+  createdAt          DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  operatingAccount OperatingAccount            @relation(fields: [operatingAccountId], references: [id])
+  preparedBy       User                        @relation("ObligationPreparedBy", fields: [preparedById], references: [id])
+  attestation      FundsObligationAttestation?
+
+  @@index([operatingAccountId, asOf])
+}
+
+model FundsObligationAttestation {
+  snapshotId           String   @id @db.Uuid
+  attestedById         String   @db.Uuid
+  note                 String
+  segregationException Boolean  @default(false)
+  exceptionReason      String?
+  attestedAt           DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  snapshot   FundsObligationSnapshot @relation(fields: [snapshotId], references: [id])
+  attestedBy User                    @relation("ObligationAttestedBy", fields: [attestedById], references: [id])
 }

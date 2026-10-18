@@ -62,3 +62,23 @@ export async function attestCleared(app: Injectable, brokerId: string, entryIds:
   });
   if (res.statusCode !== 201) throw new Error(`attestCleared failed: ${res.statusCode} ${res.body}`);
 }
+
+/**
+ * An attested obligations figure for an operating account (migration 013), as the accounting
+ * adapter would record it, so payouts from that account can be approved. The adapter itself is
+ * tested in accounting.test.ts. Prepared and attested by fresh admins (two people).
+ */
+export async function attestedObligations(prisma: PrismaClient, operatingAccountId: string, asOf: string, amount = "0.00"): Promise<string> {
+  const admin = async () => (await prisma.user.create({
+    data: { email: `ledger-${Math.random().toString(36).slice(2)}@zareh.test`, firstName: "Ledger", lastName: "Admin", role: "ADMIN" },
+  })).id;
+  const [preparer, attester] = [await admin(), await admin()];
+  const [row] = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "FundsObligationSnapshot" (id, "operatingAccountId", "asOf", amount, source, "sourceReference", "preparedById")
+    VALUES (gen_random_uuid(), ${operatingAccountId}::uuid, ${asOf}::date, ${amount}::numeric, 'ACCOUNTING_SYSTEM', 'Test: no unpaid bills',
+            ${preparer}::uuid)
+    RETURNING id::text`;
+  await prisma.$executeRaw`
+    INSERT INTO "FundsObligationAttestation" ("snapshotId", "attestedById", note) VALUES (${row!.id}::uuid, ${attester}::uuid, 'Test attestation')`;
+  return row!.id;
+}

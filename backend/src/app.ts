@@ -13,6 +13,9 @@ import { pipelineRoutes } from "./pipeline/routes.ts";
 import { bankRoutes } from "./bank/routes.ts";
 import { privacyRoutes } from "./security/privacy.ts";
 import { unclaimedRoutes } from "./bank/unclaimed.ts";
+import { fundsRoutes } from "./accounting/funds.ts";
+import type { AccountingAdapter } from "./accounting/adapter.ts";
+import type { AccountRole } from "./accounting/journal.ts";
 import type { AuthService } from "./security/auth-service.ts";
 import { FieldCipher } from "./security/crypto.ts";
 import { registerHttpSecurity } from "./security/http.ts";
@@ -31,6 +34,10 @@ export interface AppOptions {
   fileStore: FileStore;
   brokerage: BrokerageProfile;
   notificationHub?: NotificationHub;
+  /** Read-only accounting connection (QuickBooks Online or Xero), for the operating account's obligations */
+  accounting?: AccountingAdapter | null;
+  /** Account role → chart of accounts code, from the accountant */
+  accountMap?: Partial<Record<AccountRole, string>>;
   logger?: boolean;
   today?: () => string;
 }
@@ -83,5 +90,6 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId, today: opts.today });
   app.register(privacyRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(unclaimedRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(fundsRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today, accounting: opts.accounting ?? null, accountMap: opts.accountMap });
   return app;
 }

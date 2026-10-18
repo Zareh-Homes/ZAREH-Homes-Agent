@@ -47,7 +47,7 @@ A recorded deposit or commission is not proof of money. Evidence is a line on a 
 - **Agent, co-op or referral payout:** approval needs all of the following, checked by the database:
   - the commission received in full, not reversed, and matched to verified bank evidence
   - an approver who didn't record or match the commission
-  - a verified balance for the paying account no more than 3 days old, covering this payout plus everything already approved or paid from that account since the balance was taken
+  - a verified balance for the paying account no more than 3 days old, covering this payout after deducting: payments sent but not yet through the bank, payments approved but not sent, returned payments still owed and, for the operating account, an attested obligations figure no more than 7 days old (see `accounting-integration.md`). Without that figure, nothing is approved from the operating account.
 - **Co-op brokerage and referral payables:** disabled until the `THIRD_PARTY_PAYABLES` policy is signed off by counsel and the accountant.
 
 ## Each month

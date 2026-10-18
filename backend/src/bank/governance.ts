@@ -35,6 +35,10 @@ export const POLICIES = {
   UNCLAIMED_MONEY_REMITTANCE:
     "Allows recording that unclaimed trust money was remitted to RECO (TRESA s.27(4)). The payment itself is made outside this " +
     "system. Off until the broker of record confirms RECO's current remittance process.",
+  MANUAL_OBLIGATIONS_PROCEDURE:
+    "Allows the operating account's obligations (payroll, HST, rent, bills) to be entered by hand, line by line with the source " +
+    "document, instead of read from the accounting system. Each figure still needs a second person's attestation. Off until the " +
+    "accountant approves the written procedure.",
 } as const;
 export type PolicyKey = keyof typeof POLICIES;
 
