@@ -36,6 +36,8 @@ function toronto(deposit: number, holder: ClosingInput["deal"]["trustDepositHold
       sellers: ["Ann Lee"], buyers: ["Bo Kim"],
     },
     baseGci: $(27_500),
+    hstRate: 1300,
+    taxName: "HST",
     coopCommission: $(22_000),
     coopBrokerage: "Harbourfront Realty Inc.",
     referral: null,
@@ -219,4 +221,59 @@ test("cap year: starts on the plan's anniversary", () => {
   assert.equal(capYearStart("2026-11-30", 1, 1), "2026-01-01");
   assert.equal(capYearStart("2026-02-10", 3, 15), "2025-03-15");
   assert.equal(capYearStart("2026-03-15", 3, 15), "2026-03-15");
+});
+
+test("adjustments: a taxable bonus, a deduction and a recovery change the agent's payout and the brokerage's share", () => {
+  const input = toronto(0, "COOP_BROKERAGE");
+  input.agents = [{ ...JANE, adjustments: [
+    { id: "b1", kind: "BONUS", description: "Top producer bonus", amount: $(500), taxable: true },
+    { id: "d1", kind: "DEDUCTION", description: "Feature sheet printing", amount: $(100), taxable: true },
+    { id: "r1", kind: "RECOVERY", description: "Recalled commission on 2026-0011", amount: $(1_000), taxable: false },
+  ] }];
+  const base = computeClosing(toronto(0, "COOP_BROKERAGE"), "Test Brokerage Inc.");
+  const c = computeClosing(input, "Test Brokerage Inc.");
+  const jane = c.agents[0]!;
+  // +$565 bonus (registered agent), −$113 deduction, −$1,000 recovery (no HST)
+  assert.equal(jane.payout, base.agents[0]!.payout + $(565) - $(113) - $(1_000));
+  assert.deepEqual(jane.adjustments.map((a) => [a.kind, a.hst, a.signedTotal]), [["BONUS", $(65), $(565)], ["DEDUCTION", $(13), -$(113)], ["RECOVERY", 0, -$(1_000)]]);
+  assert.equal(c.brokerage.agentPayablesTotal, jane.payout);
+  assert.equal(c.brokerage.netEarnedShare.total, c.incoming.commission.total - jane.payout);
+  assert.equal(c.brokerage.netHstEstimate, base.brokerage.netHstEstimate - $(65) + $(13));
+  // House share and the cap are unaffected: adjustments sit on top of the split
+  assert.equal(jane.houseSplitBase, base.agents[0]!.houseSplitBase);
+  assert.match(renderCda(c, TEST_BROKERAGE, { audience: "internal", status: "DRAFT", issuedOn: "2026-11-30" }), /Plus: Top producer bonus/);
+});
+
+test("adjustments: a bonus to an agent who isn't HST-registered carries no HST; deductions bigger than the payout leave the agent owing", () => {
+  const input = toronto(0, "COOP_BROKERAGE");
+  input.agents = [{ ...JANE, hstNumber: null, adjustments: [
+    { id: "b1", kind: "BONUS", description: "Bonus", amount: $(500), taxable: true },
+    { id: "d1", kind: "DEDUCTION", description: "Advance repaid", amount: $(30_000), taxable: false },
+  ] }];
+  const c = computeClosing(input, "Test Brokerage Inc.");
+  assert.equal(c.agents[0]!.adjustments[0]!.hst, 0);
+  assert.equal(c.agents[0]!.payout, 0);
+  assert.ok(c.agents[0]!.owes > 0);
+  assert.ok(c.warnings.includes("AGENT_OWES_FEES:Jane Smith"));
+});
+
+test("tax: no rate on file means no CDA; the rate and its name come from the property's province", () => {
+  const unknown = { ...toronto(0, "COOP_BROKERAGE"), hstRate: undefined };
+  assert.equal(auditCode(() => computeClosing(unknown, "Test Brokerage Inc.")), "TAX_RATE_UNKNOWN");
+  const ns = { ...toronto(0, "COOP_BROKERAGE"), hstRate: 1400, taxName: "HST" as const };
+  ns.deal = { ...ns.deal, province: "NS", city: "Halifax" };
+  const c = computeClosing(ns, "Test Brokerage Inc.");
+  assert.equal(c.incoming.commission.hst, $(3_850)); // 14% of $27,500
+  const html = renderCda(c, TEST_BROKERAGE, { audience: "lawyer", status: "DRAFT", issuedOn: "2026-11-30" });
+  assert.match(html, /Halifax, Nova Scotia/);
+  assert.match(html, /Amounts include HST at 14%/);
+  const gst = { ...toronto(0, "COOP_BROKERAGE"), hstRate: 500, taxName: "GST" as const };
+  gst.deal = { ...gst.deal, province: "AB" };
+  assert.match(renderCda(computeClosing(gst, "Test Brokerage Inc."), TEST_BROKERAGE, { audience: "lawyer", status: "DRAFT", issuedOn: "2026-11-30" }), /Amounts include GST at 5%/);
+});
+
+test("plan: a deal split that differs from the agent's plan is flagged", () => {
+  const input = toronto(0, "COOP_BROKERAGE");
+  input.agents = [{ ...JANE, planSplitBps: 7000 }];
+  assert.ok(computeClosing(input, "Test Brokerage Inc.").warnings.includes("SPLIT_DIFFERS_FROM_PLAN:Jane Smith:80% on the deal, 70% in the plan"));
 });

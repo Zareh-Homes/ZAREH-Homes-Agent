@@ -198,7 +198,7 @@ async function personalDashboard(db: PrismaClient, userId: string, today: string
 
   const user = await db.user.findUniqueOrThrow({
     where: { id: userId },
-    select: { isPrec: true, precLegalName: true, hstNumber: true, commissionPlan: true },
+    select: { isPrec: true, precLegalName: true, hstNumber: true },
   });
 
   const [volume] = await db.$queryRaw<{ total: string; n: number }[]>`
@@ -217,14 +217,17 @@ async function personalDashboard(db: PrismaClient, userId: string, today: string
        AND NOT EXISTS (SELECT 1 FROM "ClosingVoid" v WHERE v."closingId" = p."closingId")`;
 
   let cap: PersonalDashboard["cap"] = null;
-  const plan = user.commissionPlan;
+  // The plan in force today (migration 014)
+  const [plan] = await db.$queryRaw<{ annualCap: string | null; capYearStartMonth: number; capYearStartDay: number }[]>`
+    SELECT (p)."annualCap"::text AS "annualCap", (p)."capYearStartMonth" AS "capYearStartMonth", (p)."capYearStartDay" AS "capYearStartDay"
+      FROM (SELECT plan_in_force(${userId}::uuid, ${today}::date) AS p) x WHERE (p).id IS NOT NULL`;
   if (plan?.annualCap) {
     const start = capYearStart(today, plan.capYearStartMonth, plan.capYearStartDay);
     const [row] = await db.$queryRaw<{ total: string }[]>`
       SELECT COALESCE(SUM("houseSplitBase"), 0)::text AS total FROM "ClosingAgentPayout" p
        WHERE "userId" = ${userId}::uuid AND "closeDate" >= ${start}::date AND "closeDate" < ${nextYear(start)}::date
          AND NOT EXISTS (SELECT 1 FROM "ClosingVoid" v WHERE v."closingId" = p."closingId")`;
-    cap = { capCents: toCents(plan.annualCap.toFixed(2)), paidCents: toCents(row!.total), yearStart: start, yearEnd: nextYear(start) };
+    cap = { capCents: toCents(plan.annualCap), paidCents: toCents(row!.total), yearStart: start, yearEnd: nextYear(start) };
   }
 
   // Sent back by a reviewer, on deals that are still being worked

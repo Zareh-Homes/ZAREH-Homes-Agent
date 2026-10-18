@@ -10,7 +10,7 @@ import { PrismaClient, type UserRole } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { multipart, TEST_BROKERAGE } from "./fixtures.ts";
+import { approvedPlan, multipart, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2031-06-15";
@@ -56,7 +56,7 @@ describe("dashboard API", { skip }, () => {
     u.broker = await make("MANAGING_BROKER");
     u.compliance = await make("COMPLIANCE_ADMIN");
     u.agent = await make("AGENT", { isPrec: true, precLegalName: "Jane Agent Real Estate Professional Corporation", hstNumber: "123456789RT0001" });
-    await prisma.commissionPlan.create({ data: { userId: u.agent, annualCap: "15000" } });
+    await approvedPlan(prisma, u.agent, { annualCap: "15000" });
     // Compare deltas: the database is shared and never cleaned (ledgers are append-only)
     const start = (await dashboard(u.compliance)).brokerage;
     financialsBefore = start.financials;

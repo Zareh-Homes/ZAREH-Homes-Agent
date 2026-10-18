@@ -50,7 +50,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
     include: {
       agents: {
         orderBy: [{ role: "asc" }, { userId: "asc" }], // PRIMARY first
-        include: { user: { include: { commissionPlan: { include: { fees: { orderBy: { name: "asc" } } } } } } },
+        include: { user: true },
       },
       parties: true,
     },
@@ -95,10 +95,20 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
     .filter((s) => s.status !== "APPROVED")
     .map((s) => `${s.documentType.name}${s.party ? ` (${s.party.fullName})` : ""}: ${s.status}`);
 
-  // Agents with plan, PREC details and cap-year totals from earlier finalized closings
+  // Agents with the plan in force on the close date, PREC details, cap-year totals from earlier
+  // finalized closings, and the deal's approved bonuses and deductions
+  const adjustments = await db.commissionAdjustment.findMany({
+    where: { transactionId: dealId, approvedAt: { not: null }, withdrawnAt: null }, orderBy: { createdAt: "asc" },
+  });
   const agents = [];
   for (const a of deal.agents) {
-    const plan = a.user.commissionPlan;
+    const [plan] = await db.$queryRaw<{
+      id: string; splitBps: number | null; annualCap: string | null; capYearStartMonth: number; capYearStartDay: number;
+      fees: { name: string; amount: string }[];
+    }[]>`
+      SELECT (p).id::text AS id, (p)."splitBps" AS "splitBps", (p)."annualCap"::text AS "annualCap",
+             (p)."capYearStartMonth" AS "capYearStartMonth", (p)."capYearStartDay" AS "capYearStartDay", (p).fees AS fees
+        FROM (SELECT plan_in_force(${a.userId}::uuid, ${closeDate}::date) AS p) x WHERE (p).id IS NOT NULL`;
     let ytd = 0;
     if (plan?.annualCap) {
       const start = capYearStart(closeDate, plan.capYearStartMonth, plan.capYearStartDay);
@@ -118,12 +128,21 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       hstNumber: a.user.hstNumber,
       splitBps: bps(a.splitPct),
       gciShareBps: bps(a.gciSharePct),
-      annualCap: plan?.annualCap ? cents(plan.annualCap) : null,
-      fees: (plan?.fees ?? []).map((f) => ({ name: f.name, amount: cents(f.amount) })),
+      annualCap: plan?.annualCap ? numericToCents(plan.annualCap) : null,
+      fees: (plan?.fees ?? []).map((f) => ({ name: f.name, amount: numericToCents(f.amount) })).sort((x, y) => x.name.localeCompare(y.name)),
       ytdHouseCollected: ytd,
-      hasPlan: plan !== null,
+      hasPlan: plan !== undefined,
+      planVersionId: plan?.id ?? null,
+      planSplitBps: plan?.splitBps ?? null,
+      adjustments: adjustments.filter((x) => x.userId === a.userId).map((x) => ({
+        id: x.id, kind: x.kind, description: x.description, amount: cents(x.amount), taxable: x.taxable,
+      })),
     });
   }
+
+  const [tax] = await db.$queryRaw<{ rateBps: number; taxName: "HST" | "GST" }[]>`
+    SELECT (t)."rateBps" AS "rateBps", (t)."taxName" AS "taxName"
+      FROM (SELECT sales_tax_on(${deal.province}, ${closeDate}::date) AS t) x WHERE (t).province IS NOT NULL`;
 
   const byRole = (role: string) => deal.parties.filter((p) => p.role === role);
   const lawyerRole = deal.side === "BUYER" ? "BUYER_LAWYER" : "SELLER_LAWYER";
@@ -139,6 +158,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       streetAddress: deal.streetAddress,
       unit: deal.unit,
       city: deal.city,
+      province: deal.province,
       mlsNumber: deal.mlsNumber,
       salePrice: cents(deal.salePrice),
       expectedDeposit: cents(deal.depositAmount),
@@ -147,6 +167,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       buyers: byRole("BUYER").map((p) => p.fullName),
     },
     baseGci: cents(deal.totalGci),
+    ...(tax ? { hstRate: tax.rateBps, taxName: tax.taxName } : {}),
     coopCommission: cents(deal.coopCommission),
     coopBrokerage: byRole("COOP_BROKERAGE")[0]?.fullName ?? deal.coopBrokerageName,
     referral: deal.outsideReferralPayee && deal.outsideReferralPct

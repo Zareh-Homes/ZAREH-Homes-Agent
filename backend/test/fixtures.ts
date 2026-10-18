@@ -82,3 +82,20 @@ export async function attestedObligations(prisma: PrismaClient, operatingAccount
     INSERT INTO "FundsObligationAttestation" ("snapshotId", "attestedById", note) VALUES (${row!.id}::uuid, ${attester}::uuid, 'Test attestation')`;
   return row!.id;
 }
+
+/** An approved commission plan version (migration 014): proposed by a fresh admin, approved by a fresh managing broker. */
+export async function approvedPlan(prisma: PrismaClient, userId: string, plan: {
+  effectiveFrom?: string; annualCap?: string | null; fees?: { name: string; amount: string }[]; splitBps?: number | null;
+} = {}): Promise<string> {
+  const person = async (role: "ADMIN" | "MANAGING_BROKER") => (await prisma.user.create({
+    data: { email: `plan-${Math.random().toString(36).slice(2)}@zareh.test`, firstName: "Plan", lastName: role, role },
+  })).id;
+  const [proposer, approver] = [await person("ADMIN"), await person("MANAGING_BROKER")];
+  const [row] = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "CommissionPlanVersion" (id, "userId", "effectiveFrom", "splitBps", "annualCap", fees, reason, "createdById")
+    VALUES (gen_random_uuid(), ${userId}::uuid, ${plan.effectiveFrom ?? "2020-01-01"}::date, ${plan.splitBps ?? null},
+            ${plan.annualCap ?? null}::numeric, ${JSON.stringify(plan.fees ?? [])}::jsonb, 'Test plan', ${proposer}::uuid)
+    RETURNING id::text`;
+  await prisma.$executeRaw`UPDATE "CommissionPlanVersion" SET "approvedById" = ${approver}::uuid WHERE id = ${row!.id}::uuid`;
+  return row!.id;
+}

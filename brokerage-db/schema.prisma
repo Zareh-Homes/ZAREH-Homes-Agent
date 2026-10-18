@@ -196,6 +196,16 @@ model User {
   unclaimedFundEvents     UnclaimedFundEvent[]
   obligationsPrepared     FundsObligationSnapshot[]    @relation("ObligationPreparedBy")
   obligationsAttested     FundsObligationAttestation[] @relation("ObligationAttestedBy")
+  planVersions            CommissionPlanVersion[]      @relation("PlanVersionAgent")
+  planVersionsCreated     CommissionPlanVersion[]      @relation("PlanVersionCreatedBy")
+  planVersionsApproved    CommissionPlanVersion[]      @relation("PlanVersionApprovedBy")
+  recoveries              AgentRecovery[]              @relation("RecoveryAgent")
+  recoveriesCreated       AgentRecovery[]              @relation("RecoveryCreatedBy")
+  recoveryRepayments      AgentRecoveryRepayment[]     @relation("RecoveryRepaymentActor")
+  adjustments             CommissionAdjustment[]       @relation("AdjustmentAgent")
+  adjustmentsCreated      CommissionAdjustment[]       @relation("AdjustmentCreatedBy")
+  adjustmentsApproved     CommissionAdjustment[]       @relation("AdjustmentApprovedBy")
+  adjustmentsWithdrawn    CommissionAdjustment[]       @relation("AdjustmentWithdrawnBy")
   payoutEvents            PayoutEvent[]
   receiptReversals        CommissionReceiptReversal[]
   closingVoids            ClosingVoid[]
@@ -290,7 +300,7 @@ model Transaction {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  listing        Listing?             @relation(fields: [listingId], references: [id])
+  listing        Listing?               @relation(fields: [listingId], references: [id])
   agents         TransactionAgent[]
   parties        TransactionParty[]
   trustEntries   TrustLedgerEntry[]
@@ -298,6 +308,8 @@ model Transaction {
   closings       ClosingStatement[]
   legalHolds     LegalHold[]
   unclaimedFunds UnclaimedTrustFund[]
+  adjustments    CommissionAdjustment[]
+  province       String                 @default("ON") @db.Char(2) // migration 014: the property's province, for GST/HST
   documentSlots  DocumentSlot[]
 
   @@index([status])
@@ -919,6 +931,7 @@ model ClosingStatement {
 
   transaction  Transaction          @relation(fields: [transactionId], references: [id])
   finalizedBy  User                 @relation("ClosingFinalizedBy", fields: [finalizedById], references: [id])
+  recoveries   AgentRecovery[]
   payouts      ClosingAgentPayout[]
   payables     ClosingPayable[]
   receipts     CommissionReceipt[]
@@ -1242,4 +1255,114 @@ model FundsObligationAttestation {
 
   snapshot   FundsObligationSnapshot @relation(fields: [snapshotId], references: [id])
   attestedBy User                    @relation("ObligationAttestedBy", fields: [attestedById], references: [id])
+}
+
+// GST/HST by province and date (migration 014). The commission's rate is the property's province on the close date.
+model SalesTaxRate {
+  province      String   @db.Char(2)
+  effectiveFrom DateTime @db.Date
+  rateBps       Int
+  taxName       String
+  source        String
+
+  @@id([province, effectiveFrom])
+}
+
+// An agent's commission plan from a date (migration 014). Proposed by one person, approved by a managing
+// broker; changes are new versions and never reach back into an issued CDA.
+model CommissionPlanVersion {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userId               String    @db.Uuid
+  effectiveFrom        DateTime  @db.Date
+  splitBps             Int?
+  annualCap            Decimal?  @db.Decimal(12, 2)
+  capYearStartMonth    Int       @default(1)
+  capYearStartDay      Int       @default(1)
+  fees                 Json      @default("[]")
+  reason               String
+  source               String    @default("APP")
+  createdById          String?   @db.Uuid
+  createdAt            DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  approvedById         String?   @db.Uuid
+  approvedAt           DateTime? @db.Timestamptz(6)
+  segregationException Boolean   @default(false)
+  exceptionReason      String?
+
+  user       User  @relation("PlanVersionAgent", fields: [userId], references: [id])
+  createdBy  User? @relation("PlanVersionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User? @relation("PlanVersionApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@unique([userId, effectiveFrom])
+}
+
+enum RecoveryReason {
+  COMMISSION_RECALLED
+  OVERPAYMENT
+  OTHER
+}
+
+// Money an agent owes back (migration 014): recovered by a RECOVERY deduction on a later closing, or repaid.
+model AgentRecovery {
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @db.Uuid
+  sourceClosingId String?        @db.Uuid
+  amount          Decimal        @db.Decimal(12, 2)
+  reason          RecoveryReason
+  note            String
+  createdById     String         @db.Uuid
+  createdAt       DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  user          User                     @relation("RecoveryAgent", fields: [userId], references: [id])
+  sourceClosing ClosingStatement?        @relation(fields: [sourceClosingId], references: [id], onDelete: Restrict)
+  createdBy     User                     @relation("RecoveryCreatedBy", fields: [createdById], references: [id])
+  repayments    AgentRecoveryRepayment[]
+  adjustments   CommissionAdjustment[]
+
+  @@index([userId])
+}
+
+model AgentRecoveryRepayment {
+  id         String   @id @default(uuid()) @db.Uuid
+  recoveryId String   @db.Uuid
+  amount     Decimal  @db.Decimal(12, 2)
+  paidDate   DateTime @db.Date
+  reference  String
+  actorId    String   @db.Uuid
+  createdAt  DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  recovery AgentRecovery @relation(fields: [recoveryId], references: [id])
+  actor    User          @relation("RecoveryRepaymentActor", fields: [actorId], references: [id])
+}
+
+enum AdjustmentKind {
+  BONUS
+  DEDUCTION
+  RECOVERY
+}
+
+// A bonus or deduction for an agent on one deal (migration 014). Approved by a second person; locked once the CDA is issued.
+model CommissionAdjustment {
+  id            String         @id @default(uuid()) @db.Uuid
+  transactionId String         @db.Uuid
+  userId        String         @db.Uuid
+  kind          AdjustmentKind
+  description   String
+  amount        Decimal        @db.Decimal(12, 2)
+  taxable       Boolean
+  recoveryId    String?        @db.Uuid
+  createdById   String         @db.Uuid
+  createdAt     DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  approvedById  String?        @db.Uuid
+  approvedAt    DateTime?      @db.Timestamptz(6)
+  withdrawnAt   DateTime?      @db.Timestamptz(6)
+  withdrawnById String?        @db.Uuid
+
+  transaction Transaction    @relation(fields: [transactionId], references: [id])
+  user        User           @relation("AdjustmentAgent", fields: [userId], references: [id])
+  recovery    AgentRecovery? @relation(fields: [recoveryId], references: [id], onDelete: Restrict)
+  createdBy   User           @relation("AdjustmentCreatedBy", fields: [createdById], references: [id])
+  approvedBy  User?          @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  withdrawnBy User?          @relation("AdjustmentWithdrawnBy", fields: [withdrawnById], references: [id], onDelete: Restrict)
+
+  @@index([transactionId])
 }

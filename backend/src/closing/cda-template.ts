@@ -55,22 +55,33 @@ function taxedRow(label: string, t: Taxed, note = ""): string {
     <td class="num">${money(t.base)}</td><td class="num">${money(t.hst)}</td><td class="num">${money(t.total)}</td></tr>`;
 }
 
-function agentStatement(a: AgentClosingLine, rate: number, brokerageName: string): string {
+const PROVINCES: Record<string, string> = {
+  ON: "Ontario", QC: "Quebec", NS: "Nova Scotia", NB: "New Brunswick", MB: "Manitoba", BC: "British Columbia", PE: "Prince Edward Island",
+  SK: "Saskatchewan", AB: "Alberta", NL: "Newfoundland and Labrador", YT: "Yukon", NT: "Northwest Territories", NU: "Nunavut",
+};
+
+function agentStatement(a: AgentClosingLine, rate: number, brokerageName: string, tax: string): string {
   const feeRows = a.fees.map((f) =>
     `<tr><td class="indent">Less: ${esc(f.name)}</td><td class="num">−${money(f.base)}</td><td class="num">−${money(f.hst)}</td><td class="num">−${money(f.total)}</td></tr>`).join("");
+  const adjustmentRows = (a.adjustments ?? []).map((x) => {
+    const sign = x.kind === "BONUS" ? "" : "−";
+    const label = x.kind === "BONUS" ? "Plus" : x.kind === "RECOVERY" ? "Less (recovery of an earlier overpayment)" : "Less";
+    return `<tr><td class="indent">${label}: ${esc(x.description)}</td><td class="num">${sign}${money(x.base)}</td><td class="num">${sign}${money(x.hst)}</td><td class="num">${sign}${money(x.total)}</td></tr>`;
+  }).join("");
   const cap = a.capReachedOnThisDeal
     ? "Annual cap reached on this deal: 100% split thereafter."
     : a.capRemainingAfter === null ? "No annual cap." : `Remaining to cap after this deal: ${money(a.capRemainingAfter)}.`;
   return `
   <div class="statement">
     <h3>${esc(a.name)}${a.isPrec ? ` <span class="tag">PREC</span>` : ""}</h3>
-    <p class="meta">Payee: <strong>${esc(a.payeeName)}</strong> · HST ${a.hstNumber ? `Reg. ${esc(a.hstNumber)}` : "not registered (no HST charged on split)"}
+    <p class="meta">Payee: <strong>${esc(a.payeeName)}</strong> · ${tax} ${a.hstNumber ? `Reg. ${esc(a.hstNumber)}` : `not registered (no ${tax} charged on split)`}
       · Share of deal GCI ${money(a.allocatedBaseGci)} · Effective split ${pct(a.effectiveSplitBps)}</p>
     <table>
-      <thead><tr><th></th><th class="num">Base</th><th class="num">HST ${pct(rate)}</th><th class="num">Total</th></tr></thead>
+      <thead><tr><th></th><th class="num">Base</th><th class="num">${tax} ${pct(rate)}</th><th class="num">Total</th></tr></thead>
       <tbody>
         ${taxedRow("Agent base split", a.split)}
         ${feeRows}
+        ${adjustmentRows}
         <tr class="total"><td>Net agent payout</td><td class="num">${money(a.net.base)}</td><td class="num">${money(a.net.hst)}</td><td class="num">${money(a.payout)}</td></tr>
       </tbody>
     </table>
@@ -81,7 +92,8 @@ function agentStatement(a: AgentClosingLine, rate: number, brokerageName: string
 
 export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaRenderOptions): string {
   const d = c.deal;
-  const address = `${d.unit ? `${d.unit} – ` : ""}${d.streetAddress}, ${d.city}, Ontario`;
+  const tax = c.taxName ?? "HST";
+  const address = `${d.unit ? `${d.unit} – ` : ""}${d.streetAddress}, ${d.city}, ${PROVINCES[d.province ?? "ON"] ?? d.province}`;
   const toLawyer = c.payer.kind === "SELLER_LAWYER";
   const appliesDeposit = c.trust.distributions.length > 0 || (toLawyer && d.trustDepositHolder === "OUR_BROKERAGE");
   const dueLabel = c.trust.balanceDueToLawyer > 0 ? "Balance due TO lawyer" : toLawyer ? "Balance due FROM lawyer" : "Amount due from listing brokerage";
@@ -114,7 +126,7 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
   const internal = opts.audience === "internal" ? `
   <section class="page-break">
     <h2>5. Agent commission statements <span class="tag internal">Internal – do not send</span></h2>
-    ${c.agents.map((a) => agentStatement(a, c.hstRate, b.legalName)).join("")}
+    ${c.agents.map((a) => agentStatement(a, c.hstRate, b.legalName, c.taxName ?? "HST")).join("")}
     <h3>Brokerage</h3>
     <table>
       <tbody>
@@ -219,7 +231,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
   <section>
     <h2>1. Commission payable on closing</h2>
     <table>
-      <thead><tr><th>Item</th><th class="num">Base</th><th class="num">HST ${pct(c.hstRate)}</th><th class="num">Total</th></tr></thead>
+      <thead><tr><th>Item</th><th class="num">Base</th><th class="num">${tax} ${pct(c.hstRate)}</th><th class="num">Total</th></tr></thead>
       <tbody>
         ${taxedRow(`Commission – ${b.legalName}`, c.incoming.commission)}
         ${c.incoming.coop.total > 0 ? taxedRow("Co-operating brokerage commission", c.incoming.coop, "Payable to the co-operating brokerage through the listing brokerage") : ""}
@@ -279,7 +291,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
     <h2>Authorization</h2>
     <p>${esc(b.legalName)} authorizes and directs ${esc(c.payer.name)} to pay the commission set out above on closing,
       as shown in section 4${c.trust.balanceDueToLawyer > 0 ? `, and will remit ${money(c.trust.balanceDueToLawyer)} from its trust account as shown in section 3` : ""}.
-      Amounts include HST at ${pct(c.hstRate)}. This authorization replaces any earlier version for this transaction.</p>
+      Amounts include ${tax} at ${pct(c.hstRate)}. This authorization replaces any earlier version for this transaction.</p>
     <div class="sign">
       <div>${esc(b.brokerOfRecord)}, Broker of Record – signature and date</div>
       <div>${toLawyer ? `Seller(s) acknowledgment – ${esc(d.sellers.join(", ") || "signature")}` : `Received by ${esc(c.payer.name)}`}</div>

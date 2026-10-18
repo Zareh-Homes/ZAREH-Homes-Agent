@@ -1,7 +1,9 @@
 /**
  * Closing calculator: turns a closed deal into the numbers on a Commission
  * Disbursement Authorization (CDA). Pure: no database, no clock. All money is
- * integer cents; HST is 13% (Ontario) unless told otherwise.
+ * integer cents. The sales tax rate comes in with the deal (the property's
+ * province on the close date, from SalesTaxRate); there is no default. The
+ * formulas below show 13% (Ontario HST) as the example.
  *
  * ── The algorithm ──────────────────────────────────────────────────────────
  *
@@ -16,6 +18,8 @@
  *       Aᵢ  = agent base split of Bᵢ (deal split %, capped by the plan's annual cap)
  *       Fᵢ  = Σ plan fees
  *       Payoutᵢ = (Aᵢ + 13% HST) − (Fᵢ + 13% HST)    HST on Aᵢ only if the agent is HST-registered
+ *                 + bonuses (+ HST if taxable and the agent is registered)
+ *                 − deductions (+ HST if taxable) − recoveries of earlier overpayments (no HST)
  *       P   = Σ Payoutᵢ
  *
  *  3. Brokerage side of the money
@@ -41,7 +45,6 @@
 import {
   applyRate,
   calculateCommission,
-  ONTARIO_HST,
   type CommissionBreakdown,
 } from "../../../commission-engine/src/commission.ts";
 import { DomainError } from "../errors.ts";
@@ -68,6 +71,11 @@ export interface ClosingAgentInput {
   fees: { name: string; amount: Cents }[];
   ytdHouseCollected: Cents; // house share already collected this cap year
   hasPlan: boolean;
+  /** Approved bonuses, deductions and recoveries for this agent on this deal */
+  adjustments?: { id: string; kind: "BONUS" | "DEDUCTION" | "RECOVERY"; description: string; amount: Cents; taxable: boolean }[];
+  /** The plan version in force on the close date, and its standard split, for the record */
+  planVersionId?: string | null;
+  planSplitBps?: number | null;
 }
 
 export interface ClosingInput {
@@ -80,6 +88,7 @@ export interface ClosingInput {
     streetAddress: string;
     unit: string | null;
     city: string;
+    province?: string;
     mlsNumber: string | null;
     salePrice: Cents;
     expectedDeposit: Cents;
@@ -91,7 +100,9 @@ export interface ClosingInput {
   coopCommission: Cents;
   coopBrokerage: string | null;
   referral: { payee: string; rateBps: number } | null;
+  /** GST/HST for the property's province on the close date. Required: no default rate. */
   hstRate?: number;
+  taxName?: "HST" | "GST";
   agents: ClosingAgentInput[];
   closingLawyer: Contact | null;
   trust: {
@@ -124,8 +135,10 @@ export interface AgentClosingLine {
   fees: (Taxed & { name: string })[];
   feesTotal: Taxed;
   net: Taxed;
-  payout: Cents; // (split + HST) − (fees + HST)
+  payout: Cents; // (split + HST) − (fees + HST) ± adjustments
   owes: Cents;
+  adjustments: (Taxed & { id: string; kind: "BONUS" | "DEDUCTION" | "RECOVERY"; description: string; signedTotal: Cents })[];
+  planVersionId: string | null;
   houseSplitBase: Cents;
   effectiveSplitBps: number;
   capReachedOnThisDeal: boolean;
@@ -151,6 +164,7 @@ export interface Wire {
 export interface ClosingComputation {
   cdaNumber: string;
   hstRate: number;
+  taxName: "HST" | "GST";
   deal: ClosingInput["deal"];
   payer: { kind: "SELLER_LAWYER" | "COOPERATING_BROKERAGE"; name: string };
   closingLawyer: Contact | null;
@@ -208,8 +222,12 @@ function allocate(total: Cents, agents: ClosingAgentInput[]): Cents[] {
 }
 
 export function computeClosing(input: ClosingInput, brokerageName: string): ClosingComputation {
-  const rate = input.hstRate ?? ONTARIO_HST;
   const { deal } = input;
+  if (input.hstRate === undefined) {
+    throw new ClosingAuditError("TAX_RATE_UNKNOWN", `No GST/HST rate on file for the property's province on ${deal.closeDate}`);
+  }
+  const rate = input.hstRate;
+  const taxName = input.taxName ?? "HST";
   const warnings: string[] = [];
 
   // ── Safety audit 1: FINTRAC ─────────────────────────────────────────────
@@ -262,7 +280,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
 
   // ── 2. Agents, through the commission engine ─────────────────────────────
   const allocations = allocate(input.baseGci, input.agents);
-  const runs: { agent: ClosingAgentInput; base: Cents; r: CommissionBreakdown }[] = input.agents.map((agent, i) => {
+  const runs = input.agents.map((agent, i) => {
     if (!agent.hasPlan) warnings.push(`NO_COMMISSION_PLAN:${agent.name}`);
     const r = calculateCommission({
       baseGci: allocations[i]!,
@@ -273,14 +291,33 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       fees: agent.fees.map((f) => ({ name: f.name, amount: f.amount, paidBy: "AGENT" as const })),
       referral: input.referral ? { payee: input.referral.payee, rate: input.referral.rateBps } : null,
     });
-    if (r.agent.owes > 0) warnings.push(`AGENT_OWES_FEES:${agent.name}`);
     if (!agent.hstNumber) warnings.push(`AGENT_NOT_HST_REGISTERED:${agent.name}`);
-    return { agent, base: allocations[i]!, r };
+    if (agent.planSplitBps != null && agent.planSplitBps !== agent.splitBps) {
+      warnings.push(`SPLIT_DIFFERS_FROM_PLAN:${agent.name}:${agent.splitBps / 100}% on the deal, ${agent.planSplitBps / 100}% in the plan`);
+    }
+    // Bonuses and deductions on top of the engine's split and fees
+    const adjustments = (agent.adjustments ?? []).map((a) => {
+      const hst = a.kind === "RECOVERY" || !a.taxable ? 0
+        : a.kind === "BONUS" ? (agent.hstNumber ? applyRate(a.amount, rate) : 0)
+        : applyRate(a.amount, rate);
+      const total = a.amount + hst;
+      return { id: a.id, kind: a.kind, description: a.description, base: a.amount, hst, total, signedTotal: a.kind === "BONUS" ? total : -total };
+    });
+    const net = r.agent.payout - r.agent.owes + adjustments.reduce((s, a) => s + a.signedTotal, 0);
+    const adjHst = adjustments.reduce((s, a) => s + (a.kind === "BONUS" ? a.hst : -a.hst), 0);
+    const adjBase = adjustments.reduce((s, a) => s + (a.kind === "BONUS" ? a.base : -a.base), 0);
+    const payout = Math.max(0, net);
+    const owes = Math.max(0, -net);
+    if (owes > 0) warnings.push(`AGENT_OWES_FEES:${agent.name}`);
+    return {
+      agent, base: allocations[i]!, r, adjustments, payout, owes,
+      net: { base: r.agent.net.base + adjBase, hst: r.agent.net.hst + adjHst, total: r.agent.net.total + adjBase + adjHst },
+    };
   });
-  const agentPayouts = runs.reduce((s, x) => s + x.r.agent.payout, 0); // P
+  const agentPayouts = runs.reduce((s, x) => s + x.payout, 0); // P
 
   // ── 3. Brokerage side ────────────────────────────────────────────────────
-  const agentNetHst = runs.reduce((s, x) => s + x.r.agent.net.hst, 0);
+  const agentNetHst = runs.reduce((s, x) => s + x.net.hst, 0);
   const earnedTotal = commission.total - agentPayouts; // T − P
   const earnedHst = commission.hst - agentNetHst;
   const netEarnedShare: Taxed = { base: earnedTotal - earnedHst, hst: earnedHst, total: earnedTotal };
@@ -297,6 +334,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     commission.hst
     + runs.reduce((s, x) => s + x.r.agent.feesTotal.hst, 0)
     - runs.reduce((s, x) => s + x.r.agent.split.hst, 0)
+    - runs.reduce((s, x) => s + x.adjustments.reduce((t, a) => t + (a.kind === "BONUS" ? a.hst : -a.hst), 0), 0) // HST paid on bonuses, less HST charged on deductions
     - (referral?.hst ?? 0);
 
   // ── 4. Deposit held in trust ─────────────────────────────────────────────
@@ -375,7 +413,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   }
 
   // ── 5. One payment from the payer, to the brokerage ─────────────────────
-  const agents: AgentClosingLine[] = runs.map(({ agent, base, r }) => {
+  const agents: AgentClosingLine[] = runs.map(({ agent, base, r, adjustments, payout, owes, net }) => {
     return {
       userId: agent.userId,
       name: agent.name,
@@ -386,9 +424,11 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       split: r.agent.split,
       fees: r.agent.fees,
       feesTotal: r.agent.feesTotal,
-      net: r.agent.net,
-      payout: r.agent.payout,
-      owes: r.agent.owes,
+      net,
+      payout,
+      owes,
+      adjustments,
+      planVersionId: agent.planVersionId ?? null,
       houseSplitBase: r.brokerage.split,
       effectiveSplitBps: r.agent.effectiveSplitRate,
       capReachedOnThisDeal: r.cap.reachedOnThisDeal,
@@ -419,6 +459,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   return {
     cdaNumber: `CDA-${deal.dealNumber}`,
     hstRate: rate,
+    taxName,
     deal,
     payer,
     closingLawyer: input.closingLawyer,

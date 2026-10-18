@@ -12,7 +12,7 @@ import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { attestCleared, attestedObligations, designateBroker, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
+import { approvedPlan, attestCleared, attestedObligations, designateBroker, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-12-01";
@@ -38,12 +38,7 @@ describe("closing and CDA API", { skip }, () => {
     u.agent = await make("AGENT", {
       isPrec: true, precLegalName: "Jane Smith Real Estate Professional Corporation", hstNumber: "123456789RT0001",
     });
-    await prisma.commissionPlan.create({
-      data: {
-        userId: u.agent, annualCap: "15000",
-        fees: { create: [{ name: "Deal fee", amount: "150" }, { name: "Desk fee", amount: "50" }] },
-      },
-    });
+    await approvedPlan(prisma, u.agent, { annualCap: "15000", fees: [{ name: "Deal fee", amount: "150.00" }, { name: "Desk fee", amount: "50.00" }] });
     account = (await prisma.trustAccount.create({ data: { name: "Trust", bankName: "TD", accountLast4: "4821" } })).id;
     operating = (await prisma.operatingAccount.create({ data: { name: "General", bankName: "TD", accountLast4: "1177" } })).id;
     await attestedObligations(prisma, operating, TODAY);
@@ -412,5 +407,84 @@ describe("closing and CDA API", { skip }, () => {
     } finally {
       await policy(false);
     }
+  });
+  test("plans are effective-dated, approved by a second broker, and can't reach back into an issued CDA", async () => {
+    let code = "no error";
+    try {
+      await prisma.$executeRaw`INSERT INTO "CommissionPlan" (id, "userId", "updatedAt") VALUES (gen_random_uuid(), ${u.agent}::uuid, now())`;
+    } catch (err) {
+      code = fromDatabaseError(err)?.code ?? "other";
+    }
+    assert.equal(code, "APPEND_ONLY"); // the old one-row plan is history
+
+    const broker2 = (await prisma.user.create({ data: { email: `b2-${randomUUID()}@zareh.test`, firstName: "Second", lastName: "Broker", role: "MANAGING_BROKER" } })).id;
+    const propose = (effectiveFrom: string, user = u.broker) => as(user, "POST", `/api/agents/${u.agent}/commission-plans`, {
+      effectiveFrom, splitPct: 85, annualCap: "12000", fees: [{ name: "Deal fee", amount: "175.00" }], reason: "2027 plan renewal",
+    });
+    assert.equal((await propose("2027-01-01", u.agent)).statusCode, 403);
+    // Before the agent's issued closings (Nov 30): proposing is fine, approving isn't
+    const back = await propose("2026-11-15");
+    assert.equal(back.statusCode, 201, back.body);
+    const backId = back.json().versions.find((v: { effectiveFrom: string }) => v.effectiveFrom === "2026-11-15").id;
+    assert.match((await as(broker2, "POST", `/api/commission-plans/${backId}/approve`, {})).json().error.message, /already issued for a closing on 2026-11-30/);
+
+    const next = await propose("2027-01-01");
+    const nextId = next.json().versions.find((v: { effectiveFrom: string }) => v.effectiveFrom === "2027-01-01").id;
+    assert.equal((await as(u.broker, "POST", `/api/commission-plans/${nextId}/approve`, {})).statusCode, 403); // proposer can't approve
+    const approved = await as(broker2, "POST", `/api/commission-plans/${nextId}/approve`, {});
+    assert.equal(approved.statusCode, 200, approved.body);
+    const versions = approved.json().versions.map((v: { effectiveFrom: string; status: string }) => [v.effectiveFrom, v.status]);
+    assert.deepEqual(versions, [["2020-01-01", "APPROVED"], ["2026-11-15", "PROPOSED"], ["2027-01-01", "APPROVED"]]);
+    assert.notEqual(approved.json().inForceToday, nextId); // today is 2026-12-01
+    let edit = "no error";
+    try {
+      await prisma.$executeRaw`UPDATE "CommissionPlanVersion" SET "annualCap" = 1 WHERE id = ${nextId}::uuid`;
+    } catch (err) {
+      edit = fromDatabaseError(err)?.code ?? "other";
+    }
+    assert.equal(edit, "APPEND_ONLY");
+  });
+
+  test("bonuses, deductions and recoveries: approved by a second person, on the CDA, locked once it's issued", async () => {
+    const dealId = await torontoListing({ deposit: 40_000 });
+    await close(dealId);
+    const recovery = await as(u.broker, "POST", "/api/agent-recoveries", {
+      userId: u.agent, amount: "1000.00", reason: "COMMISSION_RECALLED", note: "Deal 2026-0011 commission wire recalled after payout",
+    });
+    assert.equal(recovery.statusCode, 201, recovery.body);
+    const add = (body: object, user = u.admin) => as(user, "POST", `/api/deals/${dealId}/commission-adjustments`, { userId: u.agent, ...body });
+    assert.equal((await add({ kind: "BONUS", description: "x", amount: "1.00" }, u.agent)).statusCode, 403);
+    await add({ kind: "BONUS", description: "Top producer bonus", amount: "500.00", taxable: true });
+    await add({ kind: "DEDUCTION", description: "Feature sheet printing", amount: "100.00", taxable: true });
+    const tooMuch = await add({ kind: "RECOVERY", description: "Recalled commission", amount: "1500.00", recoveryId: recovery.json().id });
+    assert.match(tooMuch.json().error.message, /more than is still owed/);
+    const listed = (await add({ kind: "RECOVERY", description: "Recalled commission (part)", amount: "400.00", recoveryId: recovery.json().id })).json();
+    const before = (await as(u.broker, "GET", `/api/deals/${dealId}/closing`)).json().computation.agents[0];
+    assert.equal(before.adjustments.length, 0); // not approved yet: not on the CDA
+    const approve = (id: string, user = u.broker) => as(user, "POST", `/api/commission-adjustments/${id}/approve`, {});
+    assert.equal((await approve(listed[0].id, u.admin)).statusCode, 403);
+    for (const a of listed) assert.equal((await approve(a.id)).statusCode, 200);
+    const after = (await as(u.broker, "GET", `/api/deals/${dealId}/closing`)).json().computation.agents[0];
+    assert.equal(after.payout, before.payout + 56_500 - 11_300 - 40_000);
+
+    assert.equal((await finalize(dealId)).statusCode, 201);
+    const locked = await add({ kind: "BONUS", description: "Late bonus", amount: "50.00" });
+    assert.match(locked.json().error.message, /CDA is issued; void and reissue/);
+    const rec = (await as(u.broker, "GET", `/api/agent-recoveries/${recovery.json().id}`)).json();
+    assert.equal(rec.outstanding, "600.00");
+    assert.match((await as(u.admin, "POST", `/api/agent-recoveries/${rec.id}/repayments`, { amount: "700.00", paidDate: TODAY, reference: "E-TRANSFER 55" })).json().error.message, /more than is still owed/);
+    const repaid = await as(u.admin, "POST", `/api/agent-recoveries/${rec.id}/repayments`, { amount: "600.00", paidDate: TODAY, reference: "E-TRANSFER 55" });
+    assert.equal(repaid.json().outstanding, "0.00");
+  });
+
+  test("tax follows the property's province and the close date; no rate on file means no CDA", async () => {
+    const ns = await torontoListing({});
+    await prisma.transaction.update({ where: { id: ns }, data: { province: "NS", city: "Halifax" } });
+    const c = (await as(u.broker, "GET", `/api/deals/${ns}/closing`)).json().computation;
+    assert.deepEqual([c.hstRate, c.taxName, c.incoming.commission.hst], [1400, "HST", 385_000]);
+    const old = await torontoListing({});
+    await prisma.transaction.update({ where: { id: old }, data: { province: "BC", closeDate: new Date("2024-06-30") } });
+    const res = await as(u.broker, "GET", `/api/deals/${old}/closing`);
+    assert.equal(res.json().error.code, "TAX_RATE_UNKNOWN");
   });
 });
