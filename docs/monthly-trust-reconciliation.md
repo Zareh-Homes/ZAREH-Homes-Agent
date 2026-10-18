@@ -1,47 +1,113 @@
-# Monthly trust reconciliation
+# Trust money controls and the monthly reconciliation
 
-How the deals department and the broker of record close each month on the trust account (O. Reg. 579/05 s.13).
+How the deals department and the broker of record handle trust money, commission and the monthly reconciliation (O. Reg. 579/05 s.13 and s.14). Nothing here moves money or contacts RECO. The system records, checks and blocks.
 
-## The rule the system enforces
+## Roles
 
-**Money only leaves trust once the bank shows it arrived.** A deposit entered in the ledger is not proof of money. Until the deposit is matched to a line on an imported bank statement:
+- **Broker of record or designated substitute.** This is a recorded designation, not a permission (`POST /api/broker-of-record`). Someone other than the designee records it, with the supporting reference. Only a designated person can:
+  - sign a reconciliation
+  - attest pre-cutover history
+  - record that the registrar was notified, a replenishment, or a resolution
+  - turn a financial policy on or off
+- **Managing broker** authorizes trust movements and approves payouts.
+- **Admin (deals department)** imports bank files, matches lines, records commission received, prepares reconciliations and records payments.
+- **Two people, not one.** The database refuses one person doing both halves of each pair below, unless the sole-operator exception has been signed off. Even then, each use needs a reason and is flagged.
+  - import a bank file / verify it
+  - record or match a commission / approve its payout
+  - approve a payout / record its payment
+  - prepare a reconciliation / sign it
 
-- no trust release, refund or closing distribution can be paid against it
-- the pipeline shows **Received – not yet cleared** instead of **Deposit Received & Cleared**
+## Accounts
 
-The same goes for commission. An agent payout can only be approved once the commission receipt is matched to the operating (general) account statement.
+| Kind | What it holds |
+|---|---|
+| Real estate trust | Deposits, per deal. The only account the deal trust ledger uses. Reconciled monthly under s.13. |
+| Commission trust | Commission held for payout, if the brokerage uses one. Each closing's money stays separate. |
+| Operating (general) | Brokerage money. Commission is received here unless a commission trust account is used. |
+
+Commission is never received into the real estate trust account, and payouts never come straight from it.
+
+## Bank evidence
+
+A recorded deposit or commission is not proof of money. Evidence is a line on a bank file that **a second person has verified against the bank itself** (portal or statement).
+
+- **Monthly statement** (`kind: MONTHLY`):
+  - Must be the statement for the exact period, with the opening and closing balances printed on it, and the **date the brokerage received it**.
+  - Periods must be consecutive, each opening balance must equal the previous closing balance, and the lines must add up.
+- **Interim bank record** (`kind: INTERIM`): today's activity and current balance, downloaded from the bank between statements.
+  - Lets a commission be verified, and funds shown to be available, the day they arrive, so payouts don't wait for the month end.
+  - Interim files may overlap; a line already imported is skipped.
+  - Interim records never replace the monthly statement.
+- **Every import records** where the file came from (portal download, bank email, paper statement, other with a note), who imported it, and its hash. The same file can't be imported twice.
+
+## What blocks money
+
+- **Trust release, refund or closing distribution:** only against deposits matched to verified bank evidence.
+- **Agent, co-op or referral payout:** approval needs all of the following, checked by the database:
+  - the commission received in full, not reversed, and matched to verified bank evidence
+  - an approver who didn't record or match the commission
+  - a verified balance for the paying account no more than 3 days old, covering this payout plus everything already approved or paid from that account since the balance was taken
+- **Co-op brokerage and referral payables:** disabled until the `THIRD_PARTY_PAYABLES` policy is signed off by counsel and the accountant.
 
 ## Each month
 
-1. **Download the statement CSV** from the bank for the exact statement period (for example Oct 1 to Oct 31).
-2. **Import it** (`POST /api/bank/statements`) with the period and the opening and closing balances printed on the statement.
-   - Statements must be consecutive. Each opening balance must equal the previous closing balance, and the lines must add up. Otherwise the import is refused, and the error says why.
-   - Dates are read as MM/DD/YYYY unless you say otherwise (`dateOrder`).
-3. **Check the matches.** Most lines match automatically: same amount, close date, and the bank reference if there is one. When two entries could fit, nothing is guessed. Match those by hand (`POST /api/bank/matches`).
-   - Any money leaving trust that the ledger doesn't explain alerts every managing broker on import.
-4. **Prepare the reconciliation** (`POST /api/trust/reconciliations`). Admin or broker can do this. It records:
-   - the bank balance, adjusted for deposits in transit and cheques not yet cashed
-   - the trust ledger balance
-   - the total owed, deal by deal
-   - every outstanding item, every bank item missing from the ledger, deposits still not at the bank after 5 business days, and any overdrawn deal
-5. **Deal with exceptions.** A fee or returned deposit at the bank is a **shortfall**, never netted away. Record it in the ledger (for example, reverse a returned deposit on the date the bank took it), make the account whole, then prepare again. If something can't be resolved, prepare again with an explanation.
-6. **Broker of record signs** (`POST /api/trust/reconciliations/:id/sign`). Only a managing broker can sign:
+1. **Import the monthly trust statement** with the date it was received. **The 30-day clock starts on that date.** If no statement arrives, the deadline is 30 days after month end, and the dashboard shows the month as missing.
+2. **A second person verifies it** against the bank (`POST /api/bank/statements/:id/verify`).
+3. **Check the matches.** When two entries could fit, nothing is guessed; match those by hand.
+4. **Prepare the reconciliation.** It shows:
+   - the bank balance, adjusted for deposits in transit and uncashed cheques
+   - the ledger balance
+   - the amount owed, deal by deal
+   - every outstanding item, every bank item missing from the ledger, stale deposits and overdrawn deals
+5. **Deal with exceptions.** A bank item missing from the ledger explains a difference but never cancels it.
+6. **Broker of record signs** within the deadline:
+   - The statement must be verified first.
    - Months are signed in order.
-   - Only the latest version for a statement can be signed.
-   - Anything with exceptions needs an explanation first.
-   - Once signed, the reconciliation can't be changed, even directly in the database.
+   - A month that doesn't balance **can still be signed on time**, with an explanation, as long as its shortfall has a trust incident. Signing doesn't resolve anything: the reconciliation shows "signed with discrepancy" and the incident stays open.
 
-**Deadline:** within 30 days of the statement date. The broker dashboard shows months awaiting signature and flags overdue ones.
+## Shortfalls (s.14)
+
+When a reconciliation shows the bank holding less than clients are owed (or a deal is overdrawn), the system opens a **trust incident** and alerts every managing broker. The brokerage must then, immediately:
+
+1. **Notify the RECO registrar.** Record when, how and the reference: `REGISTRAR_NOTIFIED`.
+2. **Deposit enough brokerage money to eliminate the shortfall.** Record the amount and bank reference: `REPLENISHED`.
+3. **Resolve the incident.** Only allowed once both are recorded, or once a later balanced reconciliation shows the "shortfall" was a ledger error, such as an unrecorded returned deposit.
+
+Discrepancies that aren't shortfalls get their own incident, so nothing is lost.
+
+## Corrections
+
+- **Commission receipt reversed** (wire recalled): blocks any further approval. A payout already paid is flagged for recovery.
+- **Agent payment returned:** recorded, then paid again under the same approval, or the approval is cancelled.
+- **Wrong CDA:** void it with a reason, correct the deal, and finalize again. The voided CDA, its approvals and its payments stay on record. Payments already made carry forward. If the correction changes what trust paid out, reverse those distributions first.
 
 ## Cutover from Lone Wolf
 
-History from before the first imported statement can't be matched to statement lines that don't exist. The Lone Wolf migration records the managing broker's **pre-cutover attestation** for each migrated entry instead. Once a statement is imported for an account, nothing dated inside that period can be attested; it has to be matched.
+The migration records the broker of record's **pre-cutover attestation** for migrated history. Import the first real statement right after cutover; the first reconciliation is the real check.
 
-- Import the first statement right after cutover.
-- The first reconciliation is the real check: the bank balance must tie to the migrated ledger.
+## Deployment: the application's database login
 
-## Still to come
+Run the application as a login role that is a member of `zareh_app`, never as the table owner:
 
-The **RECO annual financial filing** will be built from these signed monthly reconciliations (trust liabilities at year end, unclaimed funds, broker attestation).
+```sql
+CREATE ROLE zareh_app_prod LOGIN PASSWORD '…' IN ROLE zareh_app;
+```
 
-Have your accountant review this process before it goes live.
+`zareh_app` can't:
+
+- update or delete the financial record
+- truncate tables
+- alter tables
+- disable triggers
+
+Run migrations as the owner. **Every future migration that adds a table must grant it to `zareh_app` explicitly**, as migration 009 does.
+
+## Needs sign-off before live use
+
+Listed in the latest money-controls review. In short:
+
+- the commission trust account and co-op/referral routing
+- the sole-operator exception
+- the pre-cutover attestation
+- the matching windows and the 3-day balance freshness
+- the treatment of bank fees in trust

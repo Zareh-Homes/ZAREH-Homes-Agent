@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient, type DealStatus, type DepositHolder } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
-import { attestCleared, TEST_BROKERAGE } from "./fixtures.ts";
+import { attestCleared, designateBroker, TEST_BROKERAGE } from "./fixtures.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 
@@ -31,6 +31,7 @@ describe("trust ledger API", { skip }, () => {
         data: { email: `${role.toLowerCase()}-${randomUUID()}@zareh.test`, firstName: role, lastName: "Test", role },
       })).id;
     users.broker = await make("MANAGING_BROKER");
+    await designateBroker(app, prisma, users.broker);
     users.admin = await make("ADMIN");
     users.reviewer = await make("COMPLIANCE_ADMIN");
     users.agent = await make("AGENT");

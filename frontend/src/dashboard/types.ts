@@ -26,9 +26,12 @@ export interface BrokerageDashboard {
     reconciliations: {
       trustAccountId: string;
       name: string;
+      kind: "REAL_ESTATE_TRUST" | "COMMISSION_TRUST";
       lastStatementEnd: string | null;
       lastSignedPeriodEnd: string | null;
-      awaitingSignature: { periodEnd: string; dueBy: string; overdue: boolean }[];
+      awaitingSignature: { periodEnd: string; received: string | null; dueBy: string; overdue: boolean }[];
+      missingStatements: { month: string; dueBy: string; overdue: boolean }[];
+      openIncidents: { id: string; kind: "SHORTFALL" | "DISCREPANCY"; amount: string; detectedAt: string }[];
     }[];
   };
   complianceQueue: (DealRef & {

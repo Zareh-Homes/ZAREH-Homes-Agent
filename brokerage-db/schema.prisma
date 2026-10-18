@@ -173,23 +173,31 @@ model User {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  listings                Listing[]             @relation("ListingAgent")
+  listings                Listing[]                   @relation("ListingAgent")
   dealAgents              TransactionAgent[]
-  reviewedDocuments       DocumentSlot[]        @relation("Reviewer")
+  reviewedDocuments       DocumentSlot[]              @relation("Reviewer")
   uploadedFiles           DocumentFile[]
-  documentReviews         DocumentReview[]      @relation("DocumentReviewer")
+  documentReviews         DocumentReview[]            @relation("DocumentReviewer")
   notifications           Notification[]
   commissionPlan          CommissionPlan?
-  closingsFinalized       ClosingStatement[]    @relation("ClosingFinalizedBy")
+  closingsFinalized       ClosingStatement[]          @relation("ClosingFinalizedBy")
   closingPayouts          ClosingAgentPayout[]
   commissionReceipts      CommissionReceipt[]
-  payoutEvents            AgentPayoutEvent[]
-  trustEntriesMade        TrustLedgerEntry[]    @relation("EnteredBy")
-  trustEntriesSigned      TrustLedgerEntry[]    @relation("AuthorizedBy")
-  trustHoldsFlagged       TrustHold[]           @relation("HoldFlaggedBy")
-  trustHoldsReleased      TrustHold[]           @relation("HoldReleasedBy")
-  reconciliationsPrepared TrustReconciliation[] @relation("ReconciliationPreparedBy")
-  reconciliationsSigned   TrustReconciliation[] @relation("ReconciliationSignedBy")
+  payoutEvents            PayoutEvent[]
+  receiptReversals        CommissionReceiptReversal[]
+  closingVoids            ClosingVoid[]
+  statementVerifications  BankStatementVerification[]
+  designations            BrokerOfRecordDesignation[] @relation("Designated")
+  designationsRecorded    BrokerOfRecordDesignation[] @relation("DesignationRecordedBy")
+  policyDecisions         FinancialPolicyDecision[]
+  incidentsDetected       TrustIncident[]
+  incidentEvents          TrustIncidentEvent[]
+  trustEntriesMade        TrustLedgerEntry[]          @relation("EnteredBy")
+  trustEntriesSigned      TrustLedgerEntry[]          @relation("AuthorizedBy")
+  trustHoldsFlagged       TrustHold[]                 @relation("HoldFlaggedBy")
+  trustHoldsReleased      TrustHold[]                 @relation("HoldReleasedBy")
+  reconciliationsPrepared TrustReconciliation[]       @relation("ReconciliationPreparedBy")
+  reconciliationsSigned   TrustReconciliation[]       @relation("ReconciliationSignedBy")
   bankStatements          BankStatement[]
   bankMatches             BankMatch[]
   auditLogs               AuditLog[]
@@ -274,7 +282,7 @@ model Transaction {
   parties       TransactionParty[]
   trustEntries  TrustLedgerEntry[]
   trustHolds    TrustHold[]
-  closing       ClosingStatement?
+  closings      ClosingStatement[]
   documentSlots DocumentSlot[]
 
   @@index([status])
@@ -326,16 +334,25 @@ model TransactionParty {
 // ─────────────────────────────────────────────
 
 model TrustAccount {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String           @id @default(uuid()) @db.Uuid
   name         String // e.g. "Real Estate Trust – TD"
   bankName     String
   accountLast4 String
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  isActive     Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  kind         TrustAccountKind @default(REAL_ESTATE_TRUST) // migration 009
 
-  entries         TrustLedgerEntry[]
-  reconciliations TrustReconciliation[]
-  bankStatements  BankStatement[]
+  entries            TrustLedgerEntry[]
+  reconciliations    TrustReconciliation[]
+  bankStatements     BankStatement[]
+  commissionReceipts CommissionReceipt[]
+  payoutEventsFrom   PayoutEvent[]
+  incidents          TrustIncident[]
+}
+
+enum TrustAccountKind {
+  REAL_ESTATE_TRUST
+  COMMISSION_TRUST
 }
 
 // Append-only. The database rejects every UPDATE, DELETE and TRUNCATE
@@ -366,7 +383,7 @@ model TrustLedgerEntry {
   transaction  Transaction       @relation(fields: [transactionId], references: [id])
   reverses     TrustLedgerEntry? @relation("Reversal", fields: [reversesEntryId], references: [id])
   reversedBy   TrustLedgerEntry? @relation("Reversal")
-  bankMatch    BankMatch?
+  bankMatches  BankMatch[]
   enteredBy    User              @relation("EnteredBy", fields: [enteredById], references: [id])
   authorizedBy User              @relation("AuthorizedBy", fields: [authorizedById], references: [id])
   holds        TrustHold[]
@@ -421,11 +438,15 @@ model TrustReconciliation {
   signedById               String?   @db.Uuid
   signedAt                 DateTime? @db.Timestamptz(6)
   signatureNote            String?
+  signSegregationException Boolean   @default(false)
+  signExceptionReason      String?
 
-  trustAccount TrustAccount  @relation(fields: [trustAccountId], references: [id])
-  statement    BankStatement @relation(fields: [statementId], references: [id])
-  preparedBy   User          @relation("ReconciliationPreparedBy", fields: [preparedById], references: [id])
-  signedBy     User?         @relation("ReconciliationSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
+  trustAccount   TrustAccount         @relation(fields: [trustAccountId], references: [id])
+  statement      BankStatement        @relation(fields: [statementId], references: [id])
+  preparedBy     User                 @relation("ReconciliationPreparedBy", fields: [preparedById], references: [id])
+  signedBy       User?                @relation("ReconciliationSignedBy", fields: [signedById], references: [id], onDelete: Restrict)
+  incidents      TrustIncident[]
+  incidentEvents TrustIncidentEvent[]
 
   @@index([trustAccountId, periodEnd])
 }
@@ -439,28 +460,36 @@ model OperatingAccount {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  bankStatements BankStatement[]
+  bankStatements     BankStatement[]
+  commissionReceipts CommissionReceipt[]
+  payoutEventsFrom   PayoutEvent[]
 }
 
 // A monthly bank statement imported from CSV. Consecutive, balanced, append-only (migration 008).
 model BankStatement {
-  id                 String   @id @default(uuid()) @db.Uuid
-  trustAccountId     String?  @db.Uuid
-  operatingAccountId String?  @db.Uuid
-  periodStart        DateTime @db.Date
-  periodEnd          DateTime @db.Date
-  openingBalance     Decimal  @db.Decimal(14, 2)
-  closingBalance     Decimal  @db.Decimal(14, 2)
+  id                 String        @id @default(uuid()) @db.Uuid
+  trustAccountId     String?       @db.Uuid
+  operatingAccountId String?       @db.Uuid
+  periodStart        DateTime      @db.Date
+  periodEnd          DateTime      @db.Date
+  openingBalance     Decimal?      @db.Decimal(14, 2) // required for MONTHLY
+  closingBalance     Decimal       @db.Decimal(14, 2) // for INTERIM: the balance as of periodEnd
   fileName           String
   fileSha256         String
-  importedById       String   @db.Uuid
-  importedAt         DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  importedById       String        @db.Uuid
+  importedAt         DateTime      @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  kind               StatementKind @default(MONTHLY) // migration 009
+  receivedDate       DateTime?     @db.Date // when the brokerage received it: starts the s.13 30-day clock
+  source             String? // BANK_PORTAL_DOWNLOAD, BANK_EMAIL, BANK_PAPER_STATEMENT, OTHER
+  sourceNote         String?
 
-  trustAccount     TrustAccount?         @relation(fields: [trustAccountId], references: [id], onDelete: Restrict)
-  operatingAccount OperatingAccount?     @relation(fields: [operatingAccountId], references: [id], onDelete: Restrict)
-  importedBy       User                  @relation(fields: [importedById], references: [id])
+  trustAccount     TrustAccount?              @relation(fields: [trustAccountId], references: [id], onDelete: Restrict)
+  operatingAccount OperatingAccount?          @relation(fields: [operatingAccountId], references: [id], onDelete: Restrict)
+  importedBy       User                       @relation(fields: [importedById], references: [id])
   lines            BankTransaction[]
   reconciliations  TrustReconciliation[]
+  verification     BankStatementVerification?
+  balanceFor       PayoutEvent[]
 
   @@index([trustAccountId, periodEnd])
   @@index([operatingAccountId, periodEnd])
@@ -474,9 +503,11 @@ model BankTransaction {
   amount      Decimal  @db.Decimal(14, 2) // + money in, − money out
   description String
   reference   String?
+  fingerprint String?  @unique // duplicate detection across overlapping interim records
 
-  statement BankStatement @relation(fields: [statementId], references: [id])
-  match     BankMatch?
+  statement      BankStatement        @relation(fields: [statementId], references: [id])
+  match          BankMatch?
+  incidentEvents TrustIncidentEvent[]
 
   @@unique([statementId, lineNumber])
 }
@@ -491,16 +522,128 @@ model BankMatch {
   id                  String         @id @default(uuid()) @db.Uuid
   basis               ClearanceBasis
   bankTransactionId   String?        @unique @db.Uuid
-  trustEntryId        String?        @unique @db.Uuid
-  commissionReceiptId String?        @unique @db.Uuid
+  trustEntryId        String?        @db.Uuid
+  commissionReceiptId String?        @db.Uuid
   note                String?
   matchedById         String         @db.Uuid
   matchedAt           DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  matchKind           StatementKind  @default(MONTHLY) // MONTHLY reconciles and clears; INTERIM clears until the statement arrives
 
   bankTransaction   BankTransaction?   @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
   trustEntry        TrustLedgerEntry?  @relation(fields: [trustEntryId], references: [id], onDelete: Restrict)
   commissionReceipt CommissionReceipt? @relation(fields: [commissionReceiptId], references: [id], onDelete: Restrict)
   matchedBy         User               @relation(fields: [matchedById], references: [id])
+
+  @@unique([trustEntryId, matchKind])
+  @@unique([commissionReceiptId, matchKind])
+}
+
+enum StatementKind {
+  MONTHLY
+  INTERIM
+}
+
+// A second person checked the imported file against the bank itself (migration 009).
+model BankStatementVerification {
+  statementId          String   @id @db.Uuid
+  verifiedById         String   @db.Uuid
+  method               String // how it was checked, e.g. "Compared to TD EasyLine balance and activity"
+  segregationException Boolean  @default(false)
+  exceptionReason      String?
+  verifiedAt           DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  statement  BankStatement @relation(fields: [statementId], references: [id])
+  verifiedBy User          @relation(fields: [verifiedById], references: [id])
+}
+
+enum BrokerDesignationRole {
+  BROKER_OF_RECORD
+  DESIGNATED_SUBSTITUTE
+}
+
+// Who legally acts as broker of record (or substitute), and when (migration 009).
+model BrokerOfRecordDesignation {
+  id            String                @id @default(uuid()) @db.Uuid
+  userId        String                @db.Uuid
+  role          BrokerDesignationRole
+  effectiveFrom DateTime              @db.Date
+  effectiveTo   DateTime?             @db.Date
+  reference     String // e.g. RECO registration confirmation
+  createdById   String                @db.Uuid
+  createdAt     DateTime              @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  user      User @relation("Designated", fields: [userId], references: [id])
+  createdBy User @relation("DesignationRecordedBy", fields: [createdById], references: [id])
+
+  @@index([userId])
+}
+
+// Switches for decisions that need counsel / accountant sign-off. Latest decision wins (migration 009).
+model FinancialPolicyDecision {
+  id          String   @id @default(uuid()) @db.Uuid
+  policy      String // SOLE_OPERATOR_EXCEPTION, THIRD_PARTY_PAYABLES
+  enabled     Boolean
+  reference   String // the sign-off it rests on
+  note        String?
+  decidedById String   @db.Uuid
+  decidedAt   DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  decidedBy User @relation(fields: [decidedById], references: [id])
+
+  @@index([policy, decidedAt])
+}
+
+enum TrustIncidentKind {
+  SHORTFALL
+  DISCREPANCY
+}
+
+enum TrustIncidentEventKind {
+  OBSERVED
+  NOTE
+  REGISTRAR_NOTIFIED
+  REPLENISHED
+  RESOLVED
+}
+
+// A trust shortfall (O. Reg. 579/05 s.14) or other discrepancy and everything done about it (migration 009).
+model TrustIncident {
+  id               String            @id @default(uuid()) @db.Uuid
+  trustAccountId   String            @db.Uuid
+  kind             TrustIncidentKind
+  summary          String
+  amount           Decimal           @db.Decimal(14, 2)
+  reconciliationId String?           @db.Uuid
+  detectedById     String            @db.Uuid
+  detectedAt       DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  trustAccount   TrustAccount         @relation(fields: [trustAccountId], references: [id])
+  reconciliation TrustReconciliation? @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  detectedBy     User                 @relation(fields: [detectedById], references: [id])
+  events         TrustIncidentEvent[]
+
+  @@index([trustAccountId, kind])
+}
+
+model TrustIncidentEvent {
+  id                String                 @id @default(uuid()) @db.Uuid
+  incidentId        String                 @db.Uuid
+  kind              TrustIncidentEventKind
+  eventDate         DateTime               @db.Date
+  amount            Decimal?               @db.Decimal(14, 2)
+  reference         String?
+  note              String?
+  reconciliationId  String?                @db.Uuid
+  bankTransactionId String?                @db.Uuid
+  actorId           String                 @db.Uuid
+  createdAt         DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  incident        TrustIncident        @relation(fields: [incidentId], references: [id])
+  reconciliation  TrustReconciliation? @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  bankTransaction BankTransaction?     @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  actor           User                 @relation(fields: [actorId], references: [id])
+
+  @@index([incidentId, createdAt])
 }
 
 // ─────────────────────────────────────────────
@@ -667,7 +810,7 @@ model CommissionPlanFee {
 // that were issued. Append-only (migration 005).
 model ClosingStatement {
   id             String   @id @default(uuid()) @db.Uuid
-  transactionId  String   @unique @db.Uuid
+  transactionId  String   @db.Uuid
   cdaNumber      String   @unique
   computation    Json // full calculation, as issued
   computationSha String // SHA-256 of the computation JSON
@@ -677,10 +820,52 @@ model ClosingStatement {
   finalizedById  String   @db.Uuid
   finalizedAt    DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  transaction Transaction          @relation(fields: [transactionId], references: [id])
-  finalizedBy User                 @relation("ClosingFinalizedBy", fields: [finalizedById], references: [id])
-  payouts     ClosingAgentPayout[]
-  receipts    CommissionReceipt[]
+  revision     Int     @default(0) // 0 = first CDA; each reissue after a void adds one
+  supersedesId String? @unique @db.Uuid
+
+  transaction  Transaction          @relation(fields: [transactionId], references: [id])
+  finalizedBy  User                 @relation("ClosingFinalizedBy", fields: [finalizedById], references: [id])
+  payouts      ClosingAgentPayout[]
+  payables     ClosingPayable[]
+  receipts     CommissionReceipt[]
+  void         ClosingVoid?
+  supersedes   ClosingStatement?    @relation("Reissue", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy ClosingStatement?    @relation("Reissue")
+
+  @@unique([transactionId, revision])
+  @@index([transactionId])
+}
+
+// A finalized CDA withdrawn with a reason; its history stays (migration 009).
+model ClosingVoid {
+  closingId String   @id @db.Uuid
+  reason    String
+  actorId   String   @db.Uuid
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  closing ClosingStatement @relation(fields: [closingId], references: [id])
+  actor   User             @relation(fields: [actorId], references: [id])
+}
+
+enum PayableType {
+  COOP_BROKERAGE
+  REFERRAL
+}
+
+// Commission owed to another brokerage (co-op not paid from trust, or a referral) (migration 009).
+model ClosingPayable {
+  id             String      @id @default(uuid()) @db.Uuid
+  closingId      String      @db.Uuid
+  payeeType      PayableType
+  payeeName      String
+  amount         Decimal     @db.Decimal(12, 2) // incl. HST
+  hst            Decimal     @db.Decimal(12, 2)
+  carriedForward Decimal     @default(0) @db.Decimal(12, 2)
+
+  closing ClosingStatement @relation(fields: [closingId], references: [id])
+  events  PayoutEvent[]
+
+  @@index([closingId])
 }
 
 // One row per agent per finalized closing; also the source of cap year-to-date totals.
@@ -699,27 +884,33 @@ model ClosingAgentPayout {
   netPayout        Decimal  @db.Decimal(12, 2)
   wiredByLawyer    Decimal  @db.Decimal(12, 2) // always 0 since migration 006: payers never pay agents directly
   paidByBrokerage  Decimal  @db.Decimal(12, 2) // the whole payout, paid by the brokerage
+  carriedForward   Decimal  @default(0) @db.Decimal(12, 2) // already paid under a voided CDA
 
-  closing ClosingStatement   @relation(fields: [closingId], references: [id])
-  user    User               @relation(fields: [userId], references: [id])
-  events  AgentPayoutEvent[]
+  closing ClosingStatement @relation(fields: [closingId], references: [id])
+  user    User             @relation(fields: [userId], references: [id])
+  events  PayoutEvent[]
 
   @@index([userId, closeDate])
 }
 
 // Commission the brokerage actually received for a finalized closing. Append-only (migration 006).
 model CommissionReceipt {
-  id           String   @id @default(uuid()) @db.Uuid
-  closingId    String   @db.Uuid
-  amount       Decimal  @db.Decimal(12, 2)
-  receivedDate DateTime @db.Date
-  reference    String // bank reference for the incoming payment
-  recordedById String   @db.Uuid
-  recordedAt   DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  id                 String   @id @default(uuid()) @db.Uuid
+  closingId          String   @db.Uuid
+  amount             Decimal  @db.Decimal(12, 2)
+  receivedDate       DateTime @db.Date
+  reference          String // bank reference for the incoming payment
+  recordedById       String   @db.Uuid
+  recordedAt         DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  trustAccountId     String?  @db.Uuid // a commission trust account, or
+  operatingAccountId String?  @db.Uuid // the operating account
 
-  closing    ClosingStatement @relation(fields: [closingId], references: [id])
-  recordedBy User             @relation(fields: [recordedById], references: [id])
-  bankMatch  BankMatch?
+  closing          ClosingStatement           @relation(fields: [closingId], references: [id])
+  recordedBy       User                       @relation(fields: [recordedById], references: [id])
+  bankMatches      BankMatch[]
+  reversal         CommissionReceiptReversal?
+  trustAccount     TrustAccount?              @relation(fields: [trustAccountId], references: [id], onDelete: Restrict)
+  operatingAccount OperatingAccount?          @relation(fields: [operatingAccountId], references: [id], onDelete: Restrict)
 
   @@index([closingId])
 }
@@ -734,21 +925,50 @@ enum TaxAmountSource {
 enum PayoutEventKind {
   APPROVED
   PAID
+  PAYMENT_REVERSED
+  CANCELLED
 }
 
-// Broker approval, then payment, of an agent payout. Append-only (migration 006).
-model AgentPayoutEvent {
-  id        String          @id @default(uuid()) @db.Uuid
-  payoutId  String          @db.Uuid
-  kind      PayoutEventKind
-  actorId   String          @db.Uuid
-  eventDate DateTime        @db.Date
-  reference String? // payment reference, required for PAID
-  note      String?
-  createdAt DateTime        @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+// A recalled or bounced commission payment (migration 009).
+model CommissionReceiptReversal {
+  receiptId    String   @id @db.Uuid
+  reason       String
+  reversedDate DateTime @db.Date
+  reference    String?
+  actorId      String   @db.Uuid
+  createdAt    DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  payout ClosingAgentPayout @relation(fields: [payoutId], references: [id])
-  actor  User               @relation(fields: [actorId], references: [id])
+  receipt CommissionReceipt @relation(fields: [receiptId], references: [id])
+  actor   User              @relation(fields: [actorId], references: [id])
+}
 
-  @@unique([payoutId, kind])
+// The history of an agent payout or third-party payable: APPROVED → PAID → PAYMENT_REVERSED → PAID …,
+// or CANCELLED. Append-only; the last event is the current state (migrations 006, 009).
+model PayoutEvent {
+  id                        String          @id @default(uuid()) @db.Uuid
+  payoutId                  String?         @db.Uuid
+  kind                      PayoutEventKind
+  actorId                   String          @db.Uuid
+  eventDate                 DateTime        @db.Date
+  reference                 String? // payment reference, required for PAID
+  note                      String?
+  createdAt                 DateTime        @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  payableId                 String?         @db.Uuid
+  seq                       Int
+  amount                    Decimal?        @db.Decimal(12, 2)
+  payFromTrustAccountId     String?         @db.Uuid
+  payFromOperatingAccountId String?         @db.Uuid
+  balanceStatementId        String?         @db.Uuid // the verified bank balance the approval relied on
+  segregationException      Boolean         @default(false)
+  exceptionReason           String?
+
+  payout           ClosingAgentPayout? @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  payable          ClosingPayable?     @relation(fields: [payableId], references: [id], onDelete: Restrict)
+  actor            User                @relation(fields: [actorId], references: [id])
+  payFromTrust     TrustAccount?       @relation(fields: [payFromTrustAccountId], references: [id], onDelete: Restrict)
+  payFromOperating OperatingAccount?   @relation(fields: [payFromOperatingAccountId], references: [id], onDelete: Restrict)
+  balanceStatement BankStatement?      @relation(fields: [balanceStatementId], references: [id], onDelete: Restrict)
+
+  @@unique([payoutId, seq])
+  @@unique([payableId, seq])
 }

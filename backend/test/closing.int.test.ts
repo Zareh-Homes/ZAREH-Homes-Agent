@@ -12,7 +12,7 @@ import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { fromDatabaseError } from "../src/errors.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { attestCleared, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
+import { attestCleared, designateBroker, JPEG, multipart, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-12-01";
@@ -32,6 +32,7 @@ describe("closing and CDA API", { skip }, () => {
         data: { email: `${role.toLowerCase()}-${randomUUID()}@zareh.test`, firstName: "Jane", lastName: "Smith", role, ...extra },
       })).id;
     u.broker = await make("MANAGING_BROKER");
+    await designateBroker(app, prisma, u.broker);
     u.compliance = await make("COMPLIANCE_ADMIN");
     u.admin = await make("ADMIN");
     u.agent = await make("AGENT", {
@@ -201,43 +202,78 @@ describe("closing and CDA API", { skip }, () => {
     assert.equal(unapproved.json().error.code, "PAYOUT_NOT_APPROVED");
 
     const receive = (amount: string, user = u.admin) => as(user, "POST", `/api/deals/${dealId}/closing/commission-received`,
-      { amount, receivedDate: "2026-11-30", reference: "WIRE-PATEL-77" });
+      { amount, receivedDate: "2026-11-30", reference: "WIRE-PATEL-77", account: { type: "OPERATING", id: operating } });
     assert.equal((await receive("15935.00", u.agent)).statusCode, 403);
     assert.equal((await receive("10000.00")).statusCode, 201);
     assert.equal((await receive("6000.00")).json().error.code, "COMMISSION_OVER_RECEIVED");
-    assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "COMMISSION_NOT_RECEIVED");
+    const intoRealEstateTrust = await as(u.admin, "POST", `/api/deals/${dealId}/closing/commission-received`,
+      { amount: "1.00", receivedDate: "2026-11-30", reference: "X", account: { type: "COMMISSION_TRUST", id: account } });
+    assert.match(intoRealEstateTrust.json().error.message, /never the real estate trust account/);
     const full = await receive("5935.00");
     assert.equal(full.json().commissionReceived, "15935.00");
-    assert.equal(full.json().payouts[0].status, "AWAITING_BANK_MATCH");
+    assert.equal(full.json().payouts[0].status, "AWAITING_BANK_VERIFICATION");
     assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "COMMISSION_NOT_CLEARED");
 
-    // The lawyer's wires show up on the operating account statement; each is matched to its receipt
+    // The operating statement shows the trust transfer and the lawyer's two wires; each wire is matched to its receipt
     const imported = await as(u.admin, "POST", "/api/bank/statements", {
       accountType: "OPERATING", accountId: operating, periodStart: "2026-11-01", periodEnd: "2026-11-30",
-      openingBalance: "0.00", closingBalance: "15935.00", fileName: "general-nov.csv", autoMatch: false,
-      csv: "Date,Description,Amount\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,10000.00\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,5935.00\n",
+      openingBalance: "0.00", closingBalance: "31075.00", receivedDate: "2026-12-01", source: "BANK_PORTAL_DOWNLOAD",
+      fileName: "general-nov.csv", autoMatch: false,
+      csv: "Date,Description,Amount\n11/30/2026,TRANSFER FROM TRUST,15140.00\n" +
+        "11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,10000.00\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,5935.00\n",
     });
     assert.equal(imported.statusCode, 201, imported.body);
     const receipts: { id: string; amount: string }[] = full.json().receipts;
     for (const line of imported.json().lines as { id: string; amount: string }[]) {
-      const receipt = receipts.find((r) => r.amount === line.amount)!;
+      const receipt = receipts.find((r) => r.amount === line.amount);
+      if (!receipt) continue;
       const m = await as(u.admin, "POST", "/api/bank/matches", { bankTransactionId: line.id, commissionReceiptId: receipt.id });
       assert.equal(m.statusCode, 201, m.body);
     }
+    // Matched, but the file isn't evidence until someone other than the importer checks it against the bank
+    assert.equal((await as(u.admin, "GET", `/api/deals/${dealId}/closing/payouts`)).json().payouts[0].status, "AWAITING_BANK_VERIFICATION");
+    const selfCheck = await as(u.admin, "POST", `/api/bank/statements/${imported.json().id}/verify`, { method: "Compared to TD portal" });
+    assert.equal(selfCheck.statusCode, 403);
+    assert.match(selfCheck.json().error.message, /importer can't verify their own import/);
+    const verified = await as(u.broker, "POST", `/api/bank/statements/${imported.json().id}/verify`, { method: "Compared to TD EasyLine" });
+    assert.equal(verified.statusCode, 200, verified.body);
     const ready = (await as(u.admin, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
     assert.equal(ready.payouts[0].status, "READY_FOR_APPROVAL");
-    assert.ok(ready.receipts.every((r: { bankMatched: boolean }) => r.bankMatched));
+    assert.ok(ready.receipts.every((r: { bankVerified: boolean }) => r.bankVerified));
 
     assert.equal((await as(u.admin, "POST", `/api/payouts/${payoutId}/approve`, {})).statusCode, 403); // broker only
     const approved = await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, { note: "Checked against CDA" });
     assert.equal(approved.statusCode, 200, approved.body);
     assert.equal(approved.json().payouts[0].status, "APPROVED");
     assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "PAYOUT_ALREADY_APPROVED");
+    const event = await prisma.payoutEvent.findFirstOrThrow({ where: { payoutId, kind: "APPROVED" } });
+    assert.equal(event.payFromOperatingAccountId, operating);
+    assert.equal(event.balanceStatementId, imported.json().id);
+    assert.equal(event.amount!.toFixed(2), "24634.00");
 
+    // The approver can't also release the money
+    const selfPay = await as(u.broker, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "EFT-0" });
+    assert.equal(selfPay.statusCode, 403);
     const paid = await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "EFT-20261201-1" });
     assert.equal(paid.statusCode, 200, paid.body);
     assert.deepEqual(
       [paid.json().payouts[0].status, paid.json().payouts[0].paymentReference], ["PAID", "EFT-20261201-1"]);
+    assert.equal((await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "again" })).json().error.code, "PAYOUT_ALREADY_PAID");
+
+    // The EFT bounces: recorded, then paid again under the same approval
+    const bounced = await as(u.admin, "POST", `/api/payouts/${payoutId}/payment-reversed`,
+      { date: "2026-12-01", reference: "EFT-RETURN-9", reason: "Account closed" });
+    assert.equal(bounced.json().payouts[0].status, "PAYMENT_RETURNED");
+    const repaid = await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "EFT-20261201-2" });
+    assert.equal(repaid.json().payouts[0].status, "PAID");
+    assert.deepEqual(repaid.json().payouts[0].history.map((h: { kind: string }) => h.kind), ["APPROVED", "PAID", "PAYMENT_REVERSED", "PAID"]);
+
+    // Then the lawyer's second wire is recalled: the paid payout is flagged for recovery, not silently left
+    const recalled = await as(u.admin, "POST", `/api/commission-receipts/${receipts.find((r) => r.amount === "5935.00")!.id}/reverse`,
+      { reason: "Wire recalled by sending bank", reversedDate: "2026-12-01", reference: "RECALL-1" });
+    assert.equal(recalled.statusCode, 200, recalled.body);
+    assert.equal(recalled.json().commissionReceived, "10000.00");
+    assert.equal(recalled.json().payouts[0].recoveryRequired, true);
 
     // The database enforces the same rules if the API is bypassed
     let code = "no error";
@@ -259,6 +295,59 @@ describe("closing and CDA API", { skip }, () => {
     const view = (await as(u.broker, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
     assert.equal(view.commissionDue, "0.00");
     assert.equal(view.payouts[0].status, "READY_FOR_APPROVAL");
+  });
+
+  test("void and reissue: a corrected CDA keeps every earlier approval and payment, and carries payments forward", async () => {
+    const dealId = await torontoListing({ deposit: 60_000 });
+    await close(dealId);
+    const first = await finalize(dealId);
+    assert.equal(first.statusCode, 201, first.body);
+    const cda0: string = first.json().cdaNumber;
+
+    // Pay the agent under the first CDA, against a verified same-day balance
+    const balance = await as(u.admin, "POST", "/api/bank/statements", {
+      kind: "INTERIM", accountType: "OPERATING", accountId: operating, periodStart: TODAY, periodEnd: TODAY, closingBalance: "100000.00",
+      receivedDate: TODAY, source: "BANK_PORTAL_DOWNLOAD", fileName: "today.csv", csv: `Date,Description,Amount\n${TODAY},TRANSFER FROM TRUST,31075.00\n`,
+    });
+    assert.equal(balance.statusCode, 201, balance.body);
+    assert.equal((await as(u.broker, "POST", `/api/bank/statements/${balance.json().id}/verify`, { method: "TD portal" })).statusCode, 200);
+    const before = (await as(u.broker, "GET", `/api/deals/${dealId}/closing/payouts`)).json().payouts[0];
+    const payoutId: string = before.id;
+    const paidAmount: string = before.remaining; // depends on how far the agent is toward their cap
+    const approved = await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, { payFrom: { type: "OPERATING", id: operating } });
+    assert.equal(approved.statusCode, 200, approved.body);
+    assert.equal((await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: TODAY, reference: "EFT-V1" })).statusCode, 200);
+
+    // The split was wrong: void, correct, reissue
+    assert.equal((await as(u.agent, "POST", `/api/deals/${dealId}/closing/void`, { reason: "x" })).statusCode, 403);
+    const voided = await as(u.broker, "POST", `/api/deals/${dealId}/closing/void`, { reason: "Agent split should have been 85/15" });
+    assert.equal(voided.statusCode, 200, voided.body);
+    assert.deepEqual(voided.json(), { voided: cda0, cancelledApprovals: 0 });
+    assert.equal((await as(u.broker, "GET", `/api/deals/${dealId}/closing/payouts`)).statusCode, 404);
+    await prisma.transactionAgent.updateMany({ where: { transactionId: dealId }, data: { splitPct: 85 } });
+
+    const reissued = await finalize(dealId);
+    assert.equal(reissued.statusCode, 201, reissued.body);
+    assert.equal(reissued.json().cdaNumber, `${cda0}-R1`);
+    assert.deepEqual(reissued.json().trustEntries, []); // same trust distributions as before: nothing posted twice
+    assert.equal((await as(u.broker, "GET", `/api/deals/${dealId}/trust`)).json().balances[0].balance, "0.00");
+    const lawyerCopy = await as(u.broker, "GET", `/api/deals/${dealId}/closing/cda?audience=lawyer`);
+    assert.ok(lawyerCopy.body.includes(`This CDA replaces ${cda0}`));
+
+    const view = (await as(u.broker, "GET", `/api/deals/${dealId}/closing/payouts`)).json();
+    const line = view.payouts[0];
+    assert.equal(view.revision, 1);
+    assert.equal(line.carriedForward, paidAmount);
+    assert.equal(Number(line.remaining).toFixed(2), (Number(line.amount) - Number(paidAmount)).toFixed(2));
+    // The first CDA's approval and payment are still on record
+    assert.deepEqual((await prisma.payoutEvent.findMany({ where: { payoutId }, orderBy: { seq: "asc" } })).map((e) => e.kind), ["APPROVED", "PAID"]);
+
+    // A correction that changes what trust paid out has to reverse those distributions first
+    await as(u.broker, "POST", `/api/deals/${dealId}/closing/void`, { reason: "GCI was keyed wrong" });
+    await prisma.transaction.update({ where: { id: dealId }, data: { totalGci: "30000" } });
+    const differs = await finalize(dealId);
+    assert.equal(differs.statusCode, 422);
+    assert.equal(differs.json().error.code, "PRIOR_DISTRIBUTIONS_DIFFER");
   });
 
   test("no closing distribution until the deposit has cleared the bank", async () => {

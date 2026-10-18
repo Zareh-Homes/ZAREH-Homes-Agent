@@ -116,8 +116,12 @@ export function fromDatabaseError(err: unknown): DomainError | null {
       return new RuleViolationError("PAYOUT_RULE", message);
     case "ZT007":
       return new DomainError("FUNDS_NOT_CLEARED", 409, message);
+    case "ZT008":
+      return new DomainError("FUNDS_NOT_AVAILABLE", 409, message);
     case "ZB001":
       return new RuleViolationError("BANK_RULE", message);
+    case "ZP001":
+      return new DomainError("POLICY_NOT_APPROVED", 409, message);
     default:
       return null;
   }

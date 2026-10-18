@@ -130,6 +130,7 @@ REDACT_RULES = [
     (re.compile(r"phone|cell|mobile|\btel\b|fax"), "last4"),
     (re.compile(r"seller|buyer|payor|payee|payer|purchaser|vendor|client|tenant|landlord|counterparty"), "initials"),
 ]
+IDENTIFIER = re.compile(r"\b(id|trade|mls|receipt|entry|reco|deal)\b|#")
 LONG_NUMBER = re.compile(r"(?<![\d.,])\d{4,}(\d{4})(?![\d.,])")
 
 
@@ -149,6 +150,8 @@ def redact_value(header: str, value: Any) -> Any:
                 local, _, domain = text_value.partition("@")
                 return f"{local[:1]}***@{domain}" if domain else "***"
             return " ".join(f"{w[0]}." for w in re.findall(r"[^\W\d_]+", text_value)) or "***"
+    if IDENTIFIER.search(h):
+        return text_value  # Lone Wolf IDs, trade and MLS numbers are what locate the row; they aren't personal or banking data
     return LONG_NUMBER.sub(lambda m: "****" + m.group(1), text_value)
 
 
@@ -1008,7 +1011,13 @@ def preflight(engine: Engine, broker_email: str, trust_account: str | None) -> t
         broker = conn.execute(text('SELECT id, role::text AS role, "isActive" FROM "User" WHERE lower(email) = lower(:e)'), {"e": broker_email}).mappings().first()
         if broker is None or broker["role"] != "MANAGING_BROKER" or not broker["isActive"]:
             raise StructuralError(f"{broker_email} must be an active MANAGING_BROKER: the trust ledger records who authorized every entry")
-        accounts = conn.execute(text('SELECT id::text AS id, "accountLast4" AS last4 FROM "TrustAccount" WHERE "isActive"')).mappings().all()
+        if conn.execute(text("SELECT to_regproc('is_broker_of_record')")).scalar() is None:
+            raise StructuralError("database is missing migration 009 (money controls)")
+        if not conn.execute(text("SELECT is_broker_of_record(CAST(:b AS uuid), (now() AT TIME ZONE 'America/Toronto')::date)"),
+                            {"b": str(broker["id"])}).scalar():
+            raise StructuralError(f"{broker_email} must be designated broker of record (or substitute): they attest the migrated trust history")
+        accounts = conn.execute(text('SELECT id::text AS id, "accountLast4" AS last4 FROM "TrustAccount" '
+                                     "WHERE \"isActive\" AND kind = 'REAL_ESTATE_TRUST'")).mappings().all()
     if not accounts:
         raise StructuralError("no active trust account in the database; create it before migrating trust entries")
     by_key = {a["last4"]: a["id"] for a in accounts} | {a["id"]: a["id"] for a in accounts}
@@ -1218,7 +1227,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--deals", type=Path, default=Path("deals_historical_export.csv"))
     p.add_argument("--trust", type=Path, default=Path("trust_ledger_export.csv"))
     p.add_argument("--database-url", default=os.environ.get("DATABASE_URL"), help="PostgreSQL URL (default: $DATABASE_URL)")
-    p.add_argument("--broker-email", help="Active MANAGING_BROKER recorded as authorizing the migrated trust entries")
+    p.add_argument("--broker-email", help="Broker of record (or substitute) recorded as authorizing and attesting the migrated trust entries")
     p.add_argument("--trust-account", help="Trust account (last 4 digits or ID) for entries without an account column")
     p.add_argument("--slash-dates", choices=["DMY", "MDY"], default="DMY", help="How to read 03/04/2024 (default DMY: 3 April)")
     p.add_argument("--dash-dates", choices=["DMY", "MDY"], default="MDY", help="How to read 03-04-24 (default MDY: March 4)")

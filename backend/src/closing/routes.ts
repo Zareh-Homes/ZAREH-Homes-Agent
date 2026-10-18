@@ -4,8 +4,10 @@ import { loadActor, type Actor, type ResolveUserId } from "../auth.ts";
 import { ValidationError } from "../errors.ts";
 import { validateIdempotencyKey, validatePathUuid } from "../trust/validation.ts";
 import type { BrokerageProfile } from "./cda-template.ts";
-import { approvePayout, getPayouts, markPayoutPaid, recordCommissionReceived } from "./payouts.ts";
-import { cdaHtml, finalizeClosing, previewClosing, type ClosingDeps } from "./service.ts";
+import {
+  approvePayout, cancelApproval, getPayouts, markPayoutPaid, recordCommissionReceived, reverseCommissionReceipt, reversePayment,
+} from "./payouts.ts";
+import { cdaHtml, finalizeClosing, previewClosing, voidClosing, type ClosingDeps } from "./service.ts";
 
 export interface ClosingRouteOptions {
   prisma: PrismaClient;
@@ -26,8 +28,14 @@ type Params = Record<string, string>;
  * After finalizing, the brokerage pays its agents (the payer never pays them directly):
  * GET  /api/deals/:dealId/closing/payouts               commission received + each payout's status
  * POST /api/deals/:dealId/closing/commission-received   record the payer's payment (admin / managing broker)
- * POST /api/payouts/:payoutId/approve                   managing broker, once the commission is in full
- * POST /api/payouts/:payoutId/paid                      record the payment to the agent, with its reference
+ * POST /api/commission-receipts/:receiptId/reverse      a recalled or bounced commission payment
+ * POST /api/{payouts|payables}/:id/approve              managing broker who didn't record the commission; needs verified
+ *                                                       bank evidence and a fresh verified balance for the paying account
+ * POST /api/{payouts|payables}/:id/paid                 someone other than the approver records the payment and reference
+ * POST /api/{payouts|payables}/:id/payment-reversed     a returned payment
+ * POST /api/{payouts|payables}/:id/cancel               managing broker withdraws an approval
+ * POST /api/deals/:dealId/closing/void                  managing broker withdraws the CDA so a corrected one can be finalized
+ * (payables = co-op brokerage and referral amounts; disabled until the THIRD_PARTY_PAYABLES policy is signed off)
  */
 export async function closingRoutes(app: FastifyInstance, opts: ClosingRouteOptions): Promise<void> {
   const deps: ClosingDeps = { prisma: opts.prisma, brokerage: opts.brokerage, today: opts.today };
@@ -71,9 +79,17 @@ export async function closingRoutes(app: FastifyInstance, opts: ClosingRouteOpti
     return reply.code(201).send(view);
   });
 
-  app.post<{ Params: Params }>("/api/payouts/:payoutId/approve", async (request) =>
-    approvePayout(deps, await actorOf(request), validatePathUuid(request.params.payoutId, "payoutId"), request.body));
+  app.post<{ Params: Params }>("/api/commission-receipts/:receiptId/reverse", async (request) =>
+    reverseCommissionReceipt(deps, await actorOf(request), validatePathUuid(request.params.receiptId, "receiptId"), request.body));
 
-  app.post<{ Params: Params }>("/api/payouts/:payoutId/paid", async (request) =>
-    markPayoutPaid(deps, await actorOf(request), validatePathUuid(request.params.payoutId, "payoutId"), request.body));
+  app.post<{ Params: Params }>("/api/deals/:dealId/closing/void", async (request) =>
+    voidClosing(deps, await actorOf(request), validatePathUuid(request.params.dealId, "dealId"), request.body));
+
+  const actions = { approve: approvePayout, paid: markPayoutPaid, "payment-reversed": reversePayment, cancel: cancelApproval } as const;
+  for (const [collection, kind] of [["payouts", "payout"], ["payables", "payable"]] as const) {
+    for (const [action, handler] of Object.entries(actions)) {
+      app.post<{ Params: Params }>(`/api/${collection}/:id/${action}`, async (request) =>
+        handler(deps, await actorOf(request), { kind, id: validatePathUuid(request.params.id, "id") }, request.body));
+    }
+  }
 }

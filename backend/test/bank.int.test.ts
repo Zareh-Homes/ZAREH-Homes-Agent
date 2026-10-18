@@ -11,7 +11,7 @@ import { PrismaClient, type UserRole } from "@prisma/client";
 import { buildApp } from "../src/app.ts";
 import { devHeaderResolver } from "../src/auth.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
-import { TEST_BROKERAGE } from "./fixtures.ts";
+import { designateBroker, TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
 const TODAY = "2026-12-15";
@@ -22,7 +22,7 @@ describe("bank reconciliation API", { skip }, () => {
   const u = { broker: "", admin: "", agent: "" };
   const deal = { a: "", b: "" };
   const entry = { depositA: "", depositB: "" };
-  const recon = { october: "", novemberFirst: "", november: "" };
+  const recon = { october: "", novemberFirst: "", november: "", incident: "" };
   let account = "";
 
   const as = (user: string, method: "GET" | "POST" | "DELETE", url: string, body?: object) =>
@@ -52,11 +52,18 @@ describe("bank reconciliation API", { skip }, () => {
     payeeName: "Test Brokerage Inc. (general account)", authorizationMethod: "CLOSING_COMPLETED", ...extra,
   });
 
+  // Statements arrive three days after the period ends
+  const received = (periodEnd: string) => new Date(Date.parse(`${periodEnd}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
   const statement = (period: [string, string], opening: string, closing: string, csv: string, user = u.admin) =>
     as(user, "POST", "/api/bank/statements", {
       accountType: "TRUST", accountId: account, periodStart: period[0], periodEnd: period[1],
-      openingBalance: opening, closingBalance: closing, fileName: `trust-${period[1]}.csv`, csv,
+      openingBalance: opening, closingBalance: closing, receivedDate: received(period[1]), source: "BANK_PORTAL_DOWNLOAD",
+      fileName: `trust-${period[1]}.csv`, csv,
     });
+  const verify = async (statementId: string) => {
+    const res = await as(u.broker, "POST", `/api/bank/statements/${statementId}/verify`, { method: "Compared to TD EasyLine statement" });
+    assert.equal(res.statusCode, 200, res.body);
+  };
 
   const notifications = (type: string) => prisma.notification.count({ where: { userId: u.broker, type } });
 
@@ -64,6 +71,7 @@ describe("bank reconciliation API", { skip }, () => {
     const make = async (role: UserRole) =>
       (await prisma.user.create({ data: { email: `${role.toLowerCase()}-${randomUUID()}@zareh.test`, firstName: "Bank", lastName: role, role } })).id;
     u.broker = await make("MANAGING_BROKER");
+    await designateBroker(app, prisma, u.broker);
     u.admin = await make("ADMIN");
     u.agent = await make("AGENT");
     account = (await prisma.trustAccount.create({ data: { name: `Trust ${randomUUID().slice(0, 4)}`, bankName: "TD", accountLast4: "4821" } })).id;
@@ -105,9 +113,16 @@ describe("bank reconciliation API", { skip }, () => {
 
     const prepared = await as(u.admin, "POST", "/api/trust/reconciliations", { statementId: imported.json().id });
     assert.equal(prepared.statusCode, 201, prepared.body);
-    assert.deepEqual([prepared.json().status, prepared.json().dueBy, prepared.json().figures.difference], ["PREPARED", "2026-11-30", "0.00"]);
+    // s.13: due 30 days after the statement was received (Nov 3), not after the period end
+    assert.deepEqual([prepared.json().status, prepared.json().statementReceived, prepared.json().dueBy, prepared.json().figures.difference],
+      ["PREPARED", "2026-11-03", "2026-12-03", "0.00"]);
     recon.october = prepared.json().id;
     assert.equal((await as(u.admin, "POST", `/api/trust/reconciliations/${recon.october}/sign`, {})).statusCode, 403);
+
+    // Matched, but not evidence until a second person verifies the file against the bank
+    const unverified = await payout(deal.a, "30000.00", "2026-11-20");
+    assert.equal(unverified.json().error.code, "FUNDS_NOT_CLEARED");
+    await verify(imported.json().id);
 
     const paid = await payout(deal.a, "30000.00", "2026-11-20");
     assert.equal(paid.statusCode, 201, paid.body);
@@ -126,6 +141,7 @@ describe("bank reconciliation API", { skip }, () => {
     const imported = await statement(["2026-11-01", "2026-11-30"], "70000.00", "20000.00", csv);
     assert.equal(imported.statusCode, 201, imported.body);
     assert.equal(imported.json().autoMatched, 1); // the returned wire is not the lawyer's cheque written on the 28th
+    await verify(imported.json().id);
     assert.equal(await notifications("TRUST_BANK_UNMATCHED_WITHDRAWAL"), before.withdrawal + 1);
     const returned = imported.json().lines.find((l: { amount: string }) => l.amount === "-20000.00");
 
@@ -138,6 +154,12 @@ describe("bank reconciliation API", { skip }, () => {
     assert.equal(first.json().figures.difference, "-20000.00");
     assert.match(first.json().details.exceptions[0], /^Shortfall: the bank holds \$20000\.00 less/);
     assert.equal(await notifications("TRUST_SHORTFALL"), before.shortfall + 1);
+    // s.14: a shortfall opens a trust incident that tracks registrar notification and replenishment
+    assert.deepEqual(first.json().incidents.map((i: { kind: string; open: boolean }) => [i.kind, i.open]), [["SHORTFALL", true]]);
+    const incident = (await as(u.broker, "GET", `/api/trust/incidents/${first.json().incidents[0].id}`)).json();
+    assert.equal(incident.amount, "20000.00");
+    assert.match(incident.outstanding[0], /Notify the RECO registrar immediately/);
+    recon.incident = incident.id;
     const unsigned = await as(u.broker, "POST", `/api/trust/reconciliations/${recon.novemberFirst}/sign`, {});
     assert.equal(unsigned.json().error.code, "RECONCILIATION_NEEDS_EXPLANATION");
 
@@ -170,7 +192,20 @@ describe("bank reconciliation API", { skip }, () => {
     assert.equal((await as(u.broker, "POST", `/api/trust/reconciliations/${recon.november}/sign`, {})).statusCode, 200);
     assert.equal((await as(u.broker, "POST", `/api/trust/reconciliations/${recon.november}/sign`, {})).json().error.code, "RECONCILIATION_ALREADY_SIGNED");
 
+    // The shortfall turned out to be the unrecorded returned wire: resolving needs evidence, and only the broker of record can do it
+    const incidentUrl = `/api/trust/incidents/${recon.incident}/events`;
+    assert.equal((await as(u.admin, "POST", incidentUrl, { kind: "REGISTRAR_NOTIFIED", reference: "x" })).statusCode, 403);
+    const bare = await as(u.broker, "POST", incidentUrl, { kind: "RESOLVED", note: "All good" });
+    assert.match(bare.json().error.message, /registrar has been notified/);
+    const resolved = await as(u.broker, "POST", incidentUrl, {
+      kind: "RESOLVED", reconciliationId: recon.november,
+      note: "Returned wire recorded as a reversal on Nov 25; the re-prepared November reconciliation balances. No money was missing.",
+    });
+    assert.equal(resolved.statusCode, 201, resolved.body);
+    assert.equal(resolved.json().open, false);
+
     const status = (await as(u.broker, "GET", "/api/trust/reconciliation-status")).json().accounts.find((a: { trustAccountId: string }) => a.trustAccountId === account);
+    assert.deepEqual(status.openIncidents, []);
     assert.deepEqual([status.lastStatementEnd, status.lastSignedPeriodEnd, status.awaitingSignature], ["2026-11-30", "2026-11-30", []]);
 
     let code = "no error";
@@ -182,7 +217,7 @@ describe("bank reconciliation API", { skip }, () => {
     assert.equal(code, "ZD003");
 
     // The October deposit match can't be undone: money was paid out against it, and the month is signed
-    const match = await prisma.bankMatch.findUniqueOrThrow({ where: { trustEntryId: entry.depositA } });
+    const match = await prisma.bankMatch.findFirstOrThrow({ where: { trustEntryId: entry.depositA, matchKind: "MONTHLY" } });
     const undo = await as(u.admin, "DELETE", `/api/bank/matches/${match.id}`);
     assert.equal(undo.statusCode, 422);
     assert.match(undo.json().error.message, /already been paid out/);

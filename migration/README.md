@@ -40,7 +40,7 @@ Exit codes:
 ## Before anything touches the database
 
 - **Structure.** All three files are read, and every required column must be found. Duplicate IDs are reported, as are deals pointing at unknown agents and trust entries pointing at unknown deals.
-- **Preflight.** The required tables must exist, `--broker-email` must be an active `MANAGING_BROKER`, and the trust account must exist and be active.
+- **Preflight.** The required tables must exist (through migration 009). `--broker-email` must be an active `MANAGING_BROKER` who is designated broker of record (or substitute), because they attest the migrated history. The trust account must exist, be active, and be a real estate trust account.
 - **Every row is transformed and validated in memory.** Only rows that pass are written.
 
 ## Columns

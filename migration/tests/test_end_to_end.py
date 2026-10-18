@@ -34,8 +34,15 @@ def setup(engine, tmp_path_factory):
     broker_email = f"broker.{run}@example.test"
     last4 = f"{random.randint(0, 9999):04d}"
     with engine.begin() as conn:
-        conn.execute(text("""INSERT INTO "User" (id, email, "firstName", "lastName", role, "updatedAt")
-                             VALUES (gen_random_uuid(), :e, 'Broker', 'Migration', 'MANAGING_BROKER', now())"""), {"e": broker_email})
+        broker = conn.execute(text("""INSERT INTO "User" (id, email, "firstName", "lastName", role, "updatedAt")
+                             VALUES (gen_random_uuid(), :e, 'Broker', 'Migration', 'MANAGING_BROKER', now()) RETURNING id::text"""),
+                              {"e": broker_email}).scalar()
+        admin = conn.execute(text("""INSERT INTO "User" (id, email, "firstName", "lastName", role, "updatedAt")
+                             VALUES (gen_random_uuid(), :e, 'Records', 'Admin', 'ADMIN', now()) RETURNING id::text"""),
+                             {"e": f"admin.{run}@example.test"}).scalar()
+        conn.execute(text("""INSERT INTO "BrokerOfRecordDesignation" (id, "userId", role, "effectiveFrom", reference, "createdById")
+                             VALUES (gen_random_uuid(), CAST(:b AS uuid), 'DESIGNATED_SUBSTITUTE', '2000-01-01', 'Test', CAST(:a AS uuid))"""),
+                     {"b": broker, "a": admin})
         account = conn.execute(text("""INSERT INTO "TrustAccount" (id, name, "bankName", "accountLast4")
                                        VALUES (gen_random_uuid(), 'Migration trust', 'TD', :l) RETURNING id::text"""), {"l": last4}).scalar()
     return {"run": run, "receipt": receipt, "work": work, "broker": broker_email, "account": account}

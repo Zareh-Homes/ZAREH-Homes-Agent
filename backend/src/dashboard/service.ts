@@ -105,13 +105,14 @@ async function brokerageDashboard(db: PrismaClient, today: string): Promise<Brok
            COALESCE(SUM((c.computation #>> '{incoming,commission,hst}')::bigint), 0)::text AS "hstCollected",
            COUNT(*)::int AS n
       FROM "ClosingStatement" c JOIN "Transaction" t ON t.id = c."transactionId"
-     WHERE t."closeDate" >= ${yearStart}::date AND t."closeDate" < ${yearEnd}::date`;
+     WHERE t."closeDate" >= ${yearStart}::date AND t."closeDate" < ${yearEnd}::date
+       AND NOT EXISTS (SELECT 1 FROM "ClosingVoid" v WHERE v."closingId" = c.id)`;
 
   const [uncleared] = await db.$queryRaw<{ total: string }[]>`
     SELECT COALESCE(SUM(d.amount), 0)::text AS total
       FROM "TrustLedgerEntry" d JOIN "TrustAccount" a ON a.id = d."trustAccountId"
      WHERE a."isActive" AND d."entryType" = 'DEPOSIT_RECEIVED'
-       AND NOT EXISTS (SELECT 1 FROM "BankMatch" m WHERE m."trustEntryId" = d.id)
+       AND NOT trust_entry_cleared(d.id)
        AND NOT EXISTS (SELECT 1 FROM "TrustLedgerEntry" r WHERE r."reversesEntryId" = d.id)`;
 
   const [volume] = await db.$queryRaw<{ total: string; n: number }[]>`
@@ -211,16 +212,18 @@ async function personalDashboard(db: PrismaClient, userId: string, today: string
            COALESCE(SUM("netPayout"), 0)::text AS net,
            COALESCE(SUM("agentSplitHst" - "feesHst"), 0)::text AS hst,
            COALESCE(SUM("agentSplitBase" - "feesBase"), 0)::text AS income
-      FROM "ClosingAgentPayout"
-     WHERE "userId" = ${userId}::uuid AND "closeDate" >= ${yearStart}::date AND "closeDate" < ${yearEnd}::date`;
+      FROM "ClosingAgentPayout" p
+     WHERE "userId" = ${userId}::uuid AND "closeDate" >= ${yearStart}::date AND "closeDate" < ${yearEnd}::date
+       AND NOT EXISTS (SELECT 1 FROM "ClosingVoid" v WHERE v."closingId" = p."closingId")`;
 
   let cap: PersonalDashboard["cap"] = null;
   const plan = user.commissionPlan;
   if (plan?.annualCap) {
     const start = capYearStart(today, plan.capYearStartMonth, plan.capYearStartDay);
     const [row] = await db.$queryRaw<{ total: string }[]>`
-      SELECT COALESCE(SUM("houseSplitBase"), 0)::text AS total FROM "ClosingAgentPayout"
-       WHERE "userId" = ${userId}::uuid AND "closeDate" >= ${start}::date AND "closeDate" < ${nextYear(start)}::date`;
+      SELECT COALESCE(SUM("houseSplitBase"), 0)::text AS total FROM "ClosingAgentPayout" p
+       WHERE "userId" = ${userId}::uuid AND "closeDate" >= ${start}::date AND "closeDate" < ${nextYear(start)}::date
+         AND NOT EXISTS (SELECT 1 FROM "ClosingVoid" v WHERE v."closingId" = p."closingId")`;
     cap = { capCents: toCents(plan.annualCap.toFixed(2)), paidCents: toCents(row!.total), yearStart: start, yearEnd: nextYear(start) };
   }
 

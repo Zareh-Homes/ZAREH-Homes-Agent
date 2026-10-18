@@ -130,10 +130,12 @@ def test_error_log_rows_are_redacted():
     row = m.redact_row({
         "Agent ID": "A1", "Email": "Jane.Smith@x.test", "Cell": "416-555-0101", "Seller": "Ann Lee",
         "Bank Account #": "004-12345-6789012", "Date of Birth": "1970-01-01", "Memo": "acct 12345678901", "Amount": "12345678.00",
+        "Trade #": "T123456789",
     })
     assert row == {
         "Agent ID": "A1", "Email": "J***@x.test", "Cell": "***0101", "Seller": "A. L.",
         "Bank Account #": "***9012", "Date of Birth": "[redacted]", "Memo": "acct ****8901", "Amount": "12345678.00",
+        "Trade #": "T123456789",
     }
 
 

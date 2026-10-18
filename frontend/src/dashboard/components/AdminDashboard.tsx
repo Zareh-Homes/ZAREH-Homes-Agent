@@ -33,13 +33,16 @@ export function FinancialSummary({ financials: f, year }: { financials: Brokerag
 
 export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard["trust"]; year: number }) {
   const late = trust.pastClosing;
-  const overdue = trust.reconciliations.some((a) => a.awaitingSignature.some((m) => m.overdue));
+  const overdue = trust.reconciliations.some((a) => a.awaitingSignature.some((m) => m.overdue) || a.missingStatements.some((m) => m.overdue));
+  const shortfalls = trust.reconciliations.flatMap((a) => a.openIncidents.filter((i) => i.kind === "SHORTFALL").map((i) => ({ ...i, account: a.name })));
   return (
     <Panel
       id="trust"
       title={<><span className="text-ink-3"><LockIcon /></span>Statutory trust account</>}
       subtitle="All deals, all trust accounts"
-      action={overdue
+      action={shortfalls.length > 0
+        ? <StatusBadge tone="critical">Trust shortfall</StatusBadge>
+        : overdue
         ? <StatusBadge tone="critical">Reconciliation overdue</StatusBadge>
         : late.length > 0 ? <StatusBadge tone="critical">{late.length} past closing</StatusBadge> : undefined}
     >
@@ -63,6 +66,17 @@ export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard[
         )}
       </div>
 
+      {shortfalls.length > 0 && (
+        <div role="alert" className="border-t border-line px-4 py-3 text-sm">
+          {shortfalls.map((i) => (
+            <p key={i.id} className="text-ink">
+              <strong>{money(Math.round(Number(i.amount) * 100))} shortfall in {i.account}.</strong> Notify the RECO registrar and replenish
+              immediately (O. Reg. 579/05 s.14), then record both on the incident.
+            </p>
+          ))}
+        </div>
+      )}
+
       <div className="border-t border-line">
         <h3 className="px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-ink-3">Monthly reconciliation</h3>
         <ul className="space-y-1.5 px-4 pb-3 text-sm">
@@ -71,6 +85,10 @@ export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard[
               <span className="truncate text-ink-2">{a.name}</span>
               {a.lastStatementEnd === null ? (
                 <StatusBadge tone="serious">No bank statement imported</StatusBadge>
+              ) : a.missingStatements.length > 0 ? (
+                <StatusBadge tone={a.missingStatements.some((m) => m.overdue) ? "critical" : "serious"}>
+                  No statement for {a.missingStatements.length} month{a.missingStatements.length === 1 ? "" : "s"} · due {shortDate(a.missingStatements[0]!.dueBy, year)}
+                </StatusBadge>
               ) : a.awaitingSignature.length === 0 ? (
                 <StatusBadge tone="good">Signed to {shortDate(a.lastSignedPeriodEnd!, year)}</StatusBadge>
               ) : (

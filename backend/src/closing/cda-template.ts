@@ -27,6 +27,7 @@ export interface CdaRenderOptions {
   status: "DRAFT" | "FINAL";
   issuedOn: string; // YYYY-MM-DD
   computationSha?: string;
+  replaces?: { cdaNumber: string; reason: string }; // a reissue after a void
 }
 
 const esc = (value: unknown): string =>
@@ -194,6 +195,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
       <span class="status ${opts.status}">${opts.status}</span>
     </div>
   </header>
+  ${opts.replaces ? `<p class="warning"><strong>This CDA replaces ${esc(opts.replaces.cdaNumber)}</strong>, which was voided: ${esc(opts.replaces.reason)}. Disregard the earlier version.</p>` : ""}
 
   <div class="parties">
     <div class="box">
@@ -266,8 +268,9 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
         <tr class="total"><td></td><td colspan="4">Total to be paid by ${esc(c.payer.name)}</td><td class="num">${money(c.wiresTotal)}</td></tr>
       </tbody>
     </table>
-    <p>Pay the full amount to ${esc(b.legalName)} only. Do not pay any salesperson, broker or personal real estate corporation directly;
-      the brokerage pays its agents.</p>` : `<p>No payment is required from ${esc(c.payer.name)}: the deposit held in trust covers the full commission${c.trust.balanceDueToLawyer > 0 ? `, and ${money(c.trust.balanceDueToLawyer)} will be returned to you in trust` : ""}.</p>`}
+    <p>Pay the amount shown in this section to ${esc(b.legalName)} only. It is the commission payable to ${esc(b.legalName)} under this
+      transaction, not necessarily the whole commission on the property. Do not pay any salesperson, broker or personal real estate
+      corporation directly; the brokerage pays its agents.</p>` : `<p>No payment is required from ${esc(c.payer.name)}: the deposit held in trust covers the full commission${c.trust.balanceDueToLawyer > 0 ? `, and ${money(c.trust.balanceDueToLawyer)} will be returned to you in trust` : ""}.</p>`}
     <div class="fraud"><strong>Wire fraud warning.</strong> Banking details are provided separately and are never changed by email.
       Before sending any funds, confirm the instructions by phone with ${esc(b.legalName)} at ${esc(b.phone)}.</div>
   </section>

@@ -202,7 +202,7 @@ test("CDA document: lawyer copy has the wires but not the split; internal copy a
     "Commission Disbursement", "CDA-2026-0042", "November 30, 2026", "1205 – 88 Queens Quay W, Toronto, Ontario",
     "Patel &lt;Law&gt; &amp; Co", "Balance due FROM lawyer", "$15,935.00", "$55,935.00",
     "Trust balance for this deal after closing", "$0.00", "Wire fraud warning",
-    "Do not pay any salesperson, broker or personal real estate corporation directly",
+    "Do not pay any salesperson, broker or personal real estate", "not necessarily the whole commission on the property",
   ]) assert.ok(lawyer.includes(text), `lawyer copy is missing: ${text}`);
   assert.ok(!lawyer.includes("Jane Smith Real Estate Professional Corporation"), "the lawyer copy names no agent payee");
   assert.ok(!lawyer.includes("Patel <Law>"));

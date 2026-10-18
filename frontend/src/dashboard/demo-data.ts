@@ -28,9 +28,12 @@ export const demoBrokerage: BrokerageDashboard = {
     ],
     unclearedCents: 5_000_000,
     reconciliations: [
-      { trustAccountId: "a1", name: "Real Estate Trust", lastStatementEnd: "2026-09-30", lastSignedPeriodEnd: "2026-08-31",
-        awaitingSignature: [{ periodEnd: "2026-09-30", dueBy: "2026-10-30", overdue: false }] },
-      { trustAccountId: "a2", name: "Pre-construction Trust", lastStatementEnd: "2026-09-30", lastSignedPeriodEnd: "2026-09-30", awaitingSignature: [] },
+      { trustAccountId: "a1", name: "Real Estate Trust", kind: "REAL_ESTATE_TRUST", lastStatementEnd: "2026-09-30", lastSignedPeriodEnd: "2026-08-31",
+        awaitingSignature: [{ periodEnd: "2026-09-30", received: "2026-10-03", dueBy: "2026-11-02", overdue: false }],
+        missingStatements: [], openIncidents: [] },
+      { trustAccountId: "a2", name: "Pre-construction Trust", kind: "REAL_ESTATE_TRUST", lastStatementEnd: "2026-09-30",
+        lastSignedPeriodEnd: "2026-09-30", awaitingSignature: [], missingStatements: [],
+        openIncidents: [{ id: "i1", kind: "SHORTFALL", amount: "12.50", detectedAt: "2026-10-06T14:00:00Z" }] },
     ],
   },
   complianceQueue: [
