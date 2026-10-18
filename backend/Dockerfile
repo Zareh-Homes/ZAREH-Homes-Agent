@@ -1,0 +1,25 @@
+# Back office API. Node 22.18+ runs the TypeScript sources directly (type stripping).
+FROM node:22.18-bookworm-slim AS deps
+WORKDIR /app/backend
+COPY brokerage-db/schema.prisma /app/brokerage-db/schema.prisma
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npx --yes prisma@6.16.2 generate --schema ../brokerage-db/schema.prisma
+
+FROM node:22.18-bookworm-slim
+ENV NODE_ENV=production
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --home /app appuser
+WORKDIR /app/backend
+COPY --from=deps /app/backend/node_modules ./node_modules
+COPY brokerage-db/schema.prisma /app/brokerage-db/schema.prisma
+COPY commission-engine/src /app/commission-engine/src
+COPY backend/package.json ./
+COPY backend/src ./src
+COPY backend/scripts ./scripts
+RUN mkdir -p /var/lib/zareh/uploads && chown appuser /var/lib/zareh/uploads
+USER appuser
+ENV UPLOAD_DIR=/var/lib/zareh/uploads HOST=0.0.0.0 PORT=3000
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# The config check runs first: the container won't start with an unsafe production configuration
+CMD ["sh", "-c", "node scripts/check-config.ts && exec node src/server.ts"]

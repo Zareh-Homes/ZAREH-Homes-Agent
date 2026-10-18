@@ -8,20 +8,20 @@ Fastify + Prisma on PostgreSQL. Node 22.18+ runs the TypeScript directly (no bui
 npm install                      # also runs `prisma generate` against ../brokerage-db/schema.prisma
 ```
 
-Database, in order:
+Database: apply every migration in order with the tracked runner (records checksums in
+`zareh_meta.schema_migrations`, refuses if an applied file has changed):
 
-1. `prisma db push` for the v1 schema, then `psql -f ../brokerage-db/constraints.sql`
-2. `psql -f ../brokerage-db/migrations/002_ontario_reco_cra.sql`
-3. `psql -f ../brokerage-db/migrations/003_trust_ledger_invariants.sql`
-4. `psql -f ../brokerage-db/migrations/004_document_compliance.sql`
-5. `psql -f ../brokerage-db/migrations/005_closing_cda.sql`
+```bash
+DATABASE_URL=... ../brokerage-db/migrate.sh --backup-dir /secure/backups   # production: backs up first
+../brokerage-db/migrate.sh --status
+```
 
-Use plain `psql -f` (not `--single-transaction`) for 003 and 004: they change enum values before their main transaction.
+Never use `prisma db push` or `prisma migrate` against a real database.
 
 ## Run
 
 ```bash
-npm start                        # refuses to start until real auth is wired into buildApp
+npm start                        # session auth (Argon2id + TOTP); see ops/env/*.env.example and `node scripts/check-config.ts`
 ALLOW_DEV_AUTH_HEADER=true npm start   # local only: trusts an x-user-id header
 UPLOAD_DIR=/path/to/uploads            # where document files go (default ./var/uploads)
 ```

@@ -114,4 +114,19 @@ describe("RECO filing and oversight dashboards", { skip }, () => {
     const reco = broker.sections.flatMap((s: { metrics: { key: string }[] }) => s.metrics).find((m: { key: string }) => m.key === "reco.filing");
     assert.ok(reco);
   });
+  test("health, readiness and the audit-log export", async () => {
+    assert.deepEqual((await app.inject({ method: "GET", url: "/healthz" })).json(), { status: "ok" });
+    const ready = await app.inject({ method: "GET", url: "/readyz" });
+    assert.equal(ready.statusCode, 200, ready.body);
+    assert.equal((await as(u.agent, "GET", `/api/audit/export?from=${TODAY}&to=${TODAY}`)).statusCode, 403);
+    await as(u.agent, "GET", "/api/dashboard/oversight?view=broker"); // a denied attempt, so there's something to export
+    const csv = await as(u.broker, "GET", `/api/audit/export?from=2000-01-01&to=2100-01-01&format=csv`);
+    assert.equal(csv.statusCode, 200);
+    assert.match(csv.headers["content-disposition"] as string, /audit-2000-01-01-to-2100-01-01\.csv/);
+    assert.match(csv.body.split("\r\n")[0]!, /^id,at,userId,entity,entityId,action,outcome,ip,route$/);
+    const json = (await as(u.broker, "GET", `/api/audit/export?from=2000-01-01&to=2100-01-01`)).json();
+    assert.ok(json.entries.some((e: { userId: string; outcome: string }) => e.userId === u.agent && e.outcome === "DENIED"));
+    // The export itself is on the audit trail
+    assert.ok(await prisma.auditLog.count({ where: { userId: u.broker, entityId: "/api/audit/export" } }) >= 2);
+  });
 });

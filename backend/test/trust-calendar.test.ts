@@ -86,3 +86,24 @@ test("unclaimed money: two years from the later of receipt or entitlement, month
   assert.equal(addMonths("2024-02-29", 24), "2026-02-28");
   assert.equal(addMonths("2025-01-31", 1), "2025-02-28");
 });
+
+test("time zones: 'today' is Toronto's date across UTC midnight and both daylight-saving changes", async () => {
+  const { todayInToronto } = await import("../src/lib/dates.ts");
+  assert.equal(todayInToronto(new Date("2026-10-19T03:59:59Z")), "2026-10-18"); // 23:59 EDT
+  assert.equal(todayInToronto(new Date("2026-10-19T04:00:00Z")), "2026-10-19");
+  assert.equal(todayInToronto(new Date("2026-03-08T06:59:59Z")), "2026-03-08"); // DST starts 02:00 EST → 03:00 EDT
+  assert.equal(todayInToronto(new Date("2026-03-09T03:59:59Z")), "2026-03-08"); // 23:59 EDT the same day
+  assert.equal(todayInToronto(new Date("2026-11-01T04:30:00Z")), "2026-11-01"); // 00:30 EDT
+  assert.equal(todayInToronto(new Date("2026-11-02T04:59:59Z")), "2026-11-01"); // 23:59 EST after DST ends
+  assert.equal(todayInToronto(new Date("2028-02-29T12:00:00Z")), "2028-02-29"); // leap day
+});
+
+test("business days across a leap day and the year end", () => {
+  const cal = new BusinessCalendar();
+  assert.equal(cal.add("2028-02-25", 5), "2028-03-03"); // Fri Feb 25 → Feb 28, 29, Mar 1, 2, 3
+  // Christmas 2027 is a Saturday: Monday Dec 27 is the s.88 substitute. Boxing Day (Sunday) and New Year's Day 2028
+  // (Saturday) get no substitute under the rules found (unverified; see regulatory-references §10)
+  assert.equal(cal.add("2027-12-24", 5), "2028-01-03");
+  assert.equal(cal.isBusinessDay("2027-12-27"), false);
+  assert.equal(cal.isBusinessDay("2027-12-28"), true);
+});

@@ -1,0 +1,92 @@
+# Regression gate: every push and pull request. Nothing deploys unless all of this passes.
+name: ci
+on: [push, pull_request]
+permissions: { contents: read }
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:ci@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22.18", cache: npm, cache-dependency-path: backend/package-lock.json }
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client age
+      - name: Migrations apply from scratch, and re-running changes nothing
+        run: brokerage-db/migrate.sh && brokerage-db/migrate.sh | grep -q "Up to date"
+      - run: npm ci
+        working-directory: backend
+      - name: Prisma schema matches the migrated database
+        working-directory: backend
+        run: |
+          diff=$(npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel ../brokerage-db/schema.prisma --script)
+          echo "$diff" | grep -q "This is an empty migration" || { echo "$diff"; exit 1; }
+      - run: npm run typecheck
+        working-directory: backend
+      - run: npm test
+        working-directory: backend
+      - name: Production configuration check refuses an unsafe configuration
+        working-directory: backend
+        run: "! NODE_ENV=production node scripts/check-config.ts"
+      - name: Dependency vulnerabilities (production dependencies)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Backup and restore round trip
+        run: |
+          age-keygen -o /tmp/key.txt
+          pub=$(grep "public key" /tmp/key.txt | awk '{print $4}')
+          out=$(BACKUP_DIR=/tmp/backups BACKUP_RECIPIENT=$pub ops/backup.sh)
+          RESTORE_ADMIN_URL=$DATABASE_URL ops/restore-test.sh "$out" "${out%.dump.age}.manifest.json" /tmp/key.txt
+
+  commission-engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22.18" }
+      - run: npm test
+        working-directory: commission-engine
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22.18", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci && npm run typecheck && npm test && npm run build
+        working-directory: frontend
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+
+  migration:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:ci@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client && brokerage-db/migrate.sh
+      - run: pip install -r requirements-dev.txt && python -m pytest -q
+        working-directory: migration
+
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }

@@ -20,6 +20,7 @@ import { tradeRecordRoutes } from "./deals/trade-record.ts";
 import { obligationRoutes } from "./obligations/service.ts";
 import { recoRoutes } from "./reco/filing.ts";
 import { oversightRoutes } from "./dashboard/oversight.ts";
+import { healthRoutes } from "./ops/health.ts";
 import type { AccountingAdapter } from "./accounting/adapter.ts";
 import type { AccountRole } from "./accounting/journal.ts";
 import type { AuthService } from "./security/auth-service.ts";
@@ -102,6 +103,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.register(obligationRoutes, { prisma: opts.prisma, resolveUserId, fieldCipher, today: opts.today });
   app.register(recoRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(oversightRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(healthRoutes, { prisma: opts.prisma, resolveUserId });
   app.register(fundsRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today, accounting: opts.accounting ?? null, accountMap: opts.accountMap });
   return app;
 }
