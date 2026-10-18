@@ -122,6 +122,8 @@ export function fromDatabaseError(err: unknown): DomainError | null {
       return new RuleViolationError("BANK_RULE", message);
     case "ZP001":
       return new DomainError("POLICY_NOT_APPROVED", 409, message);
+    case "23514":
+      return new RuleViolationError("CONSTRAINT_VIOLATION", message);
     default:
       return null;
   }

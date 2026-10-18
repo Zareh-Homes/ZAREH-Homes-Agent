@@ -183,6 +183,14 @@ model User {
   closingsFinalized       ClosingStatement[]          @relation("ClosingFinalizedBy")
   closingPayouts          ClosingAgentPayout[]
   commissionReceipts      CommissionReceipt[]
+  credential              UserCredential?
+  sessions                Session[]
+  authTokens              AuthToken[]                 @relation("AuthTokenFor")
+  authTokensIssued        AuthToken[]                 @relation("AuthTokenIssuedBy")
+  legalHoldsPlaced        LegalHold[]                 @relation("LegalHoldPlacedBy")
+  legalHoldsReleased      LegalHold[]                 @relation("LegalHoldReleasedBy")
+  privacyBreaches         PrivacyBreach[]
+  privacyBreachEvents     PrivacyBreachEvent[]
   payoutEvents            PayoutEvent[]
   receiptReversals        CommissionReceiptReversal[]
   closingVoids            ClosingVoid[]
@@ -283,6 +291,7 @@ model Transaction {
   trustEntries  TrustLedgerEntry[]
   trustHolds    TrustHold[]
   closings      ClosingStatement[]
+  legalHolds    LegalHold[]
   documentSlots DocumentSlot[]
 
   @@index([status])
@@ -760,19 +769,81 @@ model Notification {
 // Audit trail (RECO inspections)
 // ─────────────────────────────────────────────
 
+// Append-only security and activity trail (migration 010).
 model AuditLog {
   id        BigInt   @id @default(autoincrement())
   userId    String?  @db.Uuid
-  entity    String // "Transaction", "TrustLedgerEntry", ...
+  entity    String // "Session", "Transaction", "DocumentFile", ...
   entityId  String
-  action    String // CREATE / UPDATE / APPROVE / REJECT ...
-  changes   Json?
-  createdAt DateTime @default(now())
+  action    String // LOGIN, LOGIN_FAILED, VIEW_SENSITIVE, EXPORT, APPROVE, POST /api/...
+  changes   Json? // route params and safe details; never passwords, tokens or ID numbers
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  sessionId String?  @db.Uuid
+  ip        String?
+  userAgent String?
+  outcome   String? // SUCCESS, DENIED, FAILED, ERROR
+  route     String?
 
   user User? @relation(fields: [userId], references: [id])
 
   @@index([entity, entityId])
   @@index([createdAt])
+  @@index([userId, createdAt])
+}
+
+// Password, lockout and MFA state (migration 010). The MFA secret is encrypted by the application.
+model UserCredential {
+  userId             String    @id @db.Uuid
+  passwordHash       String
+  passwordChangedAt  DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  failedAttempts     Int       @default(0)
+  lockedUntil        DateTime? @db.Timestamptz(6)
+  mfaSecretEnc       String?
+  mfaEnabledAt       DateTime? @db.Timestamptz(6)
+  mfaLastStep        BigInt?
+  recoveryCodeHashes String[]  @default([])
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// Server-side session; only a hash of the cookie token is stored (migration 010).
+model Session {
+  id            String    @id @db.Uuid
+  tokenHash     String    @unique
+  csrfToken     String
+  userId        String    @db.Uuid
+  createdAt     DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  lastSeenAt    DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  expiresAt     DateTime  @db.Timestamptz(6)
+  mfaVerifiedAt DateTime? @db.Timestamptz(6)
+  revokedAt     DateTime? @db.Timestamptz(6)
+  revokedReason String?
+  ip            String?
+  userAgent     String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+enum AuthTokenPurpose {
+  INVITATION
+  PASSWORD_RESET
+}
+
+// Single-use invitation / password-reset token, hashed (migration 010).
+model AuthToken {
+  id          String           @id @db.Uuid
+  userId      String           @db.Uuid
+  purpose     AuthTokenPurpose
+  tokenHash   String           @unique
+  expiresAt   DateTime         @db.Timestamptz(6)
+  usedAt      DateTime?        @db.Timestamptz(6)
+  createdById String           @db.Uuid
+  createdAt   DateTime         @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  user      User @relation("AuthTokenFor", fields: [userId], references: [id])
+  createdBy User @relation("AuthTokenIssuedBy", fields: [createdById], references: [id])
 }
 
 // ─────────────────────────────────────────────
@@ -971,4 +1042,73 @@ model PayoutEvent {
 
   @@unique([payoutId, seq])
   @@unique([payableId, seq])
+}
+
+// How long each kind of record is kept, and why (migration 011). Disposal is manual and approved.
+model RetentionRule {
+  recordType     String   @id
+  description    String
+  retentionYears Int
+  startsFrom     String
+  legalBasis     String
+  effectiveFrom  DateTime @db.Date
+}
+
+// Records that must not be disposed of (migration 011). transactionId null = brokerage-wide.
+model LegalHold {
+  id            String    @id @db.Uuid
+  transactionId String?   @db.Uuid
+  reason        String
+  placedById    String    @db.Uuid
+  placedAt      DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  releasedById  String?   @db.Uuid
+  releasedAt    DateTime? @db.Timestamptz(6)
+  releaseNote   String?
+
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  placedBy    User         @relation("LegalHoldPlacedBy", fields: [placedById], references: [id])
+  releasedBy  User?        @relation("LegalHoldReleasedBy", fields: [releasedById], references: [id], onDelete: Restrict)
+}
+
+enum BreachEventKind {
+  NOTE
+  CONTAINED
+  RISK_ASSESSED
+  OPC_REPORTED
+  INDIVIDUALS_NOTIFIED
+  ORGANIZATIONS_NOTIFIED
+  CLOSED
+}
+
+// PIPEDA breach of security safeguards record (migration 011).
+model PrivacyBreach {
+  id                  String    @id @db.Uuid
+  discoveredAt        DateTime  @db.Timestamptz(6)
+  occurredFrom        DateTime? @db.Date
+  occurredTo          DateTime? @db.Date
+  description         String
+  informationInvolved String
+  individualsAffected Int?
+  recordedById        String    @db.Uuid
+  recordedAt          DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  recordedBy User                 @relation(fields: [recordedById], references: [id])
+  events     PrivacyBreachEvent[]
+}
+
+model PrivacyBreachEvent {
+  id                        String          @id @db.Uuid
+  breachId                  String          @db.Uuid
+  kind                      BreachEventKind
+  eventDate                 DateTime        @db.Date
+  realRiskOfSignificantHarm Boolean?
+  reference                 String?
+  note                      String
+  actorId                   String          @db.Uuid
+  createdAt                 DateTime        @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  breach PrivacyBreach @relation(fields: [breachId], references: [id])
+  actor  User          @relation(fields: [actorId], references: [id])
+
+  @@index([breachId])
 }

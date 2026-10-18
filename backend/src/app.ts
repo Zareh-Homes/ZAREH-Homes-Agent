@@ -11,10 +11,22 @@ import type { BrokerageProfile } from "./closing/cda-template.ts";
 import { dashboardRoutes } from "./dashboard/routes.ts";
 import { pipelineRoutes } from "./pipeline/routes.ts";
 import { bankRoutes } from "./bank/routes.ts";
+import { privacyRoutes } from "./security/privacy.ts";
+import type { AuthService } from "./security/auth-service.ts";
+import { FieldCipher } from "./security/crypto.ts";
+import { registerHttpSecurity } from "./security/http.ts";
+import { randomBytes } from "node:crypto";
 
 export interface AppOptions {
   prisma: PrismaClient;
-  resolveUserId: ResolveUserId;
+  /** Development / test only: how to find the caller without a session. Ignored when `auth` is given. */
+  resolveUserId?: ResolveUserId;
+  /** Production: session cookies, CSRF and MFA. */
+  auth?: AuthService;
+  fieldCipher?: FieldCipher;
+  cookieSecure?: boolean;
+  allowedOrigins?: string[];
+  rateLimits?: { loginPerMinutePerIp: number; loginPerMinutePerEmail: number; apiPerMinute: number };
   fileStore: FileStore;
   brokerage: BrokerageProfile;
   notificationHub?: NotificationHub;
@@ -23,7 +35,18 @@ export interface AppOptions {
 }
 
 export function buildApp(opts: AppOptions): FastifyInstance {
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 64 * 1024 });
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 64 * 1024, trustProxy: process.env.TRUST_PROXY === "true" });
+  if (!opts.auth && !opts.resolveUserId) throw new Error("buildApp needs either auth (sessions) or resolveUserId (development)");
+  // With sessions, the caller is whoever the session says: never a header the client sends
+  const resolveUserId: ResolveUserId = opts.auth ? (request) => request.auth?.userId ?? null : opts.resolveUserId!;
+  const fieldCipher = opts.auth?.config.fieldCipher ?? opts.fieldCipher ?? new FieldCipher(randomBytes(32));
+  registerHttpSecurity(app, {
+    prisma: opts.prisma,
+    auth: opts.auth ?? null,
+    cookieSecure: opts.auth?.config.cookieSecure ?? opts.cookieSecure ?? false,
+    allowedOrigins: opts.auth?.config.allowedOrigins ?? opts.allowedOrigins ?? [],
+    limits: opts.rateLimits,
+  });
 
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof DomainError) {
@@ -39,22 +62,24 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   const hub = opts.notificationHub ?? new NotificationHub();
-  app.register(trustRoutes, { prisma: opts.prisma, resolveUserId: opts.resolveUserId, today: opts.today });
+  app.register(trustRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(complianceRoutes, {
     prisma: opts.prisma,
     store: opts.fileStore,
     hub,
-    resolveUserId: opts.resolveUserId,
+    resolveUserId,
+    fieldCipher,
     today: opts.today,
   });
   app.register(closingRoutes, {
     prisma: opts.prisma,
     brokerage: opts.brokerage,
-    resolveUserId: opts.resolveUserId,
+    resolveUserId,
     today: opts.today,
   });
-  app.register(dashboardRoutes, { prisma: opts.prisma, resolveUserId: opts.resolveUserId, today: opts.today });
-  app.register(pipelineRoutes, { prisma: opts.prisma, resolveUserId: opts.resolveUserId, today: opts.today });
-  app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId: opts.resolveUserId, today: opts.today });
+  app.register(dashboardRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(pipelineRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId, today: opts.today });
+  app.register(privacyRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   return app;
 }

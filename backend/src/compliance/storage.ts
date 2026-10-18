@@ -3,6 +3,7 @@
  * and SHA-256; production should use S3 / Drive with server-side encryption.
  */
 
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -82,5 +83,36 @@ export function contentMatchesMime(bytes: Buffer, mimeType: string): boolean {
       return bytes.subarray(4, 8).toString("latin1") === "ftyp";
     default:
       return false;
+  }
+}
+
+/**
+ * Encrypts every file before it reaches the underlying store (AES-256-GCM,
+ * random IV per file, authenticated). Use in production over disk or object
+ * storage; a tampered or truncated file fails to decrypt rather than being served.
+ */
+export class EncryptedStore implements FileStore {
+  private readonly inner: FileStore;
+  private readonly key: Buffer;
+
+  constructor(inner: FileStore, key: Buffer) {
+    if (key.length !== 32) throw new Error("file encryption key must be 32 bytes");
+    this.inner = inner;
+    this.key = key;
+  }
+
+  async put(key: string, bytes: Buffer, mimeType: string): Promise<void> {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+    const body = Buffer.concat([cipher.update(bytes), cipher.final()]);
+    await this.inner.put(key, Buffer.concat([Buffer.from("ZHE1"), iv, cipher.getAuthTag(), body]), mimeType);
+  }
+
+  async get(key: string): Promise<Buffer> {
+    const sealed = await this.inner.get(key);
+    if (sealed.subarray(0, 4).toString() !== "ZHE1") throw new Error("stored file is not encrypted");
+    const decipher = createDecipheriv("aes-256-gcm", this.key, sealed.subarray(4, 16));
+    decipher.setAuthTag(sealed.subarray(16, 32));
+    return Buffer.concat([decipher.update(sealed.subarray(32)), decipher.final()]);
   }
 }

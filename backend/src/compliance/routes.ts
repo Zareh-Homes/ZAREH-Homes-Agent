@@ -39,7 +39,7 @@ type Params = Record<string, string>;
  */
 export async function complianceRoutes(app: FastifyInstance, opts: ComplianceRouteOptions): Promise<void> {
   const { prisma, hub } = opts;
-  const deps: ComplianceDeps = { prisma: opts.prisma, store: opts.store, hub: opts.hub };
+  const deps: ComplianceDeps = { prisma: opts.prisma, store: opts.store, hub: opts.hub, fieldCipher: opts.fieldCipher };
   const today = opts.today ?? (() => todayInToronto());
   const actorOf = async (request: FastifyRequest): Promise<Actor> =>
     loadActor(prisma, await opts.resolveUserId(request));
@@ -107,7 +107,8 @@ export async function complianceRoutes(app: FastifyInstance, opts: ComplianceRou
     const safeName = file.fileName.replace(/[^\w.\- ]+/g, "_");
     return reply
       .header("content-type", file.mimeType)
-      .header("content-disposition", `inline; filename="${safeName}"`)
+      .header("content-disposition", `attachment; filename="${safeName}"`)
+      .header("content-security-policy", "default-src 'none'; sandbox")
       .header("x-content-type-options", "nosniff")
       .header("cache-control", "private, no-store")
       .send(await bytes());

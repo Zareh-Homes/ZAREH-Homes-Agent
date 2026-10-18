@@ -20,6 +20,8 @@ import {
 } from "../errors.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { formatCents } from "../lib/money.ts";
+import type { FieldCipher } from "../security/crypto.ts";
+import { openFintrac, sealFintrac } from "./protect.ts";
 import {
   maskIdNumber,
   validateFintracCorporate,
@@ -48,6 +50,7 @@ export interface ComplianceDeps {
   prisma: PrismaClient;
   store: FileStore;
   hub: NotificationHub;
+  fieldCipher: FieldCipher;
 }
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -142,7 +145,9 @@ function summarize(metadata: FintracRecord | null): Record<string, unknown> | nu
     return {
       fullLegalName: metadata.fullLegalName,
       idType: metadata.idType,
-      idNumber: maskIdNumber(metadata.idNumber),
+      idNumber: (metadata as { idNumberLast4?: string }).idNumberLast4
+        ? `•••• ${(metadata as { idNumberLast4?: string }).idNumberLast4}`
+        : maskIdNumber(metadata.idNumber),
       expiryDate: metadata.expiryDate,
       verificationDate: metadata.verificationDate,
       thirdPartyDetermination: metadata.thirdPartyDetermination,
@@ -445,7 +450,7 @@ export async function uploadDocument(
                                     "metadataKind", metadata, "uploadedById")
         VALUES (gen_random_uuid(), ${slotId}::uuid, ${next}::int, ${upload.fileName}, ${storageKey}, ${upload.mimeType},
                 ${upload.bytes.length}::int, ${sha256}, ${kind}::"DocumentMetadataKind",
-                ${metadata === null ? null : JSON.stringify(metadata)}::jsonb, ${actor.id}::uuid)
+                ${metadata === null ? null : JSON.stringify(sealFintrac(metadata, deps.fieldCipher))}::jsonb, ${actor.id}::uuid)
         RETURNING id`;
       await tx.$executeRaw`
         UPDATE "DocumentSlot" SET status = 'PENDING_REVIEW', "updatedAt" = now() WHERE id = ${slotId}::uuid`;
@@ -575,7 +580,7 @@ export async function getFile(
       uploadedAt: file.uploadedAt.toISOString(),
       metadataSummary: summarize(metadata),
       // Full FINTRAC record (whole ID number) only for staff; agents see the masked summary
-      metadata: STAFF.includes(actor.role) ? metadata : null,
+      metadata: STAFF.includes(actor.role) ? openFintrac(metadata as unknown as Record<string, unknown> | null, deps.fieldCipher) : null,
     },
     bytes: () => deps.store.get(file.storageKey),
   };
