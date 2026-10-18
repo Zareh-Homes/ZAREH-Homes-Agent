@@ -21,7 +21,7 @@ Never use `prisma db push` or `prisma migrate` against a real database.
 ## Run
 
 ```bash
-npm start                        # session auth (Argon2id + TOTP); see ops/env/*.env.example and `node scripts/check-config.ts`
+npm start                        # session auth (scrypt passwords + TOTP MFA); see ops/env/*.env.example and `node scripts/check-config.ts`
 ALLOW_DEV_AUTH_HEADER=true npm start   # local only: trusts an x-user-id header
 UPLOAD_DIR=/path/to/uploads            # where document files go (default ./var/uploads)
 ```
