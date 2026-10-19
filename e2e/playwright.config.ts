@@ -4,7 +4,9 @@ import { randomBytes } from "node:crypto";
 
 const state = (f: string) => { try { return readFileSync(new URL(`./.state/${f}`, import.meta.url), "utf8").trim(); } catch { return ""; } };
 const API_PORT = 3100;
-const WEB = "http://127.0.0.1:4173";
+// E2E_BASE_URL: an already-deployed stack (the staging rehearsal); otherwise the API and the built app are started here
+const EXTERNAL = process.env.E2E_BASE_URL;
+const WEB = EXTERNAL ?? "http://127.0.0.1:4173";
 
 export default defineConfig({
   testDir: "tests",
@@ -22,11 +24,12 @@ export default defineConfig({
     timezoneId: "America/Toronto",
     locale: "en-CA",
     trace: "retain-on-failure",
+    ignoreHTTPSErrors: !!EXTERNAL, // the rehearsal's certificate is self-signed
     screenshot: "only-on-failure",
     launchOptions: process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
   },
   projects: [{ name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1366, height: 900 } } }],
-  webServer: [
+  webServer: EXTERNAL ? [] : [
     {
       // The real API in session mode (cookies, CSRF, MFA), as in production apart from https
       command: "node src/server.ts",

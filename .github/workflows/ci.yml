@@ -134,6 +134,24 @@ jobs:
           done
           exit $failed
 
+  staging:
+    # Rehearsal of a staging deployment: production images, TLS-only database with the restricted login,
+    # HTTPS in front, the whole browser suite over HTTPS, then log / permission / audit / backup checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22.23.3" }
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client age
+      - run: docker build -f backend/Dockerfile -t zareh-api:ci . && docker build -f frontend/Dockerfile -t zareh-web:ci .
+      - run: npm ci && npx playwright install --with-deps chromium
+        working-directory: e2e
+      - run: ops/staging-rehearsal.sh zareh-api:ci zareh-web:ci
+      - name: Rehearsal report, screenshots and container logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: staging-rehearsal, path: "e2e/report/", retention-days: 30 }
+
   secrets:
     runs-on: ubuntu-24.04
     steps:

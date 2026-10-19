@@ -67,8 +67,25 @@ export function DealWorkspace({ dealId, tab }: { dealId: string; tab: string }) 
         </div>
         <StatusBadge tone={STATUS_TONE[deal.status] ?? "neutral"}>{labelOf(deal.status)}</StatusBadge>
       </header>
+      <PilotScope deal={deal} />
       <TabLinks label="Deal sections" current={current.key} tabs={tabs.map((t) => ({ key: t.key, label: t.label, href: `/deals/${deal.id}/${t.key}` }))} />
       {current.render({ deal, reloadDeal: res.reload })}
     </Page>
+  );
+}
+
+/** What this deal needs that the pilot doesn't do (docs/pilot-scope.md). Display only: the server refuses those steps. */
+function PilotScope({ deal }: { deal: Deal }) {
+  const notes: string[] = [];
+  if (isLease(deal.side)) notes.push("Lease: the deal, documents and deposit are tracked here, but the CDA and payments out of trust stay off until the broker of record enables lease settlement.");
+  if (deal.trustDepositHolder === "BUILDER") notes.push("Pre-construction deposit held by the builder: outside the pilot. Keep this deal's money in Lone Wolf.");
+  if (deal.outsideReferralPayee) notes.push(`Outside referral to ${deal.outsideReferralPayee}: the referral payable can't be approved until the third-party payables policy is enabled. Pay it outside the pilot.`);
+  if (notes.length === 0) return null;
+  return (
+    <div className="mb-4">
+      <Notice kind="warning" title="Outside the pilot">
+        <ul className="list-disc pl-5">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
+      </Notice>
+    </div>
   );
 }

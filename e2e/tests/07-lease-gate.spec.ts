@@ -24,6 +24,7 @@ test("a lease: deposit received into trust, but no CDA and nothing paid out of t
   await agent.getByRole("button", { name: "Open the deal" }).click();
   await expect(agent).toHaveURL(/\/deals\/[0-9a-f-]{36}$/);
   const dealId = agent.url().split("/").pop()!;
+  await expect(agent.getByText("Outside the pilot")).toBeVisible();
   await agent.getByRole("button", { name: "Mark firm" }).click();
   await agent.getByRole("group", { name: "Mark firm" }).getByRole("button", { name: "Mark firm" }).click();
   await agent.getByRole("button", { name: "Record commencement" }).click();
