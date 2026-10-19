@@ -40,15 +40,21 @@ test("2–9. the broker's screens, in the order of the walkthrough", async ({ br
   await broker.goto(`/deals/${condoId}/trust`);
   await broker.getByRole("button", { name: "Record a deposit received" }).click();
   await expect(broker.getByLabel("Amount")).toBeVisible();
+  await expect(broker.getByText("Deposit Missing / Overdue")).toBeVisible(); // due 3 days ago, nothing received
   await shot(broker, "tour-05a-record-deposit");
   await visit("/bank", "tour-05b-bank-files", "Verified");
   await visit(`/deals/${saleId}/record`, "tour-06-trade-record", "210 Navy St");
   await visit(`/deals/${saleId}/closing`, "tour-07-cda", /-R1 issued/);
+  await expect(broker.getByText("Brokerage share (before expenses)")).toBeVisible(); // the HST on it is shown apart
+  await expect(broker.getByText("Sent, not confirmed by the bank")).toBeVisible();
   await visit("/approvals", "tour-08a-approvals", "Jamie Rivera");
   await visit("/bank/funds", "tour-08b-available-funds", "Payouts can be approved");
+  await expect(broker.getByText(/net HST collected \(estimate\); the attested obligations figure is \$0\.00/)).toBeVisible();
   await visit("/bank/reconciliations", "tour-09a-reconciliations", "Signed");
   await visit("/trust", "tour-09b-trust", "Real Estate Trust Account");
   await visit("/oversight/broker", "tour-09c-broker-oversight", /^As of /);
+  await expect(broker.getByText("Firm or closed deals without an agent-signed trade record")).toBeVisible();
+  await expect(broker.getByText(/2026-0002 \(prepared, not signed\)|\(prepared, not signed\)/).first()).toBeVisible();
   await visit("/oversight/accounting", "tour-09d-accounting", /^As of /);
 });
 

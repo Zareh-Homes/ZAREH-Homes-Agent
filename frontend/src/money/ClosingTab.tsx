@@ -136,7 +136,9 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
             ["Commission", `${centsText(c.incoming.commission.base)} + ${c.taxName} ${centsText(c.incoming.commission.hst)} = ${centsText(c.incoming.commission.total)}`],
             ...(c.incoming.coop.total ? [["Co-operating brokerage", centsText(c.incoming.coop.total)] as [string, string]] : []),
             ...(c.brokerage.referral ? [[`Referral to ${c.brokerage.referral.payee}`, centsText(c.brokerage.referral.total)] as [string, string]] : []),
-            ["Brokerage keeps", centsText(c.brokerage.netEarnedShare.total)],
+            // The share's HST is collected for remittance, not earned: show the two apart
+            ["Brokerage share (before expenses)", centsText(c.brokerage.netEarnedShare.base)],
+            [`${c.taxName} on the brokerage share (to remit)`, centsText(c.brokerage.netEarnedShare.hst)],
             [`Net ${c.taxName} (this deal, estimate)`, centsText(c.brokerage.netHstEstimate)],
           ]} />
         </Section>
@@ -316,11 +318,13 @@ function PayoutRow({ line, broker, bank, accounts, onUpdate }: { line: PayoutLin
         <span>
           <span className="font-medium">{line.payeeName}</span> <span className="text-ink-3">{labelOf(line.kind)}</span>
           <span className="block">{moneyText(line.remaining)}{line.carriedForward !== "0.00" ? ` (of ${moneyText(line.amount)}; ${moneyText(line.carriedForward)} paid under an earlier CDA)` : ""}</span>
-          {line.paymentReference && <span className="block text-xs text-ink-3">Paid {dateText(line.paidAt)} · {line.paymentReference}{line.paymentConfirmed === false ? " · not yet on a bank file" : ""}</span>}
+          {line.paymentReference && <span className="block text-xs text-ink-3">Recorded as sent {dateText(line.paidAt)} · {line.paymentReference}{line.paymentConfirmed === false ? " · not yet matched to a verified bank file" : ""}</span>}
           {line.recoveryRequired && <span className="block text-xs text-critical">Overpaid: a recovery is needed</span>}
           {PAYOUT_HELP[line.status] && <span className="block text-xs text-ink-2">{PAYOUT_HELP[line.status]}</span>}
         </span>
-        <StatusBadge tone={PAYOUT_TONE[line.status] ?? "neutral"}>{labelOf(line.status)}</StatusBadge>
+        {line.status === "PAID" && line.paymentConfirmed === false
+          ? <StatusBadge tone="warning">Sent, not confirmed by the bank</StatusBadge>
+          : <StatusBadge tone={PAYOUT_TONE[line.status] ?? "neutral"}>{line.status === "PAID" ? "Paid, confirmed by the bank" : labelOf(line.status)}</StatusBadge>}
       </div>
       <div className="mt-2 flex flex-wrap gap-2">
         {broker && line.status === "READY_FOR_APPROVAL" && <InlineForm label="Approve" variant="primary">{(close) => <Approve path={`${base}/approve`} accounts={accounts} onDone={(v) => { close(); onUpdate(v); }} onCancel={close} />}</InlineForm>}

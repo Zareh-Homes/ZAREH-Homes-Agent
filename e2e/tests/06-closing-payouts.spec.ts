@@ -254,7 +254,7 @@ test("payment: the approver can't record it; the admin records it once even with
   await admin.getByRole("button", { name: "Record payment sent" }).click();
   await admin.getByLabel("Bank reference").fill("EFT-9001");
   await admin.getByRole("button", { name: "Record payment" }).dblclick();
-  await expect(admin.getByText("Paid", { exact: true }).first()).toBeVisible();
+  await expect(admin.getByText("Sent, not confirmed by the bank", { exact: true }).first()).toBeVisible(); // recorded, not yet on a verified bank file
   const paid = (await apiAs(admin, "GET", `/api/deals/${run().saleId}/closing/payouts`)).body.payouts[0];
   expect(paid.history.filter((h: { kind: string }) => h.kind === "PAID")).toHaveLength(1);
 
@@ -266,7 +266,11 @@ test("payment: the approver can't record it; the admin records it once even with
   await admin.getByRole("button", { name: "Record payment sent" }).click();
   await admin.getByLabel("Bank reference").fill("EFT-9002");
   await admin.getByRole("button", { name: "Record payment" }).click();
-  await expect(admin.getByText("Paid", { exact: true }).first()).toBeVisible();
+  await expect(admin.getByText("Sent, not confirmed by the bank", { exact: true }).first()).toBeVisible();
+  // Accounting counts only the replacement as outstanding: the returned payment is no longer "sent"
+  const accounting = (await apiAs(admin, "GET", "/api/dashboard/oversight?view=accounting")).body;
+  const unconfirmed = accounting.sections.flatMap((s: { metrics: { key: string; value: string }[] }) => s.metrics).find((m: { key: string }) => m.key === "payments.unconfirmed");
+  expect(unconfirmed.value).toBe("13125.00");
   const final = (await apiAs(admin, "GET", `/api/deals/${run().saleId}/closing/payouts`)).body.payouts[0];
   expect(final.history.map((h: { kind: string }) => h.kind)).toEqual(["APPROVED", "CANCELLED", "APPROVED", "PAID", "PAYMENT_REVERSED", "PAID"]);
   await admin.getByText("History").last().click();

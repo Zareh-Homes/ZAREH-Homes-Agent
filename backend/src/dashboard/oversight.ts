@@ -122,6 +122,10 @@ async function brokerView(prisma: PrismaClient, today: string, now: string): Pro
     SELECT (SELECT COUNT(*) FROM "PayoutEvent" e WHERE e.kind = 'APPROVED' AND e.seq = (SELECT MAX(seq) FROM "PayoutEvent" x
              WHERE x."payoutId" IS NOT DISTINCT FROM e."payoutId" AND x."payableId" IS NOT DISTINCT FROM e."payableId"))::int AS n,
            (SELECT COUNT(*) FROM "TradeRecordSheet" WHERE "agentSignedAt" IS NOT NULL AND "brokerSignedAt" IS NULL)::int AS trs`;
+  const unsigned = await prisma.$queryRaw<{ dealNumber: string; prepared: boolean }[]>`
+    SELECT t."dealNumber", (s.id IS NOT NULL) AS prepared FROM "Transaction" t
+      LEFT JOIN "TradeRecordSheet" s ON s."transactionId" = t.id
+     WHERE t.status IN ('FIRM', 'CLOSED') AND s."agentSignedAt" IS NULL ORDER BY t."dealNumber"`;
   const [unclaimed] = await prisma.$queryRaw<{ n: number; due: number }[]>`
     SELECT COUNT(*)::int AS n,
            COUNT(*) FILTER (WHERE COALESCE("entitledSince", "heldSince") <= ${today}::date - interval '2 years')::int AS due
@@ -135,6 +139,10 @@ async function brokerView(prisma: PrismaClient, today: string, now: string): Pro
         reco,
         { key: "trs.awaitingBroker", label: "Trade record sheets to sign", value: awaiting!.trs, unit: "count", asOf: now, status: awaiting!.trs ? "attention" : "ok",
           definition: "Signed by the agent, awaiting the broker of record's review and signature (O. Reg. 579/05 s.17(5))", source: "Trade record sheets" },
+        { key: "trs.notSignedByAgent", label: "Firm or closed deals without an agent-signed trade record", value: unsigned.length, unit: "count", asOf: now,
+          items: unsigned.map((t) => `${t.dealNumber}${t.prepared ? " (prepared, not signed)" : " (not prepared)"}`), status: unsigned.length ? "attention" : "ok",
+          definition: "The agent prepares and signs first, then the broker of record reviews and signs (s.17(3), s.17(5)); these haven't reached the broker yet",
+          source: "Deals and trade record sheets" },
         { key: "payouts.approvedNotSent", label: "Payouts approved, not yet sent", value: awaiting!.n, unit: "count", asOf: now, status: awaiting!.n ? "attention" : "ok",
           definition: "Approved by a managing broker; someone other than the approver records the payment", source: "Payout events" },
         { key: "unclaimed.open", label: "Unclaimed trust money records", value: unclaimed!.n, unit: "count", asOf: now,
@@ -156,8 +164,12 @@ async function accountingView(prisma: PrismaClient, today: string, now: string):
       source: `Verified bank balance (${f.asOf ?? "none"}), payout events, obligations figure${f.obligations ? ` (${f.obligations.asOf}, ${f.obligations.source})` : " (none current)"}` });
   }
   const [p] = await prisma.$queryRaw<{ unconfirmed: number; unconfirmedTotal: string; unverified: number; unverifiedTotal: string; recoveries: string }[]>`
-    SELECT (SELECT COUNT(*) FROM "PayoutEvent" e WHERE e.kind = 'PAID' AND NOT payout_event_confirmed(e.id))::int AS unconfirmed,
-           (SELECT COALESCE(SUM(amount), 0) FROM "PayoutEvent" e WHERE e.kind = 'PAID' AND NOT payout_event_confirmed(e.id))::text AS "unconfirmedTotal",
+    WITH sent AS (  -- payments whose latest event is PAID: a payment that came back no longer counts as sent
+      SELECT e.* FROM "PayoutEvent" e WHERE e.kind = 'PAID' AND NOT payout_event_confirmed(e.id)
+         AND e.seq = (SELECT MAX(seq) FROM "PayoutEvent" x
+                       WHERE x."payoutId" IS NOT DISTINCT FROM e."payoutId" AND x."payableId" IS NOT DISTINCT FROM e."payableId"))
+    SELECT (SELECT COUNT(*) FROM sent)::int AS unconfirmed,
+           (SELECT COALESCE(SUM(amount), 0) FROM sent)::text AS "unconfirmedTotal",
            (SELECT COUNT(*) FROM "CommissionReceipt" r WHERE NOT receipt_cleared(r.id)
               AND NOT EXISTS (SELECT 1 FROM "CommissionReceiptReversal" x WHERE x."receiptId" = r.id))::int AS unverified,
            (SELECT COALESCE(SUM(amount), 0) FROM "CommissionReceipt" r WHERE NOT receipt_cleared(r.id)

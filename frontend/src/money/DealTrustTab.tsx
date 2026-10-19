@@ -23,6 +23,7 @@ interface LedgerEntry {
 interface Hold { id: string; reason: string; note: string; flaggedAt: string; releasedAt: string | null; releaseNote: string | null; active: boolean }
 interface DealLedger {
   deal: { id: string; dealNumber: string; status: string; trustDepositHolder: string; depositStatus: string };
+  deposit: { state: string; tone: "good" | "critical" | "warning" | "neutral"; label: string; detail: string };
   balances: { trustAccountId: string; balance: string }[]; entries: LedgerEntry[]; holds: Hold[]; activeHold: Hold | null;
 }
 interface TrustAccount { id: string; name: string; kind: string; bankName: string; accountLast4: string; isActive: boolean }
@@ -57,11 +58,12 @@ export function DealTrustTab({ deal, reloadDeal }: TabProps) {
       <Section title="Deposit">
         <Facts items={[
           ["Held by", labelOf(deal.trustDepositHolder)],
-          ["Status", <StatusBadge tone={l.deal.depositStatus === "RECEIVED" ? "good" : "neutral"}>{labelOf(l.deal.depositStatus)}</StatusBadge>],
+          ["Status", <StatusBadge tone={l.deposit.tone}>{l.deposit.label}</StatusBadge>],
           ["Expected", moneyText(deal.depositAmount)],
           ["Due", dateText(deal.depositDueDate)],
           ...l.balances.map((b): [string, string] => ["Held in trust", moneyText(b.balance)]),
         ]} />
+        {l.deposit.detail && <p className={`mt-3 text-sm ${l.deposit.tone === "critical" ? "text-critical" : "text-ink-2"}`}>{l.deposit.detail}</p>}
         {deal.trustDepositHolder !== "OUR_BROKERAGE" && <p className="mt-3 text-sm text-ink-2">Someone else holds this deposit ({labelOf(deal.trustDepositHolder).toLowerCase()}), so nothing is recorded in our trust account.</p>}
       </Section>
 

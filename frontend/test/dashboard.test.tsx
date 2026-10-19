@@ -55,7 +55,7 @@ describe("admin widgets", () => {
 
   test("trust widget: money not yet cleared at the bank, and each account's reconciliation status", () => {
     const t = text(<Dashboard data={demoResponses.admin!} />);
-    expect(t).toContain("$50,000.00 recorded but not yet matched to the bank");
+    expect(t).toContain("$50,000.00 is recorded but not yet confirmed by a bank file");
     expect(t).toContain("1 month to sign · due Nov 2"); // 30 days after the statement arrived, not after month end
     expect(t).toContain("Signed to Sep 30");
     expect(t).toContain("$12.50 shortfall in Pre-construction Trust.");

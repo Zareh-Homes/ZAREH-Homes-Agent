@@ -51,6 +51,8 @@ export interface FundsAvailability {
   available: string | null;
   /** Why nothing can be approved from this account right now, if so */
   blockedBecause: string[];
+  /** Things the approver should check that don't block approval (e.g. an obligations figure below the HST the CDAs show) */
+  cautions: string[];
   definition: string;
 }
 
@@ -88,6 +90,25 @@ export async function fundsAvailability(prisma: PrismaClient, account: AccountRe
   else if (Date.parse(today) - balance.periodEnd.getTime() > 3 * 86_400_000) blockedBecause.push(`The latest verified balance is from ${asOf}; import today's balance`);
   if (operating && !freshObligation) blockedBecause.push(`No attested obligations figure in the last ${OBLIGATIONS_MAX_AGE_DAYS} days`);
 
+  // The obligations figure is the accountant's, but the system knows the HST its CDAs collected: say so when the
+  // figure is lower, so a $0 attestation can't silently leave HST out. A warning, not a block: some may be remitted.
+  const cautions: string[] = [];
+  if (operating && freshObligation) {
+    const yearStart = `${today.slice(0, 4)}-01-01`;
+    const [hst] = await prisma.$queryRaw<{ cents: string }[]>`
+      SELECT COALESCE(SUM(COALESCE(c.computation #>> '{brokerage,netHstEstimate}', c.computation #>> '{brokerage,hstRemittance}')::bigint), 0)::text AS cents
+        FROM "ClosingStatement" c JOIN "Transaction" t ON t.id = c."transactionId"
+       WHERE t."closeDate" >= ${yearStart}::date AND t."closeDate" <= ${today}::date
+         AND NOT EXISTS (SELECT 1 FROM "ClosingVoid" v WHERE v."closingId" = c.id)`;
+    const netHst = Number(BigInt(hst!.cents));
+    const attested = numericToCents(freshObligation.amount.toFixed(2));
+    if (attested < netHst) {
+      const cad = (c: Cents) => new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(c / 100);
+      cautions.push(`This year's CDAs show ${cad(netHst)} of net HST collected (estimate); the attested obligations figure is ` +
+        `${cad(attested)}. Unless that HST has already been remitted, the figure should include it.`);
+    }
+  }
+
   const deductions = numericToCents(parts!.unpresented) + numericToCents(parts!.approved) + numericToCents(parts!.returned) +
     (freshObligation ? numericToCents(freshObligation.amount.toFixed(2)) : 0);
   return {
@@ -100,6 +121,7 @@ export async function fundsAvailability(prisma: PrismaClient, account: AccountRe
       : null,
     available: balance ? formatCents(numericToCents(balance.closingBalance.toFixed(2)) - deductions) : null,
     blockedBecause,
+    cautions,
     definition: "Verified bank balance, less payments sent but not yet through the bank, payments approved but not sent, " +
       "returned payments still owed, and (operating account) other obligations from an attested figure no more than 7 days old.",
   };

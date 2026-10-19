@@ -47,7 +47,7 @@ export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard[
         : late.length > 0 ? <StatusBadge tone="critical">{late.length} past closing</StatusBadge> : undefined}
     >
       <div className="px-4 pb-3 pt-4">
-        <p className="text-xs font-medium text-ink-2">Held in trust now</p>
+        <p className="text-xs font-medium text-ink-2">Trust ledger balance (what we owe clients)</p>
         <p className="mt-1 text-4xl font-semibold tracking-tight text-ink" title={money(trust.totalCents)}>{dollars(trust.totalCents)}</p>
         {trust.accounts.length > 1 && (
           <ul className="mt-3 space-y-1 text-sm">
@@ -61,7 +61,7 @@ export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard[
         )}
         {trust.unclearedCents > 0 && (
           <p className="mt-2 text-sm text-ink-2">
-            <span className="font-medium tabular-nums text-ink">{money(trust.unclearedCents)}</span> recorded but not yet matched to the bank. It can't be paid out until it is.
+            Of this, <span className="font-medium tabular-nums text-ink">{money(trust.unclearedCents)}</span> is recorded but not yet confirmed by a bank file. It can't be paid out until it is.
           </p>
         )}
       </div>

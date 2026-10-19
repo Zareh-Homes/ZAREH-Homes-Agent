@@ -11,6 +11,16 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - `API_REQUESTS_PER_MINUTE` (default 600) sets the per-address request limit; sign-in limits are unchanged.
 - Browser tests 31 → 37 (demo brokerage, walkthrough tour, handover). Backend 185 → 186.
 
+## 0.18.3 (2026-10-19): Review of the demo tour
+
+- CDA: "Brokerage keeps" (share plus its HST) replaced by the brokerage share before expenses and, separately, the HST on it to remit. Display only; calculations unchanged.
+- Payouts recorded as sent but not yet on a verified bank file show "Sent, not confirmed by the bank" (amber), not "Paid".
+- Fix: the accounting page counted a payment that came back as still "sent, not confirmed" ($26,250 instead of $13,125). It now counts only payments whose latest event is the payment.
+- Fix: a deal's Trust tab showed the stored "Awaiting" status; it now shows the same deposit status as the pipeline (e.g. "Deposit Missing / Overdue").
+- Broker oversight: new count of firm or closed deals without an agent-signed trade record (before, only sheets the agent had signed appeared).
+- Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
+- Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
+
 ## 0.18.1 (2026-10-19): Pilot acceptance checks
 
 - **Migration 019:** `LEASE_SETTLEMENT` policy (off): no lease CDA or payment out of trust until counsel signs off; duplicate commission receipt references refused.

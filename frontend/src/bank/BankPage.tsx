@@ -363,7 +363,7 @@ function ReconExceptions({ d }: { d: ReconDetails }) {
 
 interface Availability {
   asOf: string | null; bankBalance: string | null; unpresentedPayments: string; approvedNotSent: string; returnedStillOwed: string;
-  obligations: { amount: string; asOf: string; source: string; reference: string } | null; available: string | null; blockedBecause: string[]; definition: string;
+  obligations: { amount: string; asOf: string; source: string; reference: string } | null; available: string | null; blockedBecause: string[]; cautions?: string[]; definition: string;
 }
 interface Obligations {
   id: string; asOf: string; amount: string; source: string; sourceReference: string; preparedBy: string;
@@ -416,6 +416,7 @@ function FundsFor({ accountId }: { accountId: string }) {
               ["Available", f.available ? moneyText(f.available) : "—"],
             ]} />
             {f.blockedBecause.length > 0 && <div className="mt-3"><Notice kind="warning" title="Why payouts are blocked"><ul className="list-disc pl-5">{f.blockedBecause.map((b) => <li key={b}>{b}</li>)}</ul></Notice></div>}
+            {(f.cautions ?? []).length > 0 && <div className="mt-3"><Notice kind="warning" title="Check before approving"><ul className="list-disc pl-5">{f.cautions!.map((b) => <li key={b}>{b}</li>)}</ul></Notice></div>}
           </>
         )}
       </Section>

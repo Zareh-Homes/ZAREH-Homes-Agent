@@ -23,7 +23,8 @@ import {
   TrustHoldActiveError,
   uniqueViolation,
 } from "../errors.ts";
-import { businessDaysBetween } from "../lib/dates.ts";
+import { businessDaysBetween, todayInToronto } from "../lib/dates.ts";
+import { depositStatus, type DepositBadge } from "../pipeline/deposit-status.ts";
 import { loadBusinessCalendar } from "../lib/calendar-store.ts";
 import { checkLargeTransaction } from "../obligations/service.ts";
 import { formatCents, numericToCents, type Cents } from "../lib/money.ts";
@@ -526,6 +527,8 @@ export async function releaseHold(
 
 export interface DealLedger {
   deal: { id: string; dealNumber: string; status: string; trustDepositHolder: string; depositStatus: string };
+  /** The same deposit status the pipeline shows (overdue, awaiting the bank, late to trust), from the ledger and bank matches */
+  deposit: DepositBadge;
   balances: { trustAccountId: string; balance: string }[];
   entries: (LedgerEntry & { runningBalance: string })[];
   holds: TrustHold[];
@@ -538,10 +541,10 @@ async function assertCanViewDeal(db: PrismaClient, actor: Actor, dealId: string)
   if (!onDeal) throw new ForbiddenError("You can only view the trust ledger for your own deals");
 }
 
-export async function getDealLedger(db: PrismaClient, actor: Actor, dealId: string): Promise<DealLedger> {
+export async function getDealLedger(db: PrismaClient, actor: Actor, dealId: string, today = todayInToronto()): Promise<DealLedger> {
   const deal = await db.transaction.findUnique({
     where: { id: dealId },
-    select: { id: true, dealNumber: true, status: true, trustDepositHolder: true, depositStatus: true },
+    select: { id: true, dealNumber: true, status: true, trustDepositHolder: true, depositStatus: true, depositAmount: true, depositDueDate: true },
   });
   if (!deal) throw new NotFoundError("Deal", dealId);
   await assertCanViewDeal(db, actor, dealId);
@@ -562,8 +565,28 @@ export async function getDealLedger(db: PrismaClient, actor: Actor, dealId: stri
     return { ...e, runningBalance: formatCents(next) };
   });
 
+  const deposits = await db.$queryRaw<{ amount: string; receivedDate: string; depositedDate: string; receiptNumber: number | null; bankCleared: boolean; bankDate: string | null }[]>`
+    SELECT d.amount::text AS amount, to_char(d."receivedDate", 'YYYY-MM-DD') AS "receivedDate",
+           to_char(d."effectiveDate", 'YYYY-MM-DD') AS "depositedDate", d."receiptNumber", trust_entry_cleared(d.id) AS "bankCleared",
+           (SELECT to_char(MIN(b."postedDate"), 'YYYY-MM-DD') FROM "BankMatch" m
+              JOIN "BankTransaction" b ON b.id = m."bankTransactionId" WHERE m."trustEntryId" = d.id) AS "bankDate"
+      FROM "TrustLedgerEntry" d
+     WHERE d."transactionId" = ${dealId}::uuid AND d."entryType" = 'DEPOSIT_RECEIVED'
+       AND NOT EXISTS (SELECT 1 FROM "TrustLedgerEntry" r WHERE r."reversesEntryId" = d.id)
+     ORDER BY d."createdAt"`;
+  const deposit = depositStatus({
+    holder: deal.trustDepositHolder,
+    expectedCents: numericToCents(deal.depositAmount.toFixed(2)),
+    dueDate: deal.depositDueDate ? deal.depositDueDate.toISOString().slice(0, 10) : null,
+    deposits: deposits.map((x) => ({ ...x, amountCents: numericToCents(x.amount) })),
+    today,
+    calendar: await loadBusinessCalendar(db),
+  });
+  const { depositAmount: _a, depositDueDate: _d, ...dealOut } = deal;
+
   return {
-    deal,
+    deal: dealOut,
+    deposit,
     balances: [...running].map(([trustAccountId, balance]) => ({ trustAccountId, balance: formatCents(balance) })),
     entries,
     holds,
