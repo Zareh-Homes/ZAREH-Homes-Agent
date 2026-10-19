@@ -5,7 +5,7 @@ Three separate gates. Pass each one before starting the next.
 ## 1. Technical staging
 
 - [x] Migrations apply from scratch through `migrate.sh`; a re-run changes nothing; a changed file is refused
-- [x] All automated suites green (backend 169, migration 48, frontend 24, commission engine 6)
+- [x] All automated suites green (backend 168, migration 48, frontend 24, commission engine 6)
 - [x] Encrypted backup → restore → manifest comparison passed
 - [x] Production config check refuses unsafe settings; the app refuses superuser
 - [ ] CI run green on GitHub (the workflow is committed; confirm the first run)

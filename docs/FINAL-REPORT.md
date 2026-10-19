@@ -98,7 +98,7 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 
 | Suite | Total | Passed | Failed | Skipped |
 |---|---|---|---|---|
-| Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 169 | 169 | 0 | 0 |
+| Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 168 | 168 | 0 | 0 |
 | Lone Wolf migration (with database) | 48 | 48 | 0 | 0 |
 | Frontend | 24 | 24 | 0 | 0 |
 | Commission engine | 6 | 6 | 0 | 0 |

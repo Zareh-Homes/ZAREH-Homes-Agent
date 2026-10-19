@@ -52,7 +52,7 @@ Status key: **Done (tested)** = built and covered by an automated test. **Done (
 | Check | Status | Evidence |
 |---|---|---|
 | Exact dependency versions, lockfiles committed | Done | `package-lock.json` per package |
-| `npm audit`, backend production dependencies | **Open: 4 high** | All in Prisma's own tooling (`@prisma/config` → `effect`, `deepmerge-ts`). The fix is the Prisma 7 major upgrade. They are not in a request path, but they ship with the client. |
+| `npm audit`, backend production dependencies | **Open: 4 high** | All in Prisma's own tooling (`@prisma/config` → `effect`, `deepmerge-ts`). The fix is the Prisma 7 major upgrade. They are not in a request path, but they ship with the client. CI fails on any other high/critical advisory; these two (GHSA-ggr8-5vv4-36mx, GHSA-38f7-945m-qr2g) are listed in `backend/scripts/audit-gate.ts` as accepted open findings, and the gate also fails once they disappear so the list can't go stale. |
 | `npm audit`, frontend | Open: dev-only findings | vitest/vite/esbuild dev server; fixes need major upgrades. Nothing ships to the browser bundle. |
 | Secret scanning | In CI (gitleaks) | Not run locally in this environment |
 | Container image scan | Open | Images weren't built here (no Docker daemon) |

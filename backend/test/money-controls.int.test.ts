@@ -378,9 +378,12 @@ describe("money controls", { skip }, () => {
     await prisma.$executeRawUnsafe(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zareh_app_test') THEN CREATE ROLE zareh_app_test LOGIN IN ROLE zareh_app; END IF;
     END $$`);
+    // A fresh password each run: TCP connections (as in CI) need one; socket/trust auth ignores it
+    const password = randomUUID();
+    await prisma.$executeRawUnsafe(`ALTER ROLE zareh_app_test PASSWORD '${password}'`);
     const url = new URL(process.env.DATABASE_URL!);
     url.username = "zareh_app_test";
-    url.password = "";
+    url.password = password;
     const restricted = new PrismaClient({ datasourceUrl: url.toString() });
     const appAsRole = buildApp({ prisma: restricted, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), brokerage: TEST_BROKERAGE, today: () => TODAY });
     const call = (user: string, method: "GET" | "POST", path: string, body?: object) =>

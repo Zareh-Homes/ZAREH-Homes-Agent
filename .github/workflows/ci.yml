@@ -37,7 +37,7 @@ jobs:
         run: "! NODE_ENV=production node scripts/check-config.ts"
       - name: Dependency vulnerabilities (production dependencies)
         working-directory: backend
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --json | node scripts/audit-gate.ts
       - name: Backup and restore round trip
         run: |
           age-keygen -o /tmp/key.txt
