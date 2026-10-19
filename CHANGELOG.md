@@ -9,6 +9,8 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - **Frontend tooling (`412c59c`):** vitest 4.1.11, vite 7.3.6, Tailwind 4.3.3; `npm audit` is clean with dev tools included. All 16 demo screens are pixel-identical before and after.
 - **Images:** node 22.23.3 and nginx 1.30.5. CI builds and starts both images against a TLS-only database as the restricted login, and scans them with Trivy.
 - **Migration tool:** pytest 9.1.1; `pip-audit` in CI.
+- **API image bug found and fixed (`b74c2e6`):** the build stage had no OpenSSL, so Prisma generated the OpenSSL 1.1 query engine; the runtime (OpenSSL 3) couldn't load it, and the API crashed on its first query. Found by the new image smoke test. The original Dockerfile had the same flaw.
+- **API image hardened (`4fe3f77`):** the npm, npx, yarn and corepack bundled with the Node base image are removed from the runtime stage. Trivy had found 10 high advisories inside the bundled npm, none in the app or the OS. Both images now scan clean.
 
 ## 0.17.0 (2026-10-18): Completion directive, phases 1–8
 

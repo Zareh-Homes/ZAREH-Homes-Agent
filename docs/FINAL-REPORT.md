@@ -116,6 +116,18 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 - No test on real Lone Wolf data.
 - UAT A–L are automated, not run by staff (`docs/uat.md`).
 
+### CI on GitHub
+
+**Why the backend job failed (runs #1 and #2):** one test, "restricted database role: the application works end to end as zareh_app", logged in as a test database user that had no password. The local test database trusts local connections, so it passed here. GitHub's PostgreSQL requires a password over the network (scram-sha-256), so it failed with `Authentication failed ... credentials for zareh_app_test are not valid`. That was 167 passed and 1 failed out of 168. No application code was wrong.
+
+**Fix:** `5e53f4d`. The test sets a fresh random password for that user each run. Before fixing, I reproduced the failure against a local database configured like CI; afterwards the full suite passed there twice in a row.
+
+**What the new image job then found and fixed:**
+- `b74c2e6`: the API image crashed on its first database query (OpenSSL missing at build time). A real deployment bug.
+- `4fe3f77`: 10 high advisories inside the npm bundled with the Node base image. npm was removed from the runtime image.
+
+**Result:** run #8 on `4fe3f77` passed all six jobs (backend, frontend, migration, commission engine, images, secrets). The same commit was re-run to check for intermittent failures; see the launch checklist for the re-run result.
+
 ## F. Readiness
 
 | Stage | Ready? | What's missing |
