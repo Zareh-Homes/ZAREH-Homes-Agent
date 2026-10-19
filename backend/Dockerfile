@@ -1,5 +1,8 @@
 # Back office API. Node 22.18+ runs the TypeScript sources directly (type stripping).
 FROM node:22.23.3-bookworm-slim AS deps
+# Prisma picks its query engine from the OpenSSL it finds at generate time; without it here it builds
+# for OpenSSL 1.1 and the runtime image (OpenSSL 3) can't load it
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/backend
 COPY brokerage-db/schema.prisma /app/brokerage-db/schema.prisma
 COPY backend/package.json backend/package-lock.json ./
