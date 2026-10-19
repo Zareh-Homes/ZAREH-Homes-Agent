@@ -18,6 +18,8 @@ export interface SecurityConfig {
   mfaRequiredRoles: readonly UserRole[];
   issuer: string;
   fieldCipher: FieldCipher;
+  /** Requests per minute from one address before 429. Sign-in limits are fixed and separate. */
+  apiRequestsPerMinute: number;
 }
 
 export const PRIVILEGED_ROLES: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"];
@@ -63,6 +65,12 @@ export function loadSecurityConfig(env: NodeJS.ProcessEnv = process.env): Securi
     if (!mfaRoles.includes(r)) problems.push(`MFA can't be optional for ${r}`);
   }
 
+  // An office behind one shared address, or an automated test run, may need more than the default
+  const apiRequestsPerMinute = Number(env.API_REQUESTS_PER_MINUTE ?? 600);
+  if (!Number.isInteger(apiRequestsPerMinute) || apiRequestsPerMinute < 60 || apiRequestsPerMinute > 100_000) {
+    problems.push("API_REQUESTS_PER_MINUTE must be a whole number from 60 to 100000");
+  }
+
   if (problems.length) throw new InsecureConfigurationError(problems);
   return {
     mode: devHeader ? "dev-header" : "session",
@@ -75,5 +83,6 @@ export function loadSecurityConfig(env: NodeJS.ProcessEnv = process.env): Securi
     issuer: env.MFA_ISSUER ?? "Zareh Homes Back Office",
     // Outside production a missing key gets a throwaway one: encrypted data won't survive a restart
     fieldCipher: fieldCipher ?? new FieldCipher(randomBytes(32)),
+    apiRequestsPerMinute,
   };
 }

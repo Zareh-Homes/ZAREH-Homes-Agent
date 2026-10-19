@@ -68,6 +68,11 @@ test("production refuses to start with any unsafe setting", () => {
   assert.match(problems({ ...prod, APP_ORIGINS: "http://office.zarehhomes.ca" }).join(), /must be https/);
   assert.match(problems({ ...prod, COOKIE_SECURE: "false" }).join(), /COOKIE_SECURE/);
   assert.match(problems({ ...prod, MFA_REQUIRED_ROLES: "ADMIN" }).join(), /MFA can't be optional for MANAGING_BROKER/);
+  assert.equal(loadSecurityConfig(prod).apiRequestsPerMinute, 600);
+  assert.equal(loadSecurityConfig({ ...prod, API_REQUESTS_PER_MINUTE: "5000" }).apiRequestsPerMinute, 5000);
+  for (const bad of ["0", "59", "abc", "1.5", "100001"]) {
+    assert.match(problems({ ...prod, API_REQUESTS_PER_MINUTE: bad }).join(), /API_REQUESTS_PER_MINUTE/);
+  }
 });
 
 test("cookies and rate limiting", () => {

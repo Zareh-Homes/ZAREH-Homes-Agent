@@ -38,7 +38,9 @@ if [[ ! -f .env ]]; then
   rnd() { openssl rand -hex 16; }
   key() { openssl rand -base64 32; }
   # The demo's scripted browser reaches the app as http://web:8080 inside Docker
-  origins="http://localhost:8080"; [[ $MODE == demo ]] && origins="$origins,http://web:8080"
+  # and does a brokerage month in minutes, above the default per-address request limit (sign-in limits unchanged)
+  origins="http://localhost:8080"; api_limit=600
+  [[ $MODE == demo ]] && { origins="$origins,http://web:8080"; api_limit=5000; }
   cat > .env <<ENV
 # local-trial: made by ops/local-trial.sh for a fictional-data trial on this computer. Keep it private.
 POSTGRES_PASSWORD=$(rnd)
@@ -46,6 +48,7 @@ APP_DB_PASSWORD=$(rnd)
 NODE_ENV=development
 APP_ORIGINS=$origins
 COOKIE_SECURE=false
+API_REQUESTS_PER_MINUTE=$api_limit
 FIELD_ENCRYPTION_KEY=$(key)
 FILE_ENCRYPTION_KEY=$(key)
 BROKERAGE_LEGAL_NAME=Trial Brokerage (fictional)

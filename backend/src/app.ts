@@ -38,7 +38,7 @@ export interface AppOptions {
   fieldCipher?: FieldCipher;
   cookieSecure?: boolean;
   allowedOrigins?: string[];
-  rateLimits?: { loginPerMinutePerIp: number; loginPerMinutePerEmail: number; apiPerMinute: number };
+  rateLimits?: Partial<{ loginPerMinutePerIp: number; loginPerMinutePerEmail: number; apiPerMinute: number }>;
   fileStore: FileStore;
   brokerage: BrokerageProfile;
   notificationHub?: NotificationHub;

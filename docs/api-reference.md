@@ -228,8 +228,8 @@ characters with a hyphen), single use, stored hashed; compared after upper-casin
 - Unknown e-mail, no password set, wrong password and suspended account all return the same
   `401 INVALID_CREDENTIALS` "Email or password is incorrect" (suspended is only detected after a correct
   password and does not count as a failure).
-- **Rate limits** (in-process, fixed 60-second windows; defaults, `server.ts` does not override):
-  - every request (including `/healthz`): **600 per minute per IP** → `429 RATE_LIMITED`
+- **Rate limits** (in-process, fixed 60-second windows; only the per-request limit is configurable):
+  - every request (including `/healthz`): **600 per minute per IP** (`API_REQUESTS_PER_MINUTE`, 60–100000) → `429 RATE_LIMITED`
     "Too many requests. Slow down and try again shortly."
   - `POST /api/auth/login`: **20 per minute per IP** → `429 RATE_LIMITED`
     "Too many sign-in attempts. Wait a minute and try again."

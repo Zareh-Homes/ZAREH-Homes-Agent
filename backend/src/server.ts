@@ -81,6 +81,7 @@ const app = buildApp({
   ...(security.mode === "session" ? { auth: new AuthService(prisma, security) } : { resolveUserId: devHeaderResolver, fieldCipher: security.fieldCipher }),
   fileStore,
   brokerage: brokerageProfile(),
+  rateLimits: { apiPerMinute: security.apiRequestsPerMinute },
   logger: true,
 });
 

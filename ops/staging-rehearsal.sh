@@ -47,7 +47,7 @@ psql "$owner_url" -Xq -v ON_ERROR_STOP=1 -v pw="$app_pw" -f ops/create-app-login
 prod_env=(
   -e NODE_ENV=production
   -e "DATABASE_URL=postgresql://zareh_app_login:$app_pw@zh-db:5432/postgres?sslmode=require&sslaccept=accept_invalid_certs"
-  -e APP_ORIGINS=https://localhost:8443 -e TRUST_PROXY=true
+  -e APP_ORIGINS=https://localhost:8443 -e TRUST_PROXY=true -e API_REQUESTS_PER_MINUTE=5000 # one test robot, a month of work a minute
   -e "FIELD_ENCRYPTION_KEY=$(openssl rand -base64 32)" -e "FILE_ENCRYPTION_KEY=$(openssl rand -base64 32)"
   -e "BROKERAGE_LEGAL_NAME=E2E Test Brokerage Inc. (not a real brokerage)" -e "BROKERAGE_ADDRESS=1 Test Street, Testville ON"
   -e BROKERAGE_PHONE=000-000-0000 -e BROKERAGE_EMAIL=office@e2e.test -e BROKERAGE_HST_NUMBER=TEST-ONLY -e "BROKER_OF_RECORD=Blake Broker (test)"

@@ -79,12 +79,12 @@ export interface HttpSecurityOptions {
   auth: AuthService | null; // null = development header mode (tests)
   cookieSecure: boolean;
   allowedOrigins: string[];
-  limits?: { loginPerMinutePerIp: number; loginPerMinutePerEmail: number; apiPerMinute: number };
+  limits?: Partial<{ loginPerMinutePerIp: number; loginPerMinutePerEmail: number; apiPerMinute: number }>;
 }
 
 export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOptions) {
   const limiter = new FixedWindowLimiter();
-  const limits = opts.limits ?? { loginPerMinutePerIp: 20, loginPerMinutePerEmail: 5, apiPerMinute: 600 };
+  const limits = { loginPerMinutePerIp: 20, loginPerMinutePerEmail: 5, apiPerMinute: 600, ...opts.limits };
   app.decorateRequest("auth", null);
 
   app.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
@@ -178,7 +178,7 @@ export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOpt
 
 function registerAuthRoutes(
   app: FastifyInstance, auth: AuthService, opts: HttpSecurityOptions, limiter: FixedWindowLimiter,
-  limits: NonNullable<HttpSecurityOptions["limits"]>,
+  limits: Required<NonNullable<HttpSecurityOptions["limits"]>>,
 ) {
   const maxAge = auth.config.sessionAbsoluteHours * 3600;
   const ctx = (request: FastifyRequest): AuthContext => {

@@ -43,6 +43,8 @@ export default defineConfig({
         NODE_ENV: "test",
         APP_ORIGINS: WEB,
         COOKIE_SECURE: "false",
+        // One robot doing a brokerage month in a minute: above the per-address default (sign-in limits unchanged)
+        API_REQUESTS_PER_MINUTE: "5000",
         FIELD_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
         FILE_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
         UPLOAD_DIR: new URL("./.state/uploads", import.meta.url).pathname,
