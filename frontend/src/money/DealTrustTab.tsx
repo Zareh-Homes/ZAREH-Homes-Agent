@@ -6,7 +6,7 @@
  */
 
 import { useState } from "react";
-import { api } from "../app/api.ts";
+import { api, newKey } from "../app/api.ts";
 import { useAction, useApi } from "../app/useApi.ts";
 import { hasRole, useSession } from "../app/session.tsx";
 import { Button, Empty, Facts, Loading, Notice, Section, SelectField, StatusBadge, Table, TextArea, TextField } from "../ui/kit.tsx";
@@ -136,7 +136,7 @@ const accountOptions = (accounts: TrustAccount[]) => accounts.map((a) => ({ valu
 
 function Deposit({ dealId, accounts, onDone, onCancel }: { dealId: string; accounts: TrustAccount[]; onDone: (w: string[]) => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ trustAccountId: accounts[0]?.id ?? "", amount: "", method: "BANK_DRAFT", dateReceived: todayIso(), dateDeposited: todayIso(), payorName: "", bankReference: "", memo: "" });
   if (accounts.length === 0) return <Notice kind="warning">No active trust account. A managing broker adds it under Trust → Accounts.</Notice>;
   return (
@@ -162,7 +162,7 @@ function Deposit({ dealId, accounts, onDone, onCancel }: { dealId: string; accou
 
 function Disbursement({ dealId, lease, accounts, onDone, onCancel }: { dealId: string; lease: boolean; accounts: TrustAccount[]; onDone: () => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ trustAccountId: accounts[0]?.id ?? "", amount: "", method: "EFT", dateDisbursed: todayIso(), payeeType: "OUR_BROKERAGE", payeeName: "", authorizationMethod: "CLOSING_COMPLETED", authorizationReference: "", referenceNo: "", memo: "" });
   const payees = ["OUR_BROKERAGE", "COOP_BROKERAGE", "LAWYER", ...(lease ? ["LANDLORD"] : []), "PAYOR_REFUND"];
   const auths = f.payeeType === "PAYOR_REFUND" ? ["MUTUAL_RELEASE", "COURT_ORDER"] : ["CLOSING_COMPLETED", "MUTUAL_RELEASE", "COURT_ORDER"];
@@ -192,7 +192,7 @@ function Disbursement({ dealId, lease, accounts, onDone, onCancel }: { dealId: s
 
 function Reversal({ entryId, onDone, onCancel }: { entryId: string; onDone: () => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ reason: "", effectiveDate: todayIso() });
   return (
     <form className="space-y-3" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => api("POST", `/api/trust/entries/${entryId}/reversals`, f, { idempotencyKey: key }))) onDone(); }}>

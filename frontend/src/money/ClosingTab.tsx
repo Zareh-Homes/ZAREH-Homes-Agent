@@ -7,7 +7,7 @@
  */
 
 import { useRef, useState } from "react";
-import { api, apiText } from "../app/api.ts";
+import { api, apiText, newKey } from "../app/api.ts";
 import { useAction, useApi } from "../app/useApi.ts";
 import { hasRole, useSession } from "../app/session.tsx";
 import { Button, Empty, Facts, Loading, Notice, Section, SelectField, StatusBadge, Table, TextArea, TextField, type Tone } from "../ui/kit.tsx";
@@ -77,7 +77,7 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
   const leaseBlocked = isLease(deal.side) && !policies.data?.policies.find((p) => p.policy === "LEASE_SETTLEMENT")?.enabled;
   const act = useAction();
   // One key per CDA: a double-click replays it, but a new CDA after a void needs a new key
-  const [key, setKey] = useState(() => crypto.randomUUID());
+  const [key, setKey] = useState(() => newKey());
   const lease = isLease(deal.side);
 
   const outstanding = (act.failure ?? (view.status === "error" ? view.error : null)) as { details?: Record<string, unknown> } | null;
@@ -116,7 +116,7 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
           {broker && !v.finalized && deal.status === "CLOSED" && !leaseBlocked && (
             <ConfirmButton label="Finalize the CDA" busy={act.busy}
               question="This issues the CDA and posts the trust distributions below to the ledger. It records them; it doesn't send any money."
-              onConfirm={() => void act.run(() => api("POST", `/api/deals/${deal.id}/closing/finalize`, {}, { idempotencyKey: key })).then((r) => { if (r) { setKey(crypto.randomUUID()); reload(); } })} />
+              onConfirm={() => void act.run(() => api("POST", `/api/deals/${deal.id}/closing/finalize`, {}, { idempotencyKey: key })).then((r) => { if (r) { setKey(newKey()); reload(); } })} />
           )}
           {broker && v.finalized && <InlineForm label="Void the CDA" variant="danger">{(close) => <VoidCda dealId={deal.id} onDone={() => { close(); reload(); }} onCancel={close} />}</InlineForm>}
         </div>
@@ -340,7 +340,7 @@ function PayoutRow({ line, broker, bank, accounts, onUpdate }: { line: PayoutLin
 
 function CommissionReceived({ dealId, accounts, onDone, onCancel }: { dealId: string; accounts: Account[]; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ amount: "", receivedDate: todayIso(), reference: "", account: accounts[0] ? `${accounts[0].type}:${accounts[0].id}` : "" });
   if (accounts.length === 0) return <Notice kind="warning">No active operating or commission trust account is set up.</Notice>;
   return (
@@ -362,7 +362,7 @@ function CommissionReceived({ dealId, accounts, onDone, onCancel }: { dealId: st
 
 function Approve({ path, accounts, onDone, onCancel }: { path: string; accounts: Account[]; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ payFrom: "", note: "", exceptionReason: "" });
   return (
     <form className="space-y-3" onSubmit={async (e) => {
@@ -384,7 +384,7 @@ function Approve({ path, accounts, onDone, onCancel }: { path: string; accounts:
 
 function Paid({ path, onDone, onCancel }: { path: string; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ paidDate: todayIso(), reference: "", exceptionReason: "" });
   return (
     <form className="space-y-3" onSubmit={async (e) => {
@@ -405,7 +405,7 @@ function Paid({ path, onDone, onCancel }: { path: string; onDone: (v: PayoutsVie
 /** Reason (+ optional date and reference): receipt reversal, returned payment, cancellation. */
 function ReasonForm({ path, dateField, refOptional, submit, onDone, onCancel }: { path: string; dateField?: string; refOptional?: boolean; submit: string; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() => newKey());
   const [f, setF] = useState({ reason: "", date: todayIso(), reference: "" });
   return (
     <form className="space-y-3" onSubmit={async (e) => {

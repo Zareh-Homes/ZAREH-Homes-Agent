@@ -42,13 +42,25 @@ const SESSION_GONE = new Set(["UNAUTHENTICATED", "SESSION_EXPIRED", "SESSION_INV
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+/**
+ * A random UUID (v4) for idempotency keys. crypto.randomUUID only exists on https or localhost; this also works
+ * when the app is opened over plain http by name or address (a local trial reached from another computer).
+ */
+export function newKey(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6]! & 0x0f) | 0x40;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 export async function api<T = unknown>(method: Method, path: string, body?: unknown, init: { signal?: AbortSignal; idempotencyKey?: string } = {}): Promise<T> {
   const headers: Record<string, string> = { accept: "application/json" };
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
   if (body !== undefined && !isForm) headers["content-type"] = "application/json";
   if (method !== "GET") {
     if (csrfToken) headers["x-csrf-token"] = csrfToken;
-    headers["idempotency-key"] = init.idempotencyKey ?? crypto.randomUUID();
+    headers["idempotency-key"] = init.idempotencyKey ?? newKey();
   }
   let res: Response;
   try {

@@ -7,6 +7,8 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - `ops/local-trial.sh demo`: a fictional brokerage filled through the real screens, with a one-time sign-in link per demo person (`backend/scripts/demo-handover.ts`, demo databases only). Walkthrough in `docs/demo-walkthrough.md`.
 - Fix: a half-finished sign-in in the same browser no longer blocks signing in or using an invitation or reset link.
 - Trade record items show words instead of stored codes, without double numbering.
+- Fix: saving anything failed when the app was opened over plain http by name or address (not localhost), because the browser withholds `crypto.randomUUID` there. Idempotency keys now come from `crypto.getRandomValues`.
+- `API_REQUESTS_PER_MINUTE` (default 600) sets the per-address request limit; sign-in limits are unchanged.
 - Browser tests 31 → 37 (demo brokerage, walkthrough tour, handover). Backend 185 → 186.
 
 ## 0.18.1 (2026-10-19): Pilot acceptance checks
