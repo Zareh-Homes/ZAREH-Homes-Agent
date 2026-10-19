@@ -68,10 +68,10 @@ export function DealCard({ card, column, year }: { card: PipelineCard; column: C
   const kd = card.keyDate;
   return (
     <li>
-      <article className="group relative rounded-lg border border-line bg-card p-3 shadow-sm transition-shadow hover:shadow-md">
+      <article className="group relative rounded-lg border border-line bg-card p-3 shadow-xs transition-shadow hover:shadow-md">
         <h3 className="text-sm font-semibold leading-snug text-ink">
           {/* Stretched link: the whole card is clickable, the heading is the accessible name */}
-          <a href={card.href} className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-accent">
+          <a href={card.href} className="after:absolute after:inset-0 after:rounded-lg focus-visible:outline-hidden focus-visible:after:ring-2 focus-visible:after:ring-accent">
             {card.address}
           </a>
         </h3>
@@ -171,9 +171,9 @@ export function PipelineBoard({ data, initialQuery = "" }: { data: PipelineRespo
               placeholder="Search agent, MLS® or address"
               autoComplete="off"
               spellCheck={false}
-              className="w-full rounded-lg border border-line bg-card py-2 pl-9 pr-12 text-sm text-ink shadow-sm placeholder:text-ink-3 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              className="w-full rounded-lg border border-line bg-card py-2 pl-9 pr-12 text-sm text-ink shadow-xs placeholder:text-ink-3 focus:border-accent focus:outline-hidden focus:ring-2 focus:ring-accent/30"
             />
-            <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-line bg-sunken px-1.5 text-[11px] text-ink-3 sm:block">/</kbd>
+            <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded-sm border border-line bg-sunken px-1.5 text-[11px] text-ink-3 sm:block">/</kbd>
           </div>
           <p className="mt-1 text-xs text-ink-3" aria-live="polite">
             {deferred.trim() ? `${shown} of ${total} match` : `${total} on the board`}
@@ -194,7 +194,7 @@ export function PipelineBoard({ data, initialQuery = "" }: { data: PipelineRespo
             key={col.key}
             type="button"
             onClick={() => columnRefs.current.get(col.key)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" })}
-            className="shrink-0 rounded-full border border-line bg-card px-3 py-1 text-xs font-medium text-ink-2 shadow-sm hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="shrink-0 rounded-full border border-line bg-card px-3 py-1 text-xs font-medium text-ink-2 shadow-xs hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
             {col.key === "CLOSED" ? "Closed" : col.title.split(" ")[0]} <span className="tabular-nums text-ink-3">{visible[col.key].length}</span>
           </button>
@@ -254,7 +254,7 @@ export function PipelinePage({ state, onRetry, initialQuery = "" }: {
   if (state.status === "loading") {
     return (
       <div className="mx-auto max-w-[1600px] animate-pulse px-4 py-5 motion-reduce:animate-none sm:px-6 lg:px-8" aria-busy="true" aria-label="Loading pipeline">
-        <div className="mb-4 h-8 w-56 rounded bg-sunken" />
+        <div className="mb-4 h-8 w-56 rounded-sm bg-sunken" />
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">{[0, 1, 2, 3].map((i) => <div key={i} className="h-96 rounded-xl bg-sunken" />)}</div>
       </div>
     );
@@ -264,7 +264,7 @@ export function PipelinePage({ state, onRetry, initialQuery = "" }: {
       <div className="mx-auto max-w-xl px-4 py-16 text-center" role="alert">
         <p className="text-base font-semibold text-ink">The pipeline didn't load</p>
         <p className="mt-1 text-sm text-ink-2">{state.message}</p>
-        <button type="button" onClick={onRetry} className="mt-4 rounded-lg border border-line bg-card px-3 py-1.5 text-sm font-medium text-ink shadow-sm hover:bg-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+        <button type="button" onClick={onRetry} className="mt-4 rounded-lg border border-line bg-card px-3 py-1.5 text-sm font-medium text-ink shadow-xs hover:bg-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
           Try again
         </button>
       </div>

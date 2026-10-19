@@ -62,7 +62,7 @@ export function Panel({
   id, title, subtitle, action, children, className = "",
 }: { id: string; title: ReactNode; subtitle?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section aria-labelledby={`${id}-title`} className={`flex min-w-0 flex-col rounded-xl border border-line bg-card shadow-sm ${className}`}>
+    <section aria-labelledby={`${id}-title`} className={`flex min-w-0 flex-col rounded-xl border border-line bg-card shadow-xs ${className}`}>
       <header className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">
           <h2 id={`${id}-title`} className="flex items-center gap-2 text-sm font-semibold text-ink">{title}</h2>
@@ -78,9 +78,9 @@ export function Panel({
 /** Stat tile: label, value, and one line of context. */
 export function StatTile({ label, value, title, detail }: { label: string; value: string; title?: string; detail?: ReactNode }) {
   return (
-    <div className="min-w-0 rounded-xl border border-line bg-card px-4 py-3.5 shadow-sm">
+    <div className="min-w-0 rounded-xl border border-line bg-card px-4 py-3.5 shadow-xs">
       <dt className="text-xs font-medium text-ink-2">{label}</dt>
-      <dd className="mt-1 text-2xl font-semibold tracking-tight text-ink sm:text-[1.75rem]" title={title}>{value}</dd>
+      <dd className="mt-1 text-2xl font-semibold tracking-tight text-ink sm:text-[1.75rem]/8" title={title}>{value}</dd>
       {detail && <dd className="mt-1 text-xs text-ink-3">{detail}</dd>}
     </div>
   );

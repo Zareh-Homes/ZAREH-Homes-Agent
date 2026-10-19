@@ -110,7 +110,7 @@ export function TrustBalanceWidget({ trust, year }: { trust: BrokerageDashboard[
             {late.map((d) => (
               <li key={d.id} className="flex items-start justify-between gap-3 px-4 py-2.5">
                 <div className="min-w-0">
-                  <a href={`/deals/${d.id}/trust`} className="text-sm font-medium text-ink underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                  <a href={`/deals/${d.id}/trust`} className="text-sm font-medium text-ink underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
                     {d.dealNumber}
                   </a>
                   <p className="truncate text-xs text-ink-3">{d.address}</p>
@@ -180,7 +180,7 @@ export function ComplianceQueue({
             <li key={d.id} className="space-y-2 px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <a href={`/deals/${d.id}/documents`} className="text-sm font-medium text-ink underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                  <a href={`/deals/${d.id}/documents`} className="text-sm font-medium text-ink underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
                     {d.dealNumber}
                   </a>
                   <p className="text-xs text-ink-3">{d.address} · {d.primaryAgent ?? "No agent"}</p>
@@ -214,7 +214,7 @@ export function ComplianceQueue({
                     <div className="mt-1"><StatusBadge tone={urgency(d.daysToClose)}>{relativeDays(d.daysToClose)}</StatusBadge></div>
                   </td>
                   <td className="px-4 py-2.5">
-                    <a href={`/deals/${d.id}/documents`} className="font-medium text-ink underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                    <a href={`/deals/${d.id}/documents`} className="font-medium text-ink underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
                       {d.dealNumber}
                     </a>
                     <div className="text-xs text-ink-3">{d.address}</div>

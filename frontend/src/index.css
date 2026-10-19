@@ -1,6 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+/* Tailwind 4 reads the existing JS theme (colour tokens, font stack) */
+@config "../tailwind.config.js";
 
 /* Design tokens as RGB channels. Status colours are fixed across themes and
    always ship with an icon + label, never colour alone. */

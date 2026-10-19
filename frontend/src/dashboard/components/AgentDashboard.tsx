@@ -147,7 +147,7 @@ export function DocumentWarnings({ items, year }: { items: PersonalDashboard["ne
               </figure>
               <a
                 href={`/deals/${d.id}/documents#slot-${d.slotId}`}
-                className="inline-flex items-center justify-center rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-on shadow-sm hover:bg-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                className="inline-flex items-center justify-center rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-on shadow-xs hover:bg-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
                 Upload revision
               </a>

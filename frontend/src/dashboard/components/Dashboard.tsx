@@ -45,7 +45,7 @@ export function Dashboard({ data }: { data: DashboardResponse }) {
                   aria-controls={`${tabsId}-panel`}
                   onClick={() => setView(v)}
                   className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
-                    view === v ? "bg-card text-ink shadow-sm" : "text-ink-2 hover:text-ink"
+                    view === v ? "bg-card text-ink shadow-xs" : "text-ink-2 hover:text-ink"
                   }`}
                 >
                   {v === "brokerage" ? "Brokerage" : "My business"}
@@ -78,7 +78,7 @@ export function Dashboard({ data }: { data: DashboardResponse }) {
 function Skeleton() {
   return (
     <div className="mx-auto max-w-7xl animate-pulse px-4 py-5 motion-reduce:animate-none sm:px-6 lg:px-8" aria-busy="true" aria-label="Loading dashboard">
-      <div className="mb-5 h-8 w-64 rounded bg-sunken" />
+      <div className="mb-5 h-8 w-64 rounded-sm bg-sunken" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {[0, 1, 2].map((i) => <div key={i} className="h-28 rounded-xl bg-sunken" />)}
       </div>
@@ -101,7 +101,7 @@ export function DashboardPage({ state, onRetry }: { state: DashboardState; onRet
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 rounded-lg border border-line bg-card px-3 py-1.5 text-sm font-medium text-ink shadow-sm hover:bg-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="mt-4 rounded-lg border border-line bg-card px-3 py-1.5 text-sm font-medium text-ink shadow-xs hover:bg-sunken focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           Try again
         </button>

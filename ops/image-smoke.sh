@@ -24,16 +24,18 @@ trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # PostgreSQL that only accepts TLS connections from other hosts
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=zh-db -keyout "$work/server.key" -out "$work/server.crt" 2> /dev/null
-cat > "$work/pg_hba.conf" <<'HBA'
+# (mktemp -d is private to the runner user; the container's postgres user, uid 999, needs its own readable folder)
+certs="$work/certs"; mkdir -m 755 "$certs"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=zh-db -keyout "$certs/server.key" -out "$certs/server.crt" 2> /dev/null
+cat > "$certs/pg_hba.conf" <<'HBA'
 local all all trust
 hostssl all all all scram-sha-256
 HBA
-chmod 600 "$work/server.key"
-sudo chown 999:999 "$work/server.key" "$work/server.crt" "$work/pg_hba.conf"
+chmod 600 "$certs/server.key"; chmod 644 "$certs/server.crt" "$certs/pg_hba.conf"
+sudo chown 999:999 "$certs"/*
 owner_pw=$(openssl rand -hex 16) app_pw=$(openssl rand -hex 16)
 docker network create "$net" > /dev/null
-docker run -d --name zh-db --network "$net" -p 5433:5432 -e POSTGRES_PASSWORD="$owner_pw" -v "$work:/certs:ro" postgres:16 \
+docker run -d --name zh-db --network "$net" -p 5433:5432 -e POSTGRES_PASSWORD="$owner_pw" -v "$certs:/certs:ro" postgres:16 \
   -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key -c hba_file=/certs/pg_hba.conf > /dev/null
 owner_url="postgresql://postgres:$owner_pw@localhost:5433/postgres?sslmode=require"
 for _ in $(seq 60); do psql "$owner_url" -XAtqc "select 1" > /dev/null 2>&1 && break; sleep 1; done
