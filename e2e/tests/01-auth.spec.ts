@@ -42,27 +42,7 @@ test("two-factor: a wrong code is refused; the right one signs in", async ({ pag
   await expect(page.getByRole("heading", { name: "Two-factor sign-in" })).toBeVisible();
   await shot(page, "04-mfa-wrong-code");
   await page.getByRole("button", { name: "Sign in as someone else" }).click();
-  await signIn(page, "admin");
-});
-
-test("two-factor: a recovery code works once", async ({ page }) => {
-  const code = person("admin").recovery![0]!;
-  for (const attempt of [1, 2]) {
-    await page.goto("/");
-    await signInWithPassword(page, "admin");
-    await page.getByRole("button", { name: "I can't use my authenticator app" }).click();
-    await page.getByLabel("Recovery code").fill(code);
-    await page.getByRole("button", { name: "Verify" }).click();
-    if (attempt === 1) {
-      await expect(page.getByText("9 recovery codes left")).toBeVisible();
-      await page.getByRole("button", { name: "Continue" }).click();
-      await page.getByRole("button", { name: "Sign out" }).click();
-    } else {
-      await expect(page.getByText("You can sign in now")).toHaveCount(0);
-      await expect(page.getByRole("heading", { name: "Two-factor sign-in" })).toBeVisible();
-      await expect(page.getByRole("alert")).toBeVisible();
-    }
-  }
+  await signIn(page, "admin", { fresh: true });
 });
 
 test("admin invites the broker, compliance admin and an agent; each sets up their account", async ({ browser }) => {
@@ -84,8 +64,28 @@ test("admin invites the broker, compliance admin and an agent; each sets up thei
   await adminCtx.close();
 });
 
+test("two-factor: a recovery code works once", async ({ page }) => {
+  const code = person("compliance").recovery![0]!;
+  for (const attempt of [1, 2]) {
+    await page.goto("/");
+    await signInWithPassword(page, "compliance");
+    await page.getByRole("button", { name: "I can't use my authenticator app" }).click();
+    await page.getByLabel("Recovery code").fill(code);
+    await page.getByRole("button", { name: "Verify" }).click();
+    if (attempt === 1) {
+      await expect(page.getByText("9 recovery codes left")).toBeVisible();
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign out" }).click();
+    } else {
+      await expect(page.getByText("You can sign in now")).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "Two-factor sign-in" })).toBeVisible();
+      await expect(page.getByRole("alert")).toBeVisible();
+    }
+  }
+});
+
 test("signing out ends the session on the server", async ({ page, context }) => {
-  await signIn(page, "agent");
+  await signIn(page, "agent", { fresh: true });
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   const res = await context.request.get("/api/auth/me");

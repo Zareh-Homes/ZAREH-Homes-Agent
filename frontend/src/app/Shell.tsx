@@ -65,7 +65,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <ul className="flex gap-1">{links(false)}</ul>
           </nav>
           <div className="ml-auto flex items-center gap-3">
-            <span className="hidden text-right text-xs leading-tight text-ink-2 sm:block">
+            <span className="hidden text-right text-xs leading-tight text-ink-2 sm:block xl:hidden 2xl:block">
               <span className="block font-medium text-ink">{user.firstName} {user.lastName}</span>
               {ROLE_LABEL[user.role] ?? user.role}
             </span>

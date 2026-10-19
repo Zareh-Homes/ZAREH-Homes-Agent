@@ -5,7 +5,7 @@ Three separate gates. Pass each one before starting the next.
 ## 1. Technical staging
 
 - [x] Migrations apply from scratch through `migrate.sh`; a re-run changes nothing; a changed file is refused
-- [x] All automated suites green (backend 168, migration 48, frontend 34, commission engine 6)
+- [x] All automated suites green (backend 184, migration 48, frontend 34, commission engine 6, browser end-to-end 21)
 - [x] Encrypted backup → restore → manifest comparison passed
 - [x] Production config check refuses unsafe settings; the app refuses superuser
 - [x] CI green on GitHub: all six jobs on runs #8 (`4fe3f77`), #8 re-run, and #9 (`5e35c52`)
@@ -15,8 +15,10 @@ Three separate gates. Pass each one before starting the next.
 
 ## 2. Controlled pilot (real deals, Lone Wolf still the system of record)
 
-- [ ] Staff UI for daily work. Today the frontend covers dashboard, pipeline and oversight only. Deal entry, document upload/review, trust receipts, bank file import/match, reconciliation, CDA and payouts are API-only.
-- [ ] Sign-in/MFA screens in the frontend
+- [x] Staff UI for daily work: deal entry, documents and review, trust receipts, bank import/match, reconciliation, CDA, payouts, approvals, admin, printable TRS (browser-tested, `e2e/`)
+- [x] Sign-in, two-factor, invitation and reset screens
+- [ ] Legal brokerage entity, broker of record, bank accounts and RECO registration confirmed to match (CDA settings, BoR designation in Admin, account bank/last four)
+- [ ] Sales-only scope agreed for the pilot (partial payouts unsupported)
 - [ ] Professional decisions recorded (see `FINAL-REPORT.md` §C); policies set to match
 - [ ] Accountant's chart-of-accounts map in `ACCOUNTING_ACCOUNT_MAP`
 - [ ] Commission plans entered and approved for all 10 agents; caps and YTD carried over

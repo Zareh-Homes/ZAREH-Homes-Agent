@@ -62,10 +62,10 @@ export function DealTrustTab({ deal, reloadDeal }: TabProps) {
           ["Due", dateText(deal.depositDueDate)],
           ...l.balances.map((b): [string, string] => ["Held in trust", moneyText(b.balance)]),
         ]} />
-        {deal.trustDepositHolder !== "BROKERAGE" && <p className="mt-3 text-sm text-ink-2">The other brokerage holds this deposit, so nothing is recorded in our trust account.</p>}
+        {deal.trustDepositHolder !== "OUR_BROKERAGE" && <p className="mt-3 text-sm text-ink-2">Someone else holds this deposit ({labelOf(deal.trustDepositHolder).toLowerCase()}), so nothing is recorded in our trust account.</p>}
       </Section>
 
-      {broker && deal.trustDepositHolder === "BROKERAGE" && (
+      {broker && deal.trustDepositHolder === "OUR_BROKERAGE" && (
         <div className="flex flex-wrap gap-2">
           <InlineForm label="Record a deposit received" variant="primary">{(close) => <Deposit dealId={deal.id} accounts={active} onDone={(w) => { close(); done(w); }} onCancel={close} />}</InlineForm>
           {holdsMoney && <InlineForm label="Record a payment out">{(close) => <Disbursement dealId={deal.id} lease={isLease(deal.side)} accounts={active} onDone={() => { close(); done(); }} onCancel={close} />}</InlineForm>}
@@ -127,7 +127,7 @@ export function DealTrustTab({ deal, reloadDeal }: TabProps) {
 }
 
 const WARNING_TEXT: Record<string, string> = {
-  DEPOSITED_AFTER_5_BUSINESS_DAYS: "Deposited more than 5 business days after it was received (O. Reg. 579/05 s.27). Note the reason in the deal file.",
+  DEPOSITED_AFTER_5_BUSINESS_DAYS: "Deposited more than 5 business days after it was received (O. Reg. 567/05 s.17). Note the reason in the deal file.",
   EXCEEDS_EXPECTED_DEPOSIT: "More than the deposit in the agreement. Check the amount.",
   FINTRAC_LARGE_TRANSACTION_REPORT_OPENED: "Cash of $10,000 or more: a FINTRAC large cash transaction report was opened for preparation. Nothing is filed automatically.",
 };

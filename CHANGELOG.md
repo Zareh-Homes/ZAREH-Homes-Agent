@@ -2,6 +2,17 @@
 
 Versions are the database migration level. The app checks for it at `/readyz`.
 
+## 0.18.0 (2026-10-19): Staff application, leases, browser tests
+
+Not released to production. Staging-ready only.
+
+- **Review fixes (`0e1dda1`):** the 5-business-day deposit rule is measured to the bank's posting date; a shortfall month can be signed on time with the discrepancy shown and the incident open; large cash opens an internal preparation task only.
+- **Leases (`09fdb34`, migration 018):** landlord/tenant deals end to end: documents, commission, CDA wording, balance to the landlord.
+- **Directory and work queues (`f1a0059`):** list endpoints for deals, users, accounts, statements and reconciliations; approvals and review queues; first-admin script.
+- **Staff application (`62552fd` and later):** sign-in with two-factor, invitations and resets; deals and the deal workspace; document and compliance review; trust ledger, holds and receipt-of-funds; bank import, verification, matching and reconciliation; CDA and payouts; approvals; admin; printable Trade Record Sheet. Desktop and phone. Figures are the server's; the app sends no money and files nothing.
+- **Browser tests (`e2e/`):** 21 Playwright tests against the real API and a fresh database, in CI (`e2e` job). They found and fixed: wrong two-factor code or current password signing you out; the deposit button hidden on our-brokerage deals; a nested `<main>`; header overflow at 1366px.
+- Screens from the browser run: `docs/screens/`.
+
 ## 0.17.1 (2026-10-19): CI fixes, dependency advisories cleared, images verified in CI
 
 - **Backend CI failure fixed (`5e53f4d`).** The restricted-role end-to-end test logged in as `zareh_app_test` without a password. Local test databases trusted local connections, so it passed; GitHub's PostgreSQL requires a password over TCP (scram-sha-256), so it failed with "Authentication failed". The test now sets a fresh random password each run. It was reproduced first against a local cluster configured like CI.

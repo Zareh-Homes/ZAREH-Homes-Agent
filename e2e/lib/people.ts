@@ -73,8 +73,27 @@ export async function enrolMfa(page: Page, who: Who) {
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
 
-/** Full sign-in from a fresh page: password, then the authenticator code where the role needs one. */
-export async function signIn(page: Page, who: Who) {
+const sessionFile = (who: Who) => new URL(`../.state/session-${who}.json`, import.meta.url);
+
+/**
+ * Signed in as `who`. Reuses that person's session from an earlier test when
+ * it's still valid (the API allows 5 sign-ins per account per minute), and
+ * otherwise signs in with password and authenticator code.
+ */
+export async function signIn(page: Page, who: Who, opts: { fresh?: boolean } = {}) {
+  const file = sessionFile(who);
+  if (!opts.fresh && existsSync(file)) {
+    await page.context().addCookies(JSON.parse(readFileSync(file, "utf8")).cookies);
+    const me = await page.request.get("/api/auth/me");
+    const mfa = me.ok() ? (await me.json()).mfa : null;
+    if (mfa && !(mfa.required && !mfa.satisfied)) {
+      await page.goto("/");
+      await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+      return;
+    }
+    
+    await page.context().clearCookies();
+  }
   await page.goto("/");
   await signInWithPassword(page, who);
   const p = person(who);
@@ -84,6 +103,7 @@ export async function signIn(page: Page, who: Who) {
     await page.getByRole("button", { name: "Verify" }).click();
   }
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await page.context().storageState({ path: file.pathname });
 }
 
 /** Invites someone from Admin → People and returns the one-time link the screen shows. */

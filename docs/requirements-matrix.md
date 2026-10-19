@@ -253,18 +253,19 @@ All 12 are automated and passing; none has been run by staff yet. See `docs/uat.
 
 | Criterion | Met? |
 |---|---|
-| Auth and MFA operational | Yes (API). No sign-in screen yet. |
+| Auth and MFA operational | Yes: API and screens, browser-tested |
 | Financial database permissions enforced | Yes |
 | Trust and commission trust reconciliation work | Yes on test data; CTA gated |
 | Bank evidence and availability controls work | Yes |
 | Commission and payout tests pass | Yes |
 | Accounting mappings validated | **No**: needs the accountant's map |
-| BoR authority established | **No**: the designation must be recorded at install |
+| BoR authority established | **No**: the designation must be recorded at install (Admin → Broker of record & accounts) |
 | TRESA and FINTRAC workflows sufficient | Built; **counsel and the compliance officer to confirm** |
-| Mandatory transaction records | Yes (TRS); print format pending |
+| Mandatory transaction records | Yes (TRS), with a printable copy |
 | Migration and reconciliations tie out | **No**: not run on real data |
 | Backup recovery tested | Yes (test data) |
 | Critical security findings resolved | Dependency and image findings: **yes** (audits clean, CI enforces it). Independent pen test: **not done** |
 | Professional sign-offs | **No** |
 | Parallel trial passed | **No** |
 | Brokerage authorizes go-live | **No** |
+| Staff application on desktop and phone | Yes: 21 browser tests in CI (`e2e/`), screens in `docs/screens/` |

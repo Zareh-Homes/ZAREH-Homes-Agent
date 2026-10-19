@@ -2,6 +2,8 @@ import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import { App } from "./app/App.tsx";
+import { PipelineBoard } from "./pipeline/components/PipelineBoard.tsx";
+import { Dashboard } from "./dashboard/components/Dashboard.tsx";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme");
@@ -18,10 +20,10 @@ async function demoScreen(): Promise<ReactNode | null> {
   const route = location.pathname.replace(/\/+$/, "") || "/";
   let screen: ReactNode = null;
   if (route === "/pipeline") {
-    const [{ demoPipeline }, { PipelineBoard }] = await Promise.all([import("./pipeline/demo-data.ts"), import("./pipeline/components/PipelineBoard.tsx")]);
+    const { demoPipeline } = await import("./pipeline/demo-data.ts");
     screen = <PipelineBoard data={demoPipeline} initialQuery={params.get("q") ?? ""} />;
   } else {
-    const [{ demoResponses }, { Dashboard }] = await Promise.all([import("./dashboard/demo-data.ts"), import("./dashboard/components/Dashboard.tsx")]);
+    const { demoResponses } = await import("./dashboard/demo-data.ts");
     const data = demoResponses[key];
     if (data) screen = <Dashboard data={data} />;
   }

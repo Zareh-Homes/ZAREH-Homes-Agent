@@ -1,10 +1,10 @@
 # Zareh Homes back office: final report
 
-As of 2026-10-18. Branch: `claude/realestate-brokerage-schema-sfn0i9`.
+As of 2026-10-19. Branch: `claude/realestate-brokerage-schema-sfn0i9`.
 
-**Bottom line:** the back end is complete and tested for what can be built without outside input. It is **ready for technical staging**. It is **not** ready for a pilot, and **not** ready to replace Lone Wolf. The reasons are below, and most of them are decisions or people, not code.
+**Bottom line:** the back end and the staff application are built and tested for what can be done without outside input. Staff can now do the daily work in a browser, on desktop and phone. It is **ready for technical staging**. It is **not yet** ready for a controlled pilot: what's left is hosting, professional decisions, a pen test and real-data checks, not screens. It is **not** ready to replace Lone Wolf.
 
-> **RECO's first annual financial filing is due 2026-10-30, 12 days from now.** Prepare it from your current books (accountant + broker of record, filed in MyWeb). Don't wait for this system.
+> **RECO's first annual financial filing is due 2026-10-30, 11 days from now.** Prepare it from your current books (accountant + broker of record, filed in MyWeb). Don't wait for this system.
 
 ---
 
@@ -22,6 +22,39 @@ As of 2026-10-18. Branch: `claude/realestate-brokerage-schema-sfn0i9`.
    - Nothing is sent to FINTRAC. The system has no code that contacts FINTRAC.
    - The report stays OPEN until compliance staff record that they filed it in FINTRAC's own system, with FINTRAC's reference number. The database refuses "filed" without one.
    - Tests: `obligations.int.test.ts`.
+
+## Staff application (2026-10-19)
+
+The web app (`frontend/`) now covers the daily work, on the existing API. It shows the server's figures and never computes money itself; the server checks every permission on every request.
+
+| Area | Screens |
+|---|---|
+| Access | Sign in; two-factor setup (QR code, recovery codes) and verify; recovery-code sign-in; invitation and admin-issued password reset links; account page (change password, sessions, sign out elsewhere) |
+| Deals | List with search and filters; new deal (sale or lease, agents, people, commission); deal workspace with tabs: overview (conditions, amendments, firm/close/terminate), documents (upload, FINTRAC records, review), TRESA & FINTRAC, offers, trust, closing & CDA, trade record |
+| Compliance | Review queue (approve / send back with a comment), FINTRAC reports (records the acknowledgement of a report filed in FINTRAC's own system), FINTRAC compliance program |
+| Trust | Per-deal ledger with running balance, deposits, payments out, reversals, holds, receipt-of-funds records; brokerage-wide account status, shortfall/discrepancy incidents, unclaimed money |
+| Bank | CSV import, independent verification, matching, live three-way reconciliation, prepare and sign, correction of a signed month |
+| Closing | Commission statement, CDA (lawyer and internal copies, printable), finalize, void, bonuses/deductions, commission received, payout approve / record paid / returned / cancel |
+| Oversight | Dashboards, pipeline, broker/accounting/agent oversight, approvals queue |
+| Admin | People and invitations, roles, suspend/reactivate, two-factor reset; broker of record; financial policies; trust and operating accounts; commission plans; business calendar |
+| Records | Printable Trade Record Sheet with every correction and initials |
+
+**Browser tests:** 21 Playwright tests (`e2e/`) run the built app in Chromium against the real API in session mode (cookies, CSRF, MFA) and a freshly migrated database, in CI on every push (`e2e` job, report and screenshots kept 30 days). They cover: invitation → password → two-factor; wrong password, wrong code and reused recovery code refused; admin inviting each role; sign-out ending the server session; deal entry with field errors; upload → send back → re-upload → approve; trade record prepare and print; agent and compliance permissions in the screens *and* at the API (403, CSRF, ignored client-supplied identity); broker of record designation; trust account; deposit; bank import; segregation of duties (importer can't verify); reconciliation prepared by one person and signed by the broker of record; network-error and not-found screens; phone layout with no sideways scrolling on eight screens.
+
+Bugs the browser tests found and fixed: a mistyped two-factor code or current password sent you back to sign-in (every 401 was treated as an ended session); the deal trust tab hid deposit recording (wrong deposit-holder value); a nested `<main>` on the dashboard; the header overflowing at 1366px.
+
+**Not covered by browser tests yet:** finalizing a CDA and the payout approve → paid path (covered by API tests `closing.int`, `money-controls.int`, `uat.int`), offers, leases, unclaimed money and the RECO filing screens. Partial payouts stay unsupported (sales-only pilot).
+
+**Before a controlled pilot (outside this code):**
+1. Hosting: managed PostgreSQL 16 with PITR, container host, TLS, secret store, alerting.
+2. Confirm the legal brokerage entity, broker of record, trust/operating bank accounts and RECO registration all match: same legal name and registration number on the CDA settings (`BROKERAGE_*`), the BoR designation recorded in Admin, and each account's bank and last four digits. I can't verify these; they need your RECO record and bank letters.
+3. Professional decisions (§C).
+4. Independent penetration test against staging.
+5. Commission plans entered and approved by a second broker.
+6. Staff run UAT on staging with real (copied) deals; Lone Wolf export dry run and tie-out.
+7. RECO filing for 2026 by **2026-10-30**, from current books, in MyWeb (not this system).
+
+---
 
 ## A. Completed
 
@@ -42,12 +75,10 @@ The full list, with code location, commit and test for each item, is in `docs/re
 
 | Item | Why | Risk if ignored | Next action |
 |---|---|---|---|
-| **Staff screens** for deal entry, uploads/review, trust receipts, bank import/match, reconciliation, CDA, payouts, sign-in/MFA | Back-end-first; only the dashboard, pipeline and oversight have screens | Staff can't use it day to day; this blocks a pilot | Build these screens on the existing API; add Playwright end-to-end tests |
 | Professional decisions (§C) | Not mine to make | Gated features stay off; some rules use the strict reading | Send §C to each professional |
 | Accounting connection (OAuth) and mapping UI | Provider not chosen; needs an app registration | Operating payouts need manual attestations | Pick QBO or Xero (§D) |
 | Independent penetration test | External | Unknown vulnerabilities | Commission one against staging |
 | Partial payouts | Each payout is all-or-nothing | Paying an agent in instalments isn't possible | Build if you need it |
-| TRS print/PDF | JSON view only | BoR reviews on screen/export | Add a print template |
 | Alert wiring to a pager | Host not chosen | Silent failures | Wire the rules in `deployment.md` |
 | Prisma 7 upgrade | Not needed for security now (§E); breaking change | Falling behind on the ORM | Separate change, plan in `deployment.md` |
 | Real Lone Wolf migration and parallel month | Needs real exports and staff time | Can't prove tie-out | See §F |
@@ -111,7 +142,8 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 
 | Suite | Total | Passed | Failed | Skipped |
 |---|---|---|---|---|
-| Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 168 | 168 | 0 | 0 |
+| Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 184 | 184 | 0 | 0 |
+| Browser end-to-end (Playwright, Chromium, real API + database) | 21 | 21 | 0 | 0 |
 | Lone Wolf migration (with database) | 48 | 48 | 0 | 0 |
 | Frontend (Node runner 10 + vitest 24) | 34 | 34 | 0 | 0 |
 | Commission engine | 6 | 6 | 0 | 0 |
@@ -126,7 +158,7 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 
 **Not tested:**
 - No penetration test.
-- No browser end-to-end tests.
+- Browser tests don't yet cover CDA finalize and payouts (API tests do).
 - No test on real Lone Wolf data.
 - UAT A–L are automated, not run by staff (`docs/uat.md`).
 
@@ -147,7 +179,7 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 | Stage | Ready? | What's missing |
 |---|---|---|
 | **Technical staging** | **Yes**, once a host exists | Provision the host |
-| **Controlled pilot** (real deals, Lone Wolf still the record) | **No** | Staff screens; §C decisions; commission plans entered; pen test; staff-run UAT |
+| **Controlled pilot** (real deals, Lone Wolf still the record) | **No** | Hosting; entity/BoR/bank/RECO match confirmed; §C decisions; commission plans entered; pen test; staff-run UAT |
 | **Real financial production** (replace Lone Wolf) | **No** | Everything above, plus the real migration with tie-out, one parallel month reconciling to the cent, the first signed reconciliation, Prisma 7 or an accepted-risk decision, your written go-live approval |
 
 ## G. Financial safety
@@ -161,7 +193,7 @@ Confirmed for this whole effort:
 
 All data was synthetic test data in a local, throwaway database. The system has no code path that moves money or files with a regulator.
 
-## H. Operational walkthrough (API, until the screens exist)
+## H. Operational walkthrough (each step has a screen; API routes shown for reference)
 
 1. **Create the deal:** agent `POST /api/deals` (parties, agents, deposit holder). FINTRAC and document slots are created automatically.
 2. **Upload documents:** `POST /api/documents/slots/:slotId/files`. The compliance reviewer uses `POST /api/documents/slots/:slotId/review` (Approved / Needs Revision with a comment).
@@ -174,7 +206,7 @@ All data was synthetic test data in a local, throwaway database. The system has 
 
 ## I. Final gap audit: what actually stops replacing Lone Wolf
 
-1. **No staff screens for daily work.** This is the biggest one, and it's code.
+1. ~~No staff screens~~: built and browser-tested as of 2026-10-19.
 2. **Professional decisions not made** (§C): co-op routing, commission trust account, accounting map, FINTRAC policies.
 3. **No real migration or parallel month.** Until both systems reconcile to the same bank balance, nothing is proven.
 4. **Security sign-off:** the independent pen test.

@@ -18,6 +18,9 @@ export default defineConfig({
   outputDir: "test-results",
   use: {
     baseURL: WEB,
+    // The brokerage works in Ontario time; the server dates "today" the same way
+    timezoneId: "America/Toronto",
+    locale: "en-CA",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     launchOptions: process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
@@ -30,7 +33,7 @@ export default defineConfig({
       cwd: "../backend",
       url: `http://127.0.0.1:${API_PORT}/healthz`,
       reuseExistingServer: false,
-      stdout: "pipe",
+      stdout: "ignore",
       env: {
         DATABASE_URL: state("database-url"),
         PORT: String(API_PORT),

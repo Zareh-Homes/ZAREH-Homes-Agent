@@ -66,6 +66,34 @@ jobs:
         run: npm audit --audit-level=high
         working-directory: frontend
 
+  e2e:
+    # The built web app in a real browser against the real API (session mode: cookies, CSRF, MFA) and a fresh database
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      E2E_ADMIN_URL: postgresql://postgres:ci@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22.23.3" }
+      - run: npm ci
+        working-directory: backend
+      - run: npm ci
+        working-directory: frontend
+      - run: npm ci && npm audit --audit-level=high && npx playwright install --with-deps chromium
+        working-directory: e2e
+      - run: npm test
+        working-directory: e2e
+      - name: Browser test report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: e2e-report, path: "e2e/report/", retention-days: 30 }
+
   migration:
     runs-on: ubuntu-24.04
     services:
