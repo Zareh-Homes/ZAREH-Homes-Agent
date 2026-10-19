@@ -22,7 +22,8 @@ export interface Deal {
   mlsNumber: string | null; salePrice: string; offerDate: string; conditionsDueDate: string | null; closeDate: string; depositAmount: string;
   depositDueDate: string | null; trustDepositHolder: string; depositStatus: string; totalGci: string; coopBrokerageName: string | null;
   coopCommission: string; outsideReferralPayee: string | null; outsideReferralPct: string | null;
-  agents: { userId: string; name: string; role: string; splitPct: string; gciSharePct: string; isPrec: boolean; precLegalName: string | null }[];
+  agents: { userId: string; name: string; role: string; splitPct: string; gciSharePct: string; side: "LISTING" | "BUYER" | "BOTH" | null; isPrec: boolean; precLegalName: string | null }[];
+  listingSideGci: string | null; buyerSideGci: string | null;
   parties: { id: string; role: string; entityType: string; fullName: string; email: string | null; phone: string | null; representation: string | null }[];
   cda: { cdaNumber: string; revision: number; finalizedAt: string; voided: string | null } | null;
 }

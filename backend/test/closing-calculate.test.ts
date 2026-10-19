@@ -342,3 +342,93 @@ test("leases: no landlord on the deal, no CDA; and FINTRAC records that do exist
   assert.equal(auditCode(() => computeClosing({ ...toronto(60_000, "OUR_BROKERAGE"), fintrac: { total: 0, outstanding: [] } }, BROKERAGE)),
     "FINTRAC_NOT_APPROVED");
 });
+
+// ── Same brokerage on both sides: a fictional $1,000,000 sale, 2% per side ─────────────────────────────────
+// Each side's commission comes from its own agreement and is split among that side's agents only; the
+// commission is billed once ($40,000 + 13% HST = $45,200) and the brokerage's share is counted once.
+
+const sameBrokerage = (sides: { listing: number; buyer: number }, agents: ClosingInput["agents"]): ClosingInput => ({
+  deal: {
+    id: "deal-dual", dealNumber: "2026-0100", side: "DUAL", status: "CLOSED", closeDate: "2026-11-30",
+    streetAddress: "1 Escarpment Cres", unit: null, city: "Hamilton", mlsNumber: null,
+    salePrice: $(1_000_000), expectedDeposit: $(50_000), trustDepositHolder: "OUR_BROKERAGE", sellers: ["Ana Seller"], buyers: ["Ben Buyer"],
+  },
+  baseGci: $(sides.listing + sides.buyer), sides: { listing: $(sides.listing), buyer: $(sides.buyer) },
+  hstRate: 1300, taxName: "HST", coopCommission: 0, coopBrokerage: null, referral: null, agents,
+  closingLawyer: { name: "Seller Law LLP", email: "closings@sellerlaw.test", phone: null },
+  trust: { accountId: "acct-1", balance: $(50_000), cleared: $(50_000), accountsWithFunds: 1, activeHold: false,
+    deposits: [{ receiptNumber: 2001, amount: $(50_000), date: "2026-10-20", payor: "Ben Buyer" }] },
+  fintrac: { total: 2, outstanding: [] },
+});
+const agentOn = (userId: string, name: string, side: "LISTING" | "BUYER" | "BOTH", gciShareBps: number, extra: Partial<ClosingInput["agents"][number]> = {}) =>
+  ({ userId, name, role: "PRIMARY" as const, isPrec: false, precLegalName: null, hstNumber: null, splitBps: 8000, gciShareBps,
+     annualCap: null, fees: [], ytdHouseCollected: 0, hasPlan: true, side, ...extra });
+const byName = (c: ReturnType<typeof computeClosing>) => Object.fromEntries(c.agents.map((a) => [a.name, a]));
+
+test("same brokerage, two agents (one per side): each paid from their own side, the commission billed once", () => {
+  const c = computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [
+    agentOn("a", "Agent A", "LISTING", 10_000, { hstNumber: "111111111RT0001" }), agentOn("b", "Agent B", "BUYER", 10_000)]), BROKERAGE);
+  assert.deepEqual([c.incoming.commission.base, c.incoming.commission.hst, c.incoming.commission.total], [$(40_000), $(5_200), $(45_200)]);
+  assert.equal(c.incoming.coop.total, 0); // our own agent is never a co-operating brokerage
+  assert.deepEqual(c.incoming.sides, { listing: $(20_000), buyer: $(20_000) });
+  const a = byName(c);
+  assert.deepEqual(a["Agent A"]!.fromSides, { listing: $(20_000), buyer: 0 });
+  assert.deepEqual([a["Agent A"]!.split.base, a["Agent A"]!.split.hst, a["Agent A"]!.payout], [$(16_000), $(2_080), $(18_080)]); // registered: HST on split
+  assert.deepEqual(a["Agent B"]!.fromSides, { listing: 0, buyer: $(20_000) });
+  assert.deepEqual([a["Agent B"]!.split.base, a["Agent B"]!.split.hst, a["Agent B"]!.payout], [$(16_000), 0, $(16_000)]);
+  // Brokerage: $4,000 from each side, once; HST to remit = $5,200 collected − $2,080 paid to Agent A
+  assert.deepEqual([c.brokerage.netEarnedShare.base, c.brokerage.netEarnedShare.hst], [$(8_000), $(3_120)]);
+  assert.equal(c.agents.reduce((s, x) => s + x.allocatedBaseGci, 0) + 0, $(40_000)); // nothing allocated twice
+});
+
+test("same brokerage, one agent on both sides: earns both sides once, through one plan run (cap applies to the total)", () => {
+  const c = computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [
+    agentOn("a", "Agent A", "BOTH", 10_000, { annualCap: $(5_000) })]), BROKERAGE);
+  const a = byName(c)["Agent A"]!;
+  assert.deepEqual(a.fromSides, { listing: $(20_000), buyer: $(20_000) });
+  assert.equal(a.allocatedBaseGci, $(40_000));
+  // 20% house share of $40,000 is $8,000, capped at $5,000: the agent keeps $35,000
+  assert.deepEqual([a.split.base, a.houseSplitBase, a.capReachedOnThisDeal], [$(35_000), $(5_000), true]);
+  assert.equal(c.brokerage.netEarnedShare.base, $(5_000));
+});
+
+test("same brokerage, two agents share the listing side, one on the buyer side", () => {
+  const c = computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [
+    agentOn("a1", "Agent A1", "LISTING", 5_000), agentOn("a2", "Agent A2", "LISTING", 5_000, { role: "CO_AGENT", fees: [{ name: "Deal fee", amount: $(250) }] }),
+    agentOn("b", "Agent B", "BUYER", 10_000, { role: "CO_AGENT", splitBps: 9000 })]), BROKERAGE);
+  const a = byName(c);
+  assert.deepEqual([a["Agent A1"]!.allocatedBaseGci, a["Agent A1"]!.split.base], [$(10_000), $(8_000)]);
+  assert.deepEqual([a["Agent A2"]!.allocatedBaseGci, a["Agent A2"]!.split.base, a["Agent A2"]!.payout], [$(10_000), $(8_000), $(8_000) - $(250) - $(32.5)]);
+  assert.deepEqual([a["Agent B"]!.allocatedBaseGci, a["Agent B"]!.split.base], [$(20_000), $(18_000)]); // B's own 90% plan
+});
+
+test("same brokerage, unequal sides (2.5% + 2%): each side exact to the cent, no shifting between agents", () => {
+  const c = computeClosing(sameBrokerage({ listing: 25_000, buyer: 20_000 }, [
+    agentOn("a", "Agent A", "LISTING", 10_000), agentOn("b", "Agent B", "BUYER", 10_000)]), BROKERAGE);
+  const a = byName(c);
+  assert.deepEqual([a["Agent A"]!.split.base, a["Agent B"]!.split.base], [$(20_000), $(16_000)]);
+});
+
+test("same brokerage: sides missing, not adding up, an agent without a side, or a side without agents: no CDA", () => {
+  const two = [agentOn("a", "Agent A", "LISTING", 10_000), agentOn("b", "Agent B", "BUYER", 10_000)];
+  assert.equal(auditCode(() => computeClosing({ ...sameBrokerage({ listing: 20_000, buyer: 20_000 }, two), sides: null }, BROKERAGE)), "SIDES_MISSING");
+  assert.equal(auditCode(() => computeClosing({ ...sameBrokerage({ listing: 20_000, buyer: 20_000 }, two), baseGci: $(39_000) }, BROKERAGE)), "SIDES_MISMATCH");
+  assert.equal(auditCode(() => computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [two[0]!, { ...two[1]!, side: null }]), BROKERAGE)), "AGENT_SIDE_MISSING");
+  assert.equal(auditCode(() => computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [two[0]!]), BROKERAGE)), "SIDE_WITHOUT_AGENT");
+  assert.equal(auditCode(() => computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [two[0]!, { ...two[1]!, gciShareBps: 5_000 }]), BROKERAGE)), "GCI_SHARES_INVALID");
+});
+
+test("the earlier HST figure: $2,437.50 is 13% of the whole $18,750 commission, kept by the brokerage only because the agent isn't HST-registered", () => {
+  // Buyer-side $750,000 sale from the demo: $18,750 commission, agent 70% split, no HST number
+  const input: ClosingInput = { ...toronto(0, "COOP_BROKERAGE"), deal: { ...toronto(0, "COOP_BROKERAGE").deal, side: "BUYER", salePrice: $(750_000) },
+    baseGci: $(18_750), coopCommission: 0, coopBrokerage: "Lakeshore Realty Ltd.",
+    agents: [{ ...JANE, isPrec: false, precLegalName: null, hstNumber: null, splitBps: 7000, annualCap: null, fees: [] }] };
+  const c = computeClosing(input, BROKERAGE);
+  assert.equal(c.incoming.commission.hst, $(2_437.5)); // 13% × $18,750
+  assert.equal(c.agents[0]!.split.base, $(13_125));
+  assert.equal(c.agents[0]!.split.hst, 0);
+  assert.equal(c.brokerage.netEarnedShare.base, $(5_625));
+  // HST to remit is the HST collected less HST paid to agents: all $2,437.50 here, not 13% of $5,625 ($731.25)
+  assert.equal(c.brokerage.netEarnedShare.hst, $(2_437.5));
+  assert.equal(c.brokerage.netHstEstimate, $(2_437.5));
+});

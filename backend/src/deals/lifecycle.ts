@@ -14,7 +14,7 @@ import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
 import { validatePathUuid } from "../trust/validation.ts";
-import { requireOfferDisclosures } from "../obligations/service.ts";
+import { requireOfferDisclosures, requireRepresentationConsents } from "../obligations/service.ts";
 
 const STAFF = new Set(["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"]);
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -160,6 +160,8 @@ async function setStatus(prisma: PrismaClient, dealId: string, status: "FIRM" | 
 
 export async function markFirm(prisma: PrismaClient, actor: Actor, dealId: string) {
   await assertDealAccess(prisma, actor, dealId);
+  // No step for clients in a multiple representation until each has consented in writing (s.22)
+  await requireRepresentationConsents(prisma, dealId, todayInToronto(), "Marking the deal firm");
   await setStatus(prisma, dealId, "FIRM");
   return lifecycleView(prisma, dealId);
 }
@@ -175,16 +177,17 @@ export async function markClosed(prisma: PrismaClient, actor: Actor, dealId: str
 
 const AMENDABLE = {
   SALE_PRICE: "salePrice", CLOSE_DATE: "closeDate", DEPOSIT_AMOUNT: "depositAmount", DEPOSIT_DUE_DATE: "depositDueDate",
-  TOTAL_GCI: "totalGci", COOP_COMMISSION: "coopCommission",
+  TOTAL_GCI: "totalGci", COOP_COMMISSION: "coopCommission", LISTING_SIDE_GCI: "listingSideGci", BUYER_SIDE_GCI: "buyerSideGci",
 } as const;
 /** Commission figures feed the CDA: only a managing broker or admin changes them after the deal is opened */
-const COMMISSION_FIELDS = new Set(["TOTAL_GCI", "COOP_COMMISSION"]);
+const COMMISSION_FIELDS = new Set(["TOTAL_GCI", "COOP_COMMISSION", "LISTING_SIDE_GCI", "BUYER_SIDE_GCI"]);
 
 /** Records the amendment and applies it to the deal, in one step. */
 export async function amendDeal(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown, today: string) {
   await assertDealAccess(prisma, actor, dealId);
   const r = new Reader(body, ["field", "newValue", "effectiveDate", "reference", "documentFileId", "description"]);
-  const field = r.oneOf("field", ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE", "TOTAL_GCI", "COOP_COMMISSION", "OTHER"] as const);
+  const field = r.oneOf("field", ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE", "TOTAL_GCI", "COOP_COMMISSION",
+    "LISTING_SIDE_GCI", "BUYER_SIDE_GCI", "OTHER"] as const);
   const isDate = field === "CLOSE_DATE" || field === "DEPOSIT_DUE_DATE";
   const isMoney = field === "SALE_PRICE" || field === "DEPOSIT_AMOUNT" || COMMISSION_FIELDS.has(field);
   if (COMMISSION_FIELDS.has(field)) requireRole(actor, ["MANAGING_BROKER", "ADMIN"], "Changing a deal's commission figures");
@@ -196,6 +199,12 @@ export async function amendDeal(prisma: PrismaClient, actor: Actor, dealId: stri
   r.done();
   const deal = await prisma.transaction.findUnique({ where: { id: dealId } });
   if (!deal) throw new NotFoundError("Deal", dealId);
+  // Same-brokerage deals: each side is amended under its own agreement, and the deal's commission follows
+  const sided = deal.listingSideGci !== null && deal.buyerSideGci !== null;
+  if (sided && field === "TOTAL_GCI") throw new RuleViolationError("AMEND_A_SIDE", "This deal's commission is the two sides' total: amend the listing side or the buyer side");
+  if (!sided && (field === "LISTING_SIDE_GCI" || field === "BUYER_SIDE_GCI")) {
+    throw new RuleViolationError("NOT_SIDED", "Only deals where our brokerage acts for both sides have a commission per side");
+  }
   const column = field === "OTHER" ? null : AMENDABLE[field];
   const current = column ? deal[column] : null;
   const oldValue = current === null ? null : current instanceof Date ? iso(current) : (current as { toFixed(n: number): string }).toFixed(2);
@@ -207,9 +216,13 @@ export async function amendDeal(prisma: PrismaClient, actor: Actor, dealId: stri
         VALUES (gen_random_uuid(), ${dealId}::uuid, ${field}, ${oldValue}, ${newValue}, ${input.effectiveDate}::date, ${input.reference},
                 ${input.documentFileId}::uuid, ${actor.id}::uuid)`;
       if (column) {
+        const other = field === "LISTING_SIDE_GCI" ? deal.buyerSideGci : field === "BUYER_SIDE_GCI" ? deal.listingSideGci : null;
         await tx.transaction.update({
           where: { id: dealId },
-          data: { [column]: isDate ? new Date(`${newValue}T00:00:00Z`) : newValue },
+          data: {
+            [column]: isDate ? new Date(`${newValue}T00:00:00Z`) : newValue,
+            ...(other !== null ? { totalGci: formatCents(numericToCents(newValue) + numericToCents(other.toFixed(2))) } : {}),
+          },
         });
       }
     });
@@ -253,7 +266,7 @@ export async function listOffers(prisma: PrismaClient, actor: Actor, dealId: str
     const keepUntil = new Date(o.receivedAt.getTime());
     keepUntil.setUTCFullYear(keepUntil.getUTCFullYear() + (status === "ACCEPTED" ? 6 : 1));
     return {
-      id: o.id, receivedAt: o.receivedAt.toISOString(), written: o.written, offerorBrokerage: o.offerorBrokerage,
+      id: o.id, receivedAt: o.receivedAt.toISOString(), written: o.written, offerorBrokerage: o.offerorBrokerage, fromOurBrokerage: o.fromOurBrokerage,
       offerorSelfRepresented: o.offerorSelfRepresented, price: o.price?.toFixed(2) ?? null, status,
       documentFileId: o.documentFileId, keepUntil: iso(keepUntil),
       history: o.events.map((e) => ({ status: e.status, eventAt: e.eventAt.toISOString(), note: e.note })),
@@ -263,8 +276,10 @@ export async function listOffers(prisma: PrismaClient, actor: Actor, dealId: str
 
 export async function recordOffer(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown) {
   await assertDealAccess(prisma, actor, dealId);
-  const r = new Reader(body, ["receivedAt", "written", "offerorBrokerage", "offerorSelfRepresented", "price", "documentFileId"]);
+  const r = new Reader(body, ["receivedAt", "written", "offerorBrokerage", "offerorSelfRepresented", "fromOurBrokerage", "price", "documentFileId"]);
   const input = {
+    // The buyer is also our client (s.22.0.3: the other offerors are told; two of ours competing need consent)
+    fromOurBrokerage: r.has("fromOurBrokerage") ? r.bool("fromOurBrokerage") : false,
     receivedAt: timestamp(r, "receivedAt"), written: r.bool("written"), offerorBrokerage: r.optionalText("offerorBrokerage", 200),
     offerorSelfRepresented: r.has("offerorSelfRepresented") ? r.bool("offerorSelfRepresented") : false,
     price: r.has("price") ? r.amount("price") : null, documentFileId: r.optionalUuid("documentFileId"),
@@ -273,9 +288,9 @@ export async function recordOffer(prisma: PrismaClient, actor: Actor, dealId: st
   r.done();
   try {
     await prisma.$executeRaw`
-      INSERT INTO "Offer" (id, "listingDealId", "receivedAt", written, "offerorBrokerage", "offerorSelfRepresented", price, "documentFileId", "recordedById")
+      INSERT INTO "Offer" (id, "listingDealId", "receivedAt", written, "offerorBrokerage", "offerorSelfRepresented", "fromOurBrokerage", price, "documentFileId", "recordedById")
       VALUES (gen_random_uuid(), ${dealId}::uuid, ${input.receivedAt}::timestamptz, ${input.written}, ${input.offerorBrokerage},
-              ${input.offerorSelfRepresented}, ${input.price === null ? null : formatCents(input.price)}::numeric, ${input.documentFileId}::uuid, ${actor.id}::uuid)`;
+              ${input.offerorSelfRepresented}, ${input.fromOurBrokerage}, ${input.price === null ? null : formatCents(input.price)}::numeric, ${input.documentFileId}::uuid, ${actor.id}::uuid)`;
   } catch (err) {
     rethrow(err);
   }

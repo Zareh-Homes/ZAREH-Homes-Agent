@@ -19,8 +19,8 @@ type Cents = number;
 interface Taxed { base: Cents; hst: Cents; total: Cents }
 interface Computation {
   cdaNumber: string; hstRate: number; taxName: string; payer: { kind: string; name: string };
-  incoming: { commission: Taxed; coop: Taxed; totalPayable: Cents };
-  agents: { userId: string; name: string; payeeName: string; split: Taxed; feesTotal: Taxed; payout: Cents; owes: Cents; effectiveSplitBps: number; capReachedOnThisDeal: boolean;
+  incoming: { commission: Taxed; coop: Taxed; totalPayable: Cents; sides?: { listing: Cents; buyer: Cents } | null };
+  agents: { userId: string; name: string; payeeName: string; side?: "LISTING" | "BUYER" | "BOTH" | null; fromSides?: { listing: Cents; buyer: Cents } | null; split: Taxed; feesTotal: Taxed; payout: Cents; owes: Cents; effectiveSplitBps: number; capReachedOnThisDeal: boolean;
     adjustments: { id: string; kind: string; description: string; signedTotal: Cents }[] }[];
   brokerage: { netEarnedShare: Taxed; referral: (Taxed & { payee: string }) | null; netHstEstimate: Cents; agentPayablesTotal: Cents };
   trust: { held: Cents; appliedToCommission: Cents; balanceDueToLawyer: Cents; balanceDueFromLawyer: Cents; distributions: { entryType: string; payee: string; amount: Cents; purpose: string }[] };
@@ -62,6 +62,8 @@ const PAYOUT_HELP: Record<string, string> = {
   APPROVED: "Send the payment in the bank portal, then record it here.",
   PAYMENT_RETURNED: "The payment came back. Send it again and record it.",
 };
+
+const SIDE_TEXT = { LISTING: "Represents the seller", BUYER: "Represents the buyer", BOTH: "Represents seller and buyer" } as const;
 
 const PAYOUT_TONE: Record<string, Tone> = {
   AWAITING_COMMISSION: "neutral", AWAITING_BANK_VERIFICATION: "warning", AWAITING_POLICY_APPROVAL: "warning", READY_FOR_APPROVAL: "neutral",
@@ -136,9 +138,11 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
             ["Commission", `${centsText(c.incoming.commission.base)} + ${c.taxName} ${centsText(c.incoming.commission.hst)} = ${centsText(c.incoming.commission.total)}`],
             ...(c.incoming.coop.total ? [["Co-operating brokerage", centsText(c.incoming.coop.total)] as [string, string]] : []),
             ...(c.brokerage.referral ? [[`Referral to ${c.brokerage.referral.payee}`, centsText(c.brokerage.referral.total)] as [string, string]] : []),
-            // The share's HST is collected for remittance, not earned: show the two apart
+            ...(c.incoming.sides ? [["Of which", `listing side ${centsText(c.incoming.sides.listing)} · buyer side ${centsText(c.incoming.sides.buyer)} (billed once)`] as [string, string]] : []),
+            // HST is collected for remittance, not earned: shown apart from the brokerage's share. It's the HST
+            // collected on the whole commission less HST paid to agents, not tax on the brokerage's share alone.
             ["Brokerage share (before expenses)", centsText(c.brokerage.netEarnedShare.base)],
-            [`${c.taxName} on the brokerage share (to remit)`, centsText(c.brokerage.netEarnedShare.hst)],
+            [`${c.taxName} to remit (collected on the commission, less ${c.taxName} paid to agents)`, centsText(c.brokerage.netEarnedShare.hst)],
             [`Net ${c.taxName} (this deal, estimate)`, centsText(c.brokerage.netHstEstimate)],
           ]} />
         </Section>
@@ -162,6 +166,9 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
           {c.agents.map((a) => (
             <tr key={a.userId} className="align-top">
               <td className="px-3 py-2">{a.name}{a.payeeName !== a.name && <span className="block text-xs text-ink-3">Paid to {a.payeeName}</span>}
+                {a.fromSides && <span className="block text-xs text-ink-2">{SIDE_TEXT[a.side ?? "BOTH"]}: {[
+                  a.fromSides.listing ? `${centsText(a.fromSides.listing)} from the listing side` : "",
+                  a.fromSides.buyer ? `${centsText(a.fromSides.buyer)} from the buyer side` : ""].filter(Boolean).join(" + ")}</span>}
                 <span className="block text-xs text-ink-3">{a.effectiveSplitBps / 100}% split{a.capReachedOnThisDeal ? " · cap reached on this deal" : ""}</span></td>
               <td className="px-3 py-2 whitespace-nowrap tabular-nums">{centsText(a.split.total)}</td>
               <td className="px-3 py-2 whitespace-nowrap tabular-nums">{centsText(a.feesTotal.total)}</td>

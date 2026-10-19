@@ -35,6 +35,15 @@ const LABEL: Record<TrsItem, string> = {
   additionalItems: "Further items (s.17 list beyond item 9 not yet verified)",
 };
 
+/** A record value as text with object keys sorted, so two values compare equal whatever their key order */
+function canonical(v: unknown): string {
+  const sort = (x: unknown): unknown =>
+    Array.isArray(x) ? x.map(sort)
+      : x && typeof x === "object" ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, sort((x as Record<string, unknown>)[k])]))
+        : x;
+  return JSON.stringify(sort(v) ?? null);
+}
+
 /** A record value in words, for messages: "$18,750.00 · payer Lakeshore Realty Ltd. · plus HST" */
 function describe(v: unknown): string {
   const dollars = (x: string) => `$${Number(x).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -51,7 +60,7 @@ function describe(v: unknown): string {
 const NATURE: Record<string, string> = {
   LISTING: "Sale of real property: the brokerage represents the seller",
   BUYER: "Purchase of real property: the brokerage represents the buyer",
-  DUAL: "Sale of real property: the brokerage represents both the seller and the buyer (multiple representation)",
+  DUAL: "Sale of real property: the seller and the buyer are both clients of this brokerage (see their representation agreements)",
   LANDLORD: "Lease of real property: the brokerage represents the landlord",
   TENANT: "Lease of real property: the brokerage represents the tenant",
 };
@@ -82,13 +91,20 @@ export async function generateItems(prisma: PrismaClient, dealId: string): Promi
     lawyers: byRole("SELLER_LAWYER", "BUYER_LAWYER").map((p) => ({ role: p.role, name: p.fullName, email: p.email, phone: p.phone })),
     registrants: [
       ...deal.agents.map((a) => ({
-        side: deal.side === "DUAL" ? "BOTH" : listingSide ? principals[0] : principals[1], brokerage: "this brokerage",
+        // Same-brokerage deals: the client each agent actually represents (an agent on both sides, BOTH)
+        side: deal.side === "DUAL" ? (a.side === "LISTING" ? "SELLER" : a.side === "BUYER" ? "BUYER" : "BOTH") : listingSide ? principals[0] : principals[1],
+        brokerage: "this brokerage",
         name: `${a.user.firstName} ${a.user.lastName}`, recoRegistrationNo: a.user.recoRegistrationNo, email: a.user.email, phone: a.user.phone,
       })),
       ...(deal.side !== "DUAL" && coop ? [{ side: listingSide ? principals[1] : principals[0], brokerage: coop, name: null, email: null, phone: null }] : []),
     ],
     deposit: { amount: deal.depositAmount.toFixed(2), heldBy: deal.trustDepositHolder },
-    brokerageRemuneration: { amount: deal.totalGci.toFixed(2), payer: payers.length ? payers.join(", ") : null, taxExtra: true },
+    brokerageRemuneration: {
+      amount: deal.totalGci.toFixed(2), payer: payers.length ? payers.join(", ") : null, taxExtra: true,
+      // Same-brokerage deals: what each side's agreement provides (part of the amount above, not in addition)
+      ...(deal.listingSideGci !== null && deal.buyerSideGci !== null
+        ? { listingSide: deal.listingSideGci.toFixed(2), buyerSide: deal.buyerSideGci.toFixed(2) } : {}),
+    },
     otherBrokerageRemuneration: listingSide && deal.side !== "DUAL" && coop
       ? { amount: deal.coopCommission.toFixed(2), brokerage: coop }
       : { amount: "0.00", brokerage: null },
@@ -134,9 +150,10 @@ export async function tradeRecordView(prisma: PrismaClient, dealId: string) {
   if (!sheet) throw new NotFoundError("Trade record sheet for deal", dealId);
   const items = effectiveItems(sheet);
   const current = await generateItems(prisma, dealId);
-  // The deal changed after the sheet was prepared (an amendment): flag it, don't rewrite the record
+  // The deal changed after the sheet was prepared (an amendment): flag it, don't rewrite the record.
+  // Compared without key order: the stored copy is jsonb, which re-sorts an object's keys.
   const drift = (["consideration", "deposit", "otherBrokerageRemuneration", "brokerageRemuneration"] as const)
-    .filter((k) => JSON.stringify(items[k]) !== JSON.stringify(current[k]))
+    .filter((k) => canonical(items[k]) !== canonical(current[k]))
     .map((k) => `${LABEL[k]}: the deal now shows ${describe(current[k])}`);
   const name = (u: { firstName: string; lastName: string } | null) => (u ? `${u.firstName} ${u.lastName}` : null);
   const initials = (u: { firstName: string; lastName: string }) => `${u.firstName[0]}${u.lastName[0]}`.toUpperCase();

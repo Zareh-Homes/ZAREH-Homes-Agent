@@ -71,7 +71,9 @@ export interface ClosingAgentInput {
   precLegalName: string | null;
   hstNumber: string | null;
   splitBps: number; // 8000 = 80/20
-  gciShareBps: number; // 10000 = all of the deal's GCI
+  gciShareBps: number; // 10000 = all of the deal's GCI (same-brokerage deals: all of their side's)
+  /** Same-brokerage (DUAL) deals: the side this agent represents */
+  side?: "LISTING" | "BUYER" | "BOTH" | null;
   annualCap: Cents | null;
   fees: { name: string; amount: Cents }[];
   ytdHouseCollected: Cents; // house share already collected this cap year
@@ -102,6 +104,8 @@ export interface ClosingInput {
     buyers: string[];
   };
   baseGci: Cents;
+  /** Same-brokerage (DUAL) deals: each side's commission under its own agreement; they add up to baseGci */
+  sides?: { listing: Cents; buyer: Cents } | null;
   coopCommission: Cents;
   coopBrokerage: string | null;
   referral: { payee: string; rateBps: number } | null;
@@ -138,6 +142,9 @@ export interface AgentClosingLine {
   isPrec: boolean;
   hstNumber: string | null;
   allocatedBaseGci: Cents;
+  /** Same-brokerage deals: the side(s) the agent represents and what came from each */
+  side: "LISTING" | "BUYER" | "BOTH" | null;
+  fromSides: { listing: Cents; buyer: Cents } | null;
   split: Taxed; // agent base split + HST
   fees: (Taxed & { name: string })[];
   feesTotal: Taxed;
@@ -180,6 +187,8 @@ export interface ClosingComputation {
     commission: Taxed; // T = B + H
     coop: Taxed; // C + HC
     totalPayable: Cents; // O
+    /** Same-brokerage deals: each side's commission before tax (they add up to commission.base; billed once) */
+    sides: { listing: Cents; buyer: Cents } | null;
   };
   agents: AgentClosingLine[];
   brokerage: {
@@ -227,8 +236,24 @@ const LEASE_SIDES = new Set(["LANDLORD", "TENANT"]);
 function allocate(total: Cents, agents: ClosingAgentInput[]): Cents[] {
   // Round each share down, so the leftover is never negative and always lands on the primary agent
   const parts = agents.map((a) => Math.floor((total * a.gciShareBps) / 10_000));
-  parts[0]! += total - parts.reduce((s, p) => s + p, 0);
+  if (parts.length) parts[0]! += total - parts.reduce((s, p) => s + p, 0);
   return parts;
+}
+
+const onSide = (a: ClosingAgentInput, side: "LISTING" | "BUYER") => a.side === side || a.side === "BOTH";
+
+/**
+ * Same-brokerage deals: each side's commission is split among that side's agents only, so an agent is paid
+ * from the side they represent (and an agent on both sides from both). Returns per-agent amounts from each side.
+ */
+function allocateBySide(sides: { listing: Cents; buyer: Cents }, agents: ClosingAgentInput[]): { listing: Cents; buyer: Cents }[] {
+  const out = agents.map(() => ({ listing: 0, buyer: 0 }));
+  for (const side of ["LISTING", "BUYER"] as const) {
+    const idx = agents.map((a, i) => (onSide(a, side) ? i : -1)).filter((i) => i >= 0);
+    const parts = allocate(side === "LISTING" ? sides.listing : sides.buyer, idx.map((i) => agents[i]!));
+    idx.forEach((i, k) => { out[i]![side === "LISTING" ? "listing" : "buyer"] = parts[k]!; });
+  }
+  return out;
 }
 
 export function computeClosing(input: ClosingInput, brokerageName: string): ClosingComputation {
@@ -254,9 +279,27 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
 
   // ── Structural checks ───────────────────────────────────────────────────
   if (input.agents.length === 0) throw new ClosingAuditError("NO_AGENTS", "The deal has no agents");
-  const shareTotal = input.agents.reduce((s, a) => s + a.gciShareBps, 0);
-  if (shareTotal !== 10_000) {
-    throw new ClosingAuditError("GCI_SHARES_INVALID", `Agents' GCI shares add up to ${shareTotal / 100}%, not 100%`);
+  const sides = deal.side === "DUAL" ? input.sides ?? null : null;
+  if (deal.side === "DUAL") {
+    // Both sides are ours: each side's remuneration comes from its own agreement and pays its own agents
+    if (!sides) throw new ClosingAuditError("SIDES_MISSING", "Record the listing side's and the buyer side's commission before generating the CDA");
+    if (sides.listing + sides.buyer !== input.baseGci) {
+      throw new ClosingAuditError("SIDES_MISMATCH", "The listing-side and buyer-side commissions don't add up to the deal's commission");
+    }
+    const missing = input.agents.filter((a) => !a.side).map((a) => a.name);
+    if (missing.length) throw new ClosingAuditError("AGENT_SIDE_MISSING", `Say which side ${missing.join(" and ")} represent${missing.length === 1 ? "s" : ""}`);
+    for (const side of ["LISTING", "BUYER"] as const) {
+      const group = input.agents.filter((a) => onSide(a, side));
+      const total = group.reduce((s, a) => s + a.gciShareBps, 0);
+      const label = side === "LISTING" ? "listing" : "buyer";
+      if (group.length === 0) throw new ClosingAuditError("SIDE_WITHOUT_AGENT", `No agent represents the ${label} side`);
+      if (total !== 10_000) throw new ClosingAuditError("GCI_SHARES_INVALID", `The ${label} side's agents' shares add up to ${total / 100}%, not 100%`);
+    }
+  } else {
+    const shareTotal = input.agents.reduce((s, a) => s + a.gciShareBps, 0);
+    if (shareTotal !== 10_000) {
+      throw new ClosingAuditError("GCI_SHARES_INVALID", `Agents' GCI shares add up to ${shareTotal / 100}%, not 100%`);
+    }
   }
   if (input.trust.activeHold) {
     throw new ClosingAuditError("TRUST_HOLD_ACTIVE", "The deal's trust funds are on hold (disputed / unclaimed)");
@@ -290,7 +333,8 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   const totalPayable = commission.total + coop.total;
 
   // ── 2. Agents, through the commission engine ─────────────────────────────
-  const allocations = allocate(input.baseGci, input.agents);
+  const bySide = sides ? allocateBySide(sides, input.agents) : null;
+  const allocations = bySide ? bySide.map((x) => x.listing + x.buyer) : allocate(input.baseGci, input.agents);
   const runs = input.agents.map((agent, i) => {
     if (!agent.hasPlan) warnings.push(`NO_COMMISSION_PLAN:${agent.name}`);
     const r = calculateCommission({
@@ -421,7 +465,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   }
 
   // ── 5. One payment from the payer, to the brokerage ─────────────────────
-  const agents: AgentClosingLine[] = runs.map(({ agent, base, r, adjustments, payout, owes, net }) => {
+  const agents: AgentClosingLine[] = runs.map(({ agent, base, r, adjustments, payout, owes, net }, i) => {
     return {
       userId: agent.userId,
       name: agent.name,
@@ -429,6 +473,8 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       isPrec: agent.isPrec,
       hstNumber: agent.hstNumber,
       allocatedBaseGci: base,
+      side: sides ? agent.side ?? null : null,
+      fromSides: bySide ? bySide[i]! : null,
       split: r.agent.split,
       fees: r.agent.fees,
       feesTotal: r.agent.feesTotal,
@@ -472,7 +518,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     payer,
     closingLawyer: input.closingLawyer,
     landlord: input.landlord ?? null,
-    incoming: { commission, coop, totalPayable },
+    incoming: { commission, coop, totalPayable, sides },
     agents,
     brokerage: {
       netEarnedShare,

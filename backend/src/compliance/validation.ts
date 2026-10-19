@@ -29,6 +29,10 @@ export interface DealAgentInput {
   userId: string;
   role: DealAgentRole;
   splitPct: number;
+  /** Share of the deal's commission (same-brokerage deals: of their side's), 0–100 */
+  gciSharePct: number;
+  /** Same-brokerage deals: the side the agent represents */
+  side: "LISTING" | "BUYER" | "BOTH" | null;
 }
 
 export interface CreateDealInput {
@@ -47,6 +51,9 @@ export interface CreateDealInput {
   depositDueDate: string | null;
   trustDepositHolder: DepositHolder;
   totalGci: Cents;
+  /** Same-brokerage deals: each side's commission under its own agreement (they add up to totalGci) */
+  listingSideGci: Cents | null;
+  buyerSideGci: Cents | null;
   coopBrokerageName: string | null;
   /** Listing side: the co-operating brokerage's commission, before tax */
   coopCommission: Cents;
@@ -80,10 +87,10 @@ function readParty(p: Reader): PartyInput {
 export function validateCreateDeal(body: unknown): CreateDealInput {
   const r = new Reader(body, [
     "side", "status", "streetAddress", "unit", "city", "mlsNumber", "listingId", "salePrice", "offerDate",
-    "conditionsDueDate", "closeDate", "depositAmount", "depositDueDate", "trustDepositHolder", "totalGci",
+    "conditionsDueDate", "closeDate", "depositAmount", "depositDueDate", "trustDepositHolder", "totalGci", "listingSideGci", "buyerSideGci",
     "coopBrokerageName", "coopCommission", "outsideReferralPayee", "outsideReferralPct", "agents", "parties",
   ]);
-  const agentReaders = r.objects("agents", ["userId", "role", "splitPct"], { min: 1, max: 4 });
+  const agentReaders = r.objects("agents", ["userId", "role", "splitPct", "gciSharePct", "side"], { min: 1, max: 4 });
   const partyReaders = r.objects("parties", ["role", "entityType", "fullName", "email", "phone", "representation"], { min: 1, max: 20 });
 
   const input: CreateDealInput = {
@@ -101,7 +108,10 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
     depositAmount: r.amount("depositAmount"),
     depositDueDate: r.optionalDate("depositDueDate"),
     trustDepositHolder: r.oneOf("trustDepositHolder", HOLDERS),
-    totalGci: r.amount("totalGci"),
+    // Same-brokerage deals give each side's commission; the deal's commission is their total
+    listingSideGci: r.has("listingSideGci") ? r.amount("listingSideGci") : null,
+    buyerSideGci: r.has("buyerSideGci") ? r.amount("buyerSideGci") : null,
+    totalGci: r.has("totalGci") || !(r.has("listingSideGci") && r.has("buyerSideGci")) ? r.amount("totalGci") : 0,
     coopBrokerageName: r.optionalText("coopBrokerageName", 200),
     coopCommission: r.has("coopCommission") ? r.amount("coopCommission") : 0,
     outsideReferralPayee: r.optionalText("outsideReferralPayee", 200),
@@ -110,6 +120,8 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
       userId: a.uuid("userId"),
       role: a.oneOf("role", AGENT_ROLES),
       splitPct: a.percent("splitPct", 0, 100),
+      gciSharePct: a.has("gciSharePct") ? a.percent("gciSharePct", 0, 100) : -1, // -1: not given (worked out below)
+      side: a.has("side") ? a.oneOf("side", ["LISTING", "BUYER", "BOTH"] as const) : null,
     })),
     parties: partyReaders.map(readParty),
   };
@@ -129,6 +141,42 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
   if (agentReaders.length > 0) {
     r.check(input.agents.filter((a) => a.role === "PRIMARY").length === 1, "agents", "needs exactly one PRIMARY agent");
     r.check(new Set(input.agents.map((a) => a.userId)).size === input.agents.length, "agents", "lists the same agent twice");
+  }
+  if (input.side === "DUAL") {
+    r.check(input.listingSideGci !== null, "listingSideGci", "is needed when our brokerage acts for both sides (from the seller's agreement)");
+    r.check(input.buyerSideGci !== null, "buyerSideGci", "is needed when our brokerage acts for both sides (from the buyer's agreement)");
+    if (input.listingSideGci !== null && input.buyerSideGci !== null) {
+      const sum = input.listingSideGci + input.buyerSideGci;
+      if (r.has("totalGci")) r.check(input.totalGci === sum, "totalGci", "must equal the listing-side plus buyer-side commission");
+      input.totalGci = sum;
+    }
+  } else {
+    r.check(input.listingSideGci === null && input.buyerSideGci === null, "listingSideGci", "is only for deals where our brokerage acts for both sides");
+  }
+  if (agentReaders.length > 0 && input.side) {
+    const dual = input.side === "DUAL";
+    input.agents.forEach((a, i) => {
+      if (dual) r.check(a.side !== null, `agents[${i}].side`, "say which side this agent represents");
+      else r.check(a.side === null, `agents[${i}].side`, "is only for deals where our brokerage acts for both sides");
+    });
+    if (dual && input.agents.some((a) => a.side === "BOTH")) {
+      r.check(input.agents.every((a) => a.side === "BOTH"), "agents",
+        "an agent on both sides can only share the deal with other agents on both sides; otherwise give each agent one side");
+    }
+    // Shares: an agent alone in their group gets all of it; several agents must say how they share it
+    const groups = dual ? [["LISTING", "BOTH"], ["BUYER", "BOTH"]] : [null];
+    for (const g of groups) {
+      const members = input.agents.filter((a) => g === null || (a.side !== null && g.includes(a.side)));
+      if (members.length === 1 && members[0]!.gciSharePct === -1) members[0]!.gciSharePct = 100;
+      if (members.length > 1) {
+        const label = g === null ? "the commission" : g[0] === "LISTING" ? "the listing side's commission" : "the buyer side's commission";
+        r.check(members.every((m) => m.gciSharePct !== -1), "agents", `say each agent's share of ${label}`);
+        if (members.every((m) => m.gciSharePct !== -1)) {
+          r.check(Math.abs(members.reduce((sum, m) => sum + m.gciSharePct, 0) - 100) < 1e-9, "agents", `the agents' shares of ${label} must add up to 100%`);
+        }
+      }
+    }
+    input.agents.forEach((a) => { if (a.gciSharePct === -1) a.gciSharePct = 100; });
   }
   if (input.side && partyReaders.length > 0) {
     const clientRoles = CLIENT_ROLES[input.side] ?? [];

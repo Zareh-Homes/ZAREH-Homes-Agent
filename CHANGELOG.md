@@ -21,6 +21,17 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
 - Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
 
+## 0.18.4 (2026-10-19): Same-brokerage deals and multiple representation
+
+- **Migration 021:** each side's commission on a both-sides deal (`listingSideGci`, `buyerSideGci`, adding up to the deal's commission); each agent's side (seller, buyer or both); a competing-buyers consent; only a managing broker or compliance admin may record a written consent (enforced by the database).
+- Multiple representation is decided from the representation agreements: separate designated representatives aren't multiple representation; brokerage, the same designated agent, or mixed are. Without each client's consent the deal can't go firm.
+- Two of our buyers making offers on the same property need written consent before acceptance; other buyers are told when we also act for an offering buyer.
+- Commission: each agent is paid from their own side, through their own plan. CDA and trade record show both sides; no co-op, no double counting. Tested on fictional $1,000,000 deals (one agent per side, one agent on both, several on one side, unequal sides). HST check: $2,437.50 is 13% of the $18,750 commission, not of the brokerage share.
+- On a same-brokerage deal an agent can't see the other client's documents.
+- Fix: a trade record prepared moments earlier said "the deal changed" whenever the remuneration had several fields (stored key order).
+- Fixes found on the way: shares for several agents on a deal couldn't be entered; "buyer is also our client" couldn't be set on an offer; designated agreements and offer-specific disclosures couldn't be recorded from the screens.
+- Tests: backend 186 → 197, browser 37 → 41 (screens in `docs/screens/same-brokerage/`).
+
 ## 0.18.1 (2026-10-19): Pilot acceptance checks
 
 - **Migration 019:** `LEASE_SETTLEMENT` policy (off): no lease CDA or payment out of trust until counsel signs off; duplicate commission receipt references refused.

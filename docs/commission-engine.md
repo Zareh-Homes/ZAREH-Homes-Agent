@@ -65,7 +65,16 @@ Nothing is deducted automatically.
 - **Changes:** new rates are added by migration, never edited.
 - **Labels:** the CDA shows "GST" or "HST" as the rate requires.
 
+## Both sides at our brokerage
+
+- **Two commissions, one invoice.** On a both-sides deal the listing-side and buyer-side commissions are entered separately and add up to the deal's commission. The CDA bills the total once; there's no co-operating brokerage and no payable to ourselves.
+- **Each agent is paid from their own side.** Every agent is marked as representing the seller, the buyer or both, with a share of that side (shares on each side add up to 100). An agent on both sides takes their share of both. Each agent then goes through their own plan once (split, cap, fees, HST).
+- **Example ($1,000,000, 2% each side, tested):** Morgan (seller, 70%) $14,000; Jamie (buyer, 75%) $15,000; brokerage share $11,000; commission $40,000 + HST $5,200.
+- **Amendments** change one side's commission; the deal's commission follows.
+- **Not supported:** mixing an agent on both sides with agents on a single side in one deal.
+
 ## Needs sign-off
 
+- The broker of record: whether an agent on both sides should be allowed alongside single-side agents (currently refused).
 - The accountant: tax point (close date) and the treatment of bonuses and deductions for HST.
 - The broker of record: which deductions are taxable, and the policy on deductions bigger than the payout (the agent then owes the difference).

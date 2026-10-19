@@ -128,6 +128,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       hstNumber: a.user.hstNumber,
       splitBps: bps(a.splitPct),
       gciShareBps: bps(a.gciSharePct),
+      side: a.side,
       annualCap: plan?.annualCap ? numericToCents(plan.annualCap) : null,
       fees: (plan?.fees ?? []).map((f) => ({ name: f.name, amount: numericToCents(f.amount) })).sort((x, y) => x.name.localeCompare(y.name)),
       ytdHouseCollected: ytd,
@@ -169,6 +170,8 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       buyers: byRole(lease ? "TENANT" : "BUYER").map((p) => p.fullName),
     },
     baseGci: cents(deal.totalGci),
+    sides: deal.listingSideGci !== null && deal.buyerSideGci !== null
+      ? { listing: cents(deal.listingSideGci), buyer: cents(deal.buyerSideGci) } : null,
     ...(tax ? { hstRate: tax.rateBps, taxName: tax.taxName } : {}),
     coopCommission: cents(deal.coopCommission),
     coopBrokerage: byRole("COOP_BROKERAGE")[0]?.fullName ?? deal.coopBrokerageName,

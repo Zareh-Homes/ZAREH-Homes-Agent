@@ -32,7 +32,9 @@ Lost a link or want to start over: `ops/local-trial.sh demo` again (it erases th
 - **41 Ridge Rd, Stoney Creek**: Morgan's lease, $6,000 deposit in trust. CDA and payments out of trust refused: lease settlement stays off until counsel signs off.
 - **1204 – 88 Charlton Ave W, Hamilton**: Jamie's condo listing, $529,000, conditional, $25,000 deposit expected; listing agreement waiting for review.
 - **15 Ontario St, Grimsby**: Jamie's buyer deal, $1,045,000, conditional, deposit held by the other brokerage.
-- Trust and operating accounts, a verified bank file, a signed trust reconciliation, Morgan's 70% plan in force, Jamie's 75% plan waiting for your approval.
+- **1 Escarpment Cres, Hamilton**: both sides ours, $1,000,000, closed. Morgan for the seller (separate designated representative), Jamie for the buyer. $20,000 commission on each side; CDA issued with a separate statement for each agent (Morgan $14,000, Jamie $15,000).
+- **9 Ridge Rd, Grimsby**: Morgan for both seller and buyer under brokerage representation, $1,000,000. Each client's written consent recorded by compliance, so it's firm.
+- Trust and operating accounts, a verified bank file, a signed trust reconciliation, Morgan's 70% and Jamie's 75% plans in force.
 
 ## The 10 steps
 
@@ -63,7 +65,7 @@ changed on the deal since it was prepared. **Correct** an item (your initials ar
 lawyer and internal copies. To issue one yourself: take your step-3 deal through firm and closed, then **Finalize the
 CDA**; the screen lists anything still missing first (e.g. the agent's approved plan, the buyer's FINTRAC ID). *(tour-07)*
 
-**8. Approve and record an agent payment.** **Approvals & payouts**: approve Jamie's commission plan. Payouts are
+**8. Approve and record an agent payment.** **Approvals & payouts**: commission plans, payouts and bank files waiting for you. Payouts are
 approved here or on the deal's closing tab, then the payment is sent **in the bank portal** and recorded with the
 bank's reference by someone other than the approver (Avery). Bank → **Available funds** shows what the system checks
 before any approval. *(tour-08a, tour-08b)*
@@ -74,6 +76,11 @@ definition behind each figure). *(tour-09a–d)*
 
 **10. Switch to an agent.** In a different window, sign in as **Morgan Agent**. Morgan sees only Morgan's deals, their
 own payouts and compliance items, and no CDA, bank or approvals screens. *(tour-10a–c)*
+
+**Extra: a deal where both sides are ours.** 1 Escarpment Cres → **TRESA & FINTRAC** says *separate designated
+representatives: not multiple representation*. **Closing & CDA** → Internal copy: one commission statement per agent,
+each paid from their own side. Then 9 Ridge Rd: one agent for both clients is multiple representation, and the deal
+couldn't go firm until compliance recorded each client's written consent. *(docs/screens/same-brokerage/)*
 
 ## What to note as you go
 

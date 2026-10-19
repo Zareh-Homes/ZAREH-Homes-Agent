@@ -12,7 +12,7 @@ import { Button, Notice, Page, PageHeader, Section, SelectField, TextField } fro
 import { isLease, SIDE_LABEL } from "../ui/format.ts";
 
 interface Person { id: string; firstName: string; lastName: string; role: string }
-interface AgentRow { userId: string; role: "PRIMARY" | "CO_AGENT" | "REFERRAL"; splitPct: string }
+interface AgentRow { userId: string; role: "PRIMARY" | "CO_AGENT" | "REFERRAL"; splitPct: string; side: string; gciSharePct: string }
 interface PartyRow { role: string; entityType: "INDIVIDUAL" | "CORPORATION"; fullName: string; email: string; phone: string; representation: string }
 
 const PARTY_ROLES: Record<string, { value: string; label: string }[]> = {
@@ -39,14 +39,16 @@ export function NewDeal() {
   const [side, setSide] = useState("LISTING");
   const [f, setF] = useState({
     streetAddress: "", unit: "", city: "", mlsNumber: "", salePrice: "", offerDate: "", conditionsDueDate: "", closeDate: "",
-    depositAmount: "", depositDueDate: "", trustDepositHolder: "OUR_BROKERAGE", totalGci: "", coopBrokerageName: "", coopCommission: "",
+    depositAmount: "", depositDueDate: "", trustDepositHolder: "OUR_BROKERAGE", totalGci: "", listingSideGci: "", buyerSideGci: "", coopBrokerageName: "", coopCommission: "",
     outsideReferralPayee: "", outsideReferralPct: "", status: "CONDITIONAL",
   });
-  const [agents, setAgents] = useState<AgentRow[]>(() => [{ userId: user?.role === "AGENT" ? user.id : "", role: "PRIMARY", splitPct: "" }]);
+  const [agents, setAgents] = useState<AgentRow[]>(() => [{ userId: user?.role === "AGENT" ? user.id : "", role: "PRIMARY", splitPct: "", side: "", gciSharePct: "" }]);
   const [parties, setParties] = useState<PartyRow[]>([blankParty("SELLER")]);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
   const lease = isLease(side);
   const listingSide = side === "LISTING" || side === "LANDLORD";
+  // Both sides with our brokerage: each side's commission comes from its own agreement and pays its own agents
+  const dual = side === "DUAL";
   const err = action.fields;
   const agentOptions = (people.data?.users ?? []).filter((p) => p.role === "AGENT" || p.role === "MANAGING_BROKER")
     .map((p) => ({ value: p.id, label: `${p.firstName} ${p.lastName}` }));
@@ -68,9 +70,13 @@ export function NewDeal() {
       side, status: f.status, streetAddress: f.streetAddress.trim(), unit: opt(f.unit), city: f.city.trim(), mlsNumber: opt(f.mlsNumber),
       salePrice: f.salePrice.trim(), offerDate: f.offerDate, conditionsDueDate: opt(f.conditionsDueDate), closeDate: f.closeDate,
       depositAmount: f.depositAmount.trim() || "0", depositDueDate: opt(f.depositDueDate), trustDepositHolder: f.trustDepositHolder,
-      totalGci: f.totalGci.trim(), coopBrokerageName: opt(f.coopBrokerageName), coopCommission: listingSide ? opt(f.coopCommission) : undefined,
+      ...(dual ? { listingSideGci: f.listingSideGci.trim(), buyerSideGci: f.buyerSideGci.trim() } : { totalGci: f.totalGci.trim() }),
+      coopBrokerageName: opt(f.coopBrokerageName), coopCommission: listingSide ? opt(f.coopCommission) : undefined,
       outsideReferralPayee: opt(f.outsideReferralPayee), outsideReferralPct: f.outsideReferralPct.trim() ? Number(f.outsideReferralPct) : undefined,
-      agents: agents.map((a) => ({ userId: a.userId, role: a.role, splitPct: Number(a.splitPct) })),
+      agents: agents.map((a) => ({
+        userId: a.userId, role: a.role, splitPct: Number(a.splitPct),
+        ...(dual && a.side ? { side: a.side } : {}), ...(a.gciSharePct.trim() ? { gciSharePct: Number(a.gciSharePct) } : {}),
+      })),
       parties: parties.map((p) => ({
         role: p.role, entityType: p.entityType, fullName: p.fullName.trim(), email: opt(p.email), phone: opt(p.phone),
         representation: p.representation || undefined,
@@ -115,8 +121,17 @@ export function NewDeal() {
 
         <Section title="Commission" description="Before tax. The CDA works out tax, splits and fees from these and each agent's approved plan.">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <TextField label="Our commission" required inputMode="decimal" value={f.totalGci} onChange={set("totalGci")} error={err.totalGci}
-              hint={lease ? "e.g. one month's rent" : undefined} />
+            {dual ? (
+              <>
+                <TextField label="Listing-side commission" required inputMode="decimal" value={f.listingSideGci} onChange={set("listingSideGci")}
+                  error={err.listingSideGci} hint="From the seller's agreement" />
+                <TextField label="Buyer-side commission" required inputMode="decimal" value={f.buyerSideGci} onChange={set("buyerSideGci")}
+                  error={err.buyerSideGci ?? err.totalGci} hint="From the buyer's agreement. Billed once, together." />
+              </>
+            ) : (
+              <TextField label="Our commission" required inputMode="decimal" value={f.totalGci} onChange={set("totalGci")} error={err.totalGci}
+                hint={lease ? "e.g. one month's rent" : undefined} />
+            )}
             <TextField label="Other brokerage" value={f.coopBrokerageName} onChange={set("coopBrokerageName")} error={err.coopBrokerageName} />
             {listingSide && (
               <TextField label={lease ? "Tenant's brokerage commission" : "Co-op commission"} inputMode="decimal" value={f.coopCommission}
@@ -127,25 +142,36 @@ export function NewDeal() {
           </div>
         </Section>
 
-        <Section title="Agents" description="One primary agent. The split is the agent's share of their part of our commission.">
+        <Section title="Agents" description={dual
+          ? "Say which client each agent represents. Each agent is paid from their own side; an agent on both sides is paid from both. With more than one agent on a side, give each one's share of that side."
+          : "One primary agent. The split is the agent's share of their part of our commission. With more than one agent, give each one's share."}>
           {err.agents && <p className="mb-3 text-xs font-medium text-critical">{err.agents}</p>}
           <div className="space-y-3">
             {agents.map((a, i) => (
-              <fieldset key={i} className="grid items-end gap-3 rounded-lg border border-line p-3 sm:grid-cols-[1fr_10rem_8rem_auto]">
+              <fieldset key={i} className="grid items-end gap-3 rounded-lg border border-line p-3 sm:grid-cols-2 lg:grid-cols-[1fr_9rem_10rem_7rem_7rem_auto]">
                 <legend className="sr-only">Agent {i + 1}</legend>
                 <SelectField label="Agent" required value={a.userId} placeholder="Choose…" options={agentOptions} error={err[`agents[${i}].userId`]}
                   onChange={(e) => setAgents((xs) => xs.map((x, j) => (j === i ? { ...x, userId: e.target.value } : x)))} />
                 <SelectField label="Role" value={a.role}
                   options={[{ value: "PRIMARY", label: "Primary" }, { value: "CO_AGENT", label: "Co-agent" }, { value: "REFERRAL", label: "Referral" }]}
                   onChange={(e) => setAgents((xs) => xs.map((x, j) => (j === i ? { ...x, role: e.target.value as AgentRow["role"] } : x)))} />
+                {dual && (
+                  <SelectField label="Represents" required value={a.side} placeholder="Choose…" error={err[`agents[${i}].side`]}
+                    options={[{ value: "LISTING", label: "The seller" }, { value: "BUYER", label: "The buyer" }, { value: "BOTH", label: "Both" }]}
+                    onChange={(e) => setAgents((xs) => xs.map((x, j) => (j === i ? { ...x, side: e.target.value } : x)))} />
+                )}
                 <TextField label="Split %" inputMode="decimal" required value={a.splitPct} error={err[`agents[${i}].splitPct`]}
                   onChange={(e) => setAgents((xs) => xs.map((x, j) => (j === i ? { ...x, splitPct: e.target.value } : x)))} />
+                {(agents.length > 1) && (
+                  <TextField label={dual ? "Share of side %" : "Share %"} inputMode="decimal" value={a.gciSharePct} error={err[`agents[${i}].gciSharePct`]}
+                    hint="Blank if alone" onChange={(e) => setAgents((xs) => xs.map((x, j) => (j === i ? { ...x, gciSharePct: e.target.value } : x)))} />
+                )}
                 <Button variant="ghost" disabled={agents.length === 1} onClick={() => setAgents((xs) => xs.filter((_, j) => j !== i))}>Remove</Button>
               </fieldset>
             ))}
           </div>
           {agents.length < 4 && (
-            <Button className="mt-3" onClick={() => setAgents((xs) => [...xs, { userId: "", role: "CO_AGENT", splitPct: "" }])}>Add an agent</Button>
+            <Button className="mt-3" onClick={() => setAgents((xs) => [...xs, { userId: "", role: "CO_AGENT", splitPct: "", side: "", gciSharePct: "" }])}>Add an agent</Button>
           )}
         </Section>
 

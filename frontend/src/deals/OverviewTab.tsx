@@ -19,7 +19,9 @@ interface Lifecycle {
 
 const HOLDER: Record<string, string> = { OUR_BROKERAGE: "Our brokerage (trust)", COOP_BROKERAGE: "Other brokerage", LAWYER: "Lawyer in trust", BUILDER: "Builder / trustee" };
 const CONDITION_KINDS = ["FINANCING", "INSPECTION", "STATUS_CERTIFICATE", "SALE_OF_BUYERS_PROPERTY", "LAWYER_REVIEW", "INSURANCE", "OTHER"];
-const MONEY_FIELDS = new Set(["SALE_PRICE", "DEPOSIT_AMOUNT", "TOTAL_GCI", "COOP_COMMISSION"]);
+const MONEY_FIELDS = new Set(["SALE_PRICE", "DEPOSIT_AMOUNT", "TOTAL_GCI", "COOP_COMMISSION", "LISTING_SIDE_GCI", "BUYER_SIDE_GCI"]);
+const AGENT_SIDE = { LISTING: "represents the seller", BUYER: "represents the buyer", BOTH: "represents seller and buyer" } as const;
+const AMEND_LABEL: Record<string, string> = { TOTAL_GCI: "Our commission", LISTING_SIDE_GCI: "Listing-side commission", BUYER_SIDE_GCI: "Buyer-side commission" };
 
 export function OverviewTab({ deal, reloadDeal }: TabProps) {
   const { user } = useSession();
@@ -47,6 +49,8 @@ export function OverviewTab({ deal, reloadDeal }: TabProps) {
             ["Deposit", `${moneyText(deal.depositAmount)}${deal.depositDueDate ? `, due ${dateText(deal.depositDueDate)}` : ""}`],
             ["Deposit held by", HOLDER[deal.trustDepositHolder] ?? deal.trustDepositHolder],
             ["Our commission (before tax)", moneyText(deal.totalGci)],
+            ...(deal.listingSideGci !== null && deal.buyerSideGci !== null
+              ? [["Of which", `listing side ${moneyText(deal.listingSideGci)} · buyer side ${moneyText(deal.buyerSideGci)}`] as [string, string]] : []),
             ...(Number(deal.coopCommission) > 0 ? [["Co-op commission", `${moneyText(deal.coopCommission)} to ${deal.coopBrokerageName ?? "the other brokerage"}`] as [string, string]] : []),
             ...(deal.outsideReferralPayee ? [["Outside referral", `${deal.outsideReferralPct}% to ${deal.outsideReferralPayee}`] as [string, string]] : []),
             ["Trust balance", life.data ? moneyText(life.data.trustBalance) : "…"],
@@ -82,7 +86,7 @@ export function OverviewTab({ deal, reloadDeal }: TabProps) {
 
         <Section title="Amendments" description="A recorded change to the deal's terms, with the signed amendment as the reference."
           actions={open ? (
-            <InlineForm label="Record an amendment">{(close) => <Amend dealId={deal.id} canCommission={canCommission} onDone={() => { close(); after(); }} />}</InlineForm>
+            <InlineForm label="Record an amendment">{(close) => <Amend dealId={deal.id} canCommission={canCommission} sided={deal.listingSideGci !== null} onDone={() => { close(); after(); }} />}</InlineForm>
           ) : undefined}>
           {!life.data ? <Loading /> : life.data.amendments.length === 0 ? <Empty>No amendments.</Empty> : (
             <Table head={["What", "Was", "Now", "Effective", "Reference"]}>
@@ -122,8 +126,8 @@ export function OverviewTab({ deal, reloadDeal }: TabProps) {
           <ul className="space-y-2 text-sm">
             {deal.agents.map((a) => (
               <li key={a.userId} className="flex justify-between gap-2">
-                <span className="text-ink">{a.name}<span className="block text-xs text-ink-3">{labelOf(a.role)}{a.isPrec ? ` · paid to ${a.precLegalName}` : ""}</span></span>
-                <span className="whitespace-nowrap text-ink-2">{a.splitPct}% split</span>
+                <span className="text-ink">{a.name}<span className="block text-xs text-ink-3">{labelOf(a.role)}{a.side ? ` · ${AGENT_SIDE[a.side]}` : ""}{a.isPrec ? ` · paid to ${a.precLegalName}` : ""}</span></span>
+                <span className="whitespace-nowrap text-ink-2">{a.splitPct}% split{deal.agents.length > 1 ? ` · ${Number(a.gciSharePct)}% share` : ""}</span>
               </li>
             ))}
           </ul>
@@ -236,10 +240,11 @@ function Terminate({ dealId, onDone }: { dealId: string; onDone: () => void }) {
   );
 }
 
-function Amend({ dealId, canCommission, onDone }: { dealId: string; canCommission: boolean; onDone: () => void }) {
+function Amend({ dealId, canCommission, sided, onDone }: { dealId: string; canCommission: boolean; sided: boolean; onDone: () => void }) {
   const act = useAction();
   const [f, setF] = useState({ field: "CLOSE_DATE", newValue: "", reference: "", effectiveDate: "" });
-  const fields = ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE", ...(canCommission ? ["TOTAL_GCI", "COOP_COMMISSION"] : []), "OTHER"];
+  const fields = ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE",
+    ...(canCommission ? (sided ? ["LISTING_SIDE_GCI", "BUYER_SIDE_GCI"] : ["TOTAL_GCI", "COOP_COMMISSION"]) : []), "OTHER"];
   const isDate = f.field === "CLOSE_DATE" || f.field === "DEPOSIT_DUE_DATE";
   return (
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {
@@ -249,7 +254,7 @@ function Amend({ dealId, canCommission, onDone }: { dealId: string; canCommissio
     }}>
       {act.error && <div className="sm:col-span-2"><Notice kind="error">{act.error}</Notice></div>}
       <SelectField label="What changed" value={f.field} onChange={(e) => setF({ ...f, field: e.target.value, newValue: "" })}
-        options={fields.map((k) => ({ value: k, label: k === "TOTAL_GCI" ? "Our commission" : labelOf(k) }))} />
+        options={fields.map((k) => ({ value: k, label: AMEND_LABEL[k] ?? labelOf(k) }))} />
       {f.field === "OTHER"
         ? <TextArea label="The change" required value={f.newValue} onChange={(e) => setF({ ...f, newValue: e.target.value })} error={act.fields.newValue} />
         : <TextField label="New value" type={isDate ? "date" : "text"} inputMode={isDate ? undefined : "decimal"} required value={f.newValue}

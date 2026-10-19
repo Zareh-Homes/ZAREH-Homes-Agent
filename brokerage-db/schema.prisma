@@ -81,6 +81,13 @@ enum DealAgentRole {
   REFERRAL
 }
 
+// Same-brokerage deals: the side an agent represents (migration 021)
+enum DealAgentSide {
+  LISTING
+  BUYER
+  BOTH
+}
+
 enum PartyRole {
   SELLER
   BUYER
@@ -312,6 +319,8 @@ model Transaction {
   depositStatus      DepositStatus @default(AWAITING)
 
   totalGci             Decimal         @db.Decimal(12, 2) // gross commission to our brokerage, pre-split, excl. HST
+  listingSideGci       Decimal?        @db.Decimal(12, 2) // DUAL: listing side's share of totalGci (migration 021)
+  buyerSideGci         Decimal?        @db.Decimal(12, 2) // DUAL: buyer side's share of totalGci
   hstOnGci             Decimal?        @default(0) @db.Decimal(12, 2) // 13% Ontario HST collected on totalGci; NULL only when hstSource is MISSING
   hstSource            TaxAmountSource @default(CALCULATED) // migration 007
   commissionRatePct    Decimal?        @db.Decimal(5, 3)
@@ -360,7 +369,8 @@ model TransactionAgent {
   userId        String        @db.Uuid
   role          DealAgentRole @default(PRIMARY)
   splitPct      Decimal       @db.Decimal(5, 2) // agent's split on this deal, e.g. 80 = 80/20
-  gciSharePct   Decimal       @default(100) @db.Decimal(5, 2) // share of the deal's GCI (co-listings); sums to 100
+  gciSharePct   Decimal       @default(100) @db.Decimal(5, 2) // share of the deal's GCI (DUAL: of their side's); sums to 100
+  side          DealAgentSide? // DUAL deals: the side this agent represents (migration 021)
   grossShare    Decimal       @db.Decimal(12, 2)
   brokerageFee  Decimal       @default(0) @db.Decimal(12, 2)
   netPayout     Decimal       @db.Decimal(12, 2)
@@ -1605,6 +1615,7 @@ enum DisclosureKind {
   COMPETING_OFFERS_NUMBER
   COMPETING_OFFERS_CONTENT
   SAME_BROKERAGE_REPRESENTATION
+  COMPETING_BUYERS_CONSENT // migration 021
 }
 
 // TRESA / O. Reg. 567/05 disclosures to a party or an offeror (migration 016). Append-only.

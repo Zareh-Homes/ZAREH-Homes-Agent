@@ -136,11 +136,13 @@ export async function getDeal(prisma: PrismaClient, actor: Actor, dealId: string
       streetAddress: d.streetAddress, unit: d.unit, city: d.city, mlsNumber: d.mlsNumber,
       salePrice: money(d.salePrice), offerDate: iso(d.offerDate), conditionsDueDate: iso(d.conditionsDueDate), closeDate: iso(d.closeDate),
       depositAmount: money(d.depositAmount), depositDueDate: iso(d.depositDueDate), trustDepositHolder: d.trustDepositHolder,
-      depositStatus: d.depositStatus, totalGci: money(d.totalGci), coopBrokerageName: d.coopBrokerageName, coopCommission: money(d.coopCommission),
+      depositStatus: d.depositStatus, totalGci: money(d.totalGci),
+      listingSideGci: d.listingSideGci === null ? null : money(d.listingSideGci), buyerSideGci: d.buyerSideGci === null ? null : money(d.buyerSideGci),
+      coopBrokerageName: d.coopBrokerageName, coopCommission: money(d.coopCommission),
       outsideReferralPayee: d.outsideReferralPayee, outsideReferralPct: d.outsideReferralPct?.toFixed(2) ?? null,
       agents: d.agents.map((a) => ({
         userId: a.userId, name: `${a.user.firstName} ${a.user.lastName}`, role: a.role, splitPct: a.splitPct.toFixed(2),
-        gciSharePct: a.gciSharePct.toFixed(2), isPrec: a.user.isPrec, precLegalName: a.user.precLegalName,
+        gciSharePct: a.gciSharePct.toFixed(2), side: a.side, isPrec: a.user.isPrec, precLegalName: a.user.precLegalName,
       })),
       parties: d.parties.map((p) => ({
         id: p.id, role: p.role, entityType: p.entityType, fullName: p.fullName, email: p.email, phone: p.phone, representation: p.representation,

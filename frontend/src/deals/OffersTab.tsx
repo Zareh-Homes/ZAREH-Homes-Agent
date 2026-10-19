@@ -13,7 +13,7 @@ import { dateText, dateTimeText, isLease, labelOf, moneyText } from "../ui/forma
 import type { TabProps } from "./DealWorkspace.tsx";
 
 interface Offer {
-  id: string; receivedAt: string; written: boolean; offerorBrokerage: string | null; offerorSelfRepresented: boolean; price: string | null;
+  id: string; receivedAt: string; written: boolean; offerorBrokerage: string | null; offerorSelfRepresented: boolean; fromOurBrokerage: boolean; price: string | null;
   status: string; documentFileId: string | null; keepUntil: string; history: { status: string; eventAt: string; note: string | null }[];
 }
 
@@ -34,7 +34,7 @@ export function OffersTab({ deal }: TabProps) {
           {offers.map((o) => (
             <tr key={o.id} className="align-top">
               <td className="px-3 py-2 whitespace-nowrap">{dateTimeText(o.receivedAt)}{!o.written && <span className="block text-xs text-ink-3">Verbal</span>}</td>
-              <td className="px-3 py-2">{o.offerorSelfRepresented ? "Self-represented buyer" : o.offerorBrokerage}</td>
+              <td className="px-3 py-2">{o.offerorSelfRepresented ? "Self-represented buyer" : o.offerorBrokerage}{o.fromOurBrokerage && <span className="block text-xs text-ink-3">Buyer is our client</span>}</td>
               <td className="px-3 py-2 whitespace-nowrap">{o.price ? moneyText(o.price) : "—"}</td>
               <td className="px-3 py-2">
                 <StatusBadge tone={OFFER_TONE[o.status] ?? "neutral"}>{labelOf(o.status)}</StatusBadge>
@@ -58,13 +58,13 @@ export function OffersTab({ deal }: TabProps) {
 
 function NewOffer({ dealId, lease, onDone, onCancel }: { dealId: string; lease: boolean; onDone: () => void; onCancel: () => void }) {
   const act = useAction();
-  const [f, setF] = useState({ receivedAt: "", written: true, selfRep: false, brokerage: "", price: "" });
+  const [f, setF] = useState({ receivedAt: "", written: true, selfRep: false, ours: false, brokerage: "", price: "" });
   return (
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {
       e.preventDefault();
       const ok = await act.run(() => api("POST", `/api/deals/${dealId}/offers`, {
         receivedAt: f.receivedAt ? new Date(f.receivedAt).toISOString() : "", written: f.written,
-        offerorSelfRepresented: f.selfRep, ...(f.selfRep ? {} : { offerorBrokerage: f.brokerage }), ...(f.price.trim() ? { price: f.price.trim() } : {}),
+        offerorSelfRepresented: f.selfRep, fromOurBrokerage: !f.selfRep && f.ours, ...(f.selfRep ? {} : { offerorBrokerage: f.brokerage }), ...(f.price.trim() ? { price: f.price.trim() } : {}),
       }));
       if (ok) onDone();
     }}>
@@ -73,6 +73,8 @@ function NewOffer({ dealId, lease, onDone, onCancel }: { dealId: string; lease: 
       <TextField label={lease ? "Monthly rent offered" : "Price offered"} inputMode="decimal" hint="Optional" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} error={act.fields.price} />
       <Checkbox label="Written offer" checked={f.written} onChange={(e) => setF({ ...f, written: e.target.checked })} />
       <Checkbox label={lease ? "Tenant is self-represented" : "Buyer is self-represented"} checked={f.selfRep} onChange={(e) => setF({ ...f, selfRep: e.target.checked })} />
+      {!f.selfRep && <Checkbox label={lease ? "Tenant is also our client (this brokerage represents them)" : "Buyer is also our client (this brokerage represents them)"}
+        checked={f.ours} onChange={(e) => setF({ ...f, ours: e.target.checked })} />}
       {!f.selfRep && <TextField label="Offeror's brokerage" required value={f.brokerage} onChange={(e) => setF({ ...f, brokerage: e.target.value })} error={act.fields.offerorBrokerage} />}
       <div className="flex gap-2 sm:col-span-2"><Button type="submit" variant="primary" busy={act.busy}>Record offer</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
     </form>

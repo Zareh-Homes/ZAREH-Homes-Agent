@@ -45,6 +45,8 @@ export interface TresaFacts {
   side: string;
   offerDate: string; // YYYY-MM-DD
   agentIds: string[];
+  /** Same-brokerage deals: the side each agent represents (LISTING, BUYER or BOTH) */
+  agentSides?: { userId: string; side: string | null }[];
   parties: PartyFacts[];
   disclosures: DisclosureFacts[];
   agreements: AgreementFacts[];
@@ -54,6 +56,53 @@ export interface TresaFacts {
 
 const LISTING_SIDES = new Set(["LISTING", "DUAL", "LANDLORD"]);
 const endOfDay = (d: string) => `${d}T23:59:59.999Z`;
+const SELLER_ROLES = ["SELLER", "LANDLORD"];
+const BUYER_ROLES = ["BUYER", "TENANT"];
+
+/**
+ * Whether our brokerage acting for both a seller (landlord) and a buyer (tenant) client on this deal is
+ * multiple representation, decided from their representation agreements (O. Reg. 567/05 s.22 to s.22.0.2;
+ * RECO Bulletins 2.2 and 3.2):
+ *   SEPARATE_DESIGNATED  both designated, with no representative in common: the brokerage represents neither
+ *                        and each designated representative acts for one client only. Not multiple representation.
+ *   BROKERAGE            both brokerage representation: the brokerage represents both (s.22)
+ *   DESIGNATED_SAME      both designated, a representative in common acts for both (s.22.0.1)
+ *   MIXED                one brokerage, one designated agreement (s.22.0.2)
+ *   UNDETERMINED         an agreement isn't recorded yet: treated as multiple representation until it is
+ *   NONE                 we don't act for both a seller and a buyer here
+ * Two agents of this brokerage on opposite sides is not by itself multiple representation.
+ */
+export type RepresentationMode = "NONE" | "SEPARATE_DESIGNATED" | "BROKERAGE" | "DESIGNATED_SAME" | "MIXED" | "UNDETERMINED";
+
+export function classifyRepresentation(f: Pick<TresaFacts, "parties" | "agreements">): { mode: RepresentationMode; citation: string; explanation: string } {
+  const clients = f.parties.filter((p) => p.representation === "OUR_CLIENT");
+  const sellers = clients.filter((p) => SELLER_ROLES.includes(p.role));
+  const buyers = clients.filter((p) => BUYER_ROLES.includes(p.role));
+  if (!sellers.length || !buyers.length) return { mode: "NONE", citation: "", explanation: "This brokerage acts for one side only." };
+  const latest = (partyId: string) => f.agreements.filter((a) => a.partyId === partyId).sort((a, b) => b.signedAt.localeCompare(a.signedAt))[0];
+  const sa = sellers.map((p) => latest(p.id));
+  const ba = buyers.map((p) => latest(p.id));
+  if ([...sa, ...ba].some((a) => !a)) {
+    return { mode: "UNDETERMINED", citation: "O. Reg. 567/05 s.22; RECO Bulletin 3.2",
+      explanation: "Both clients are ours and not every representation agreement is recorded: treated as multiple representation until they are." };
+  }
+  const agreements = [...sa, ...ba] as AgreementFacts[];
+  if (agreements.every((a) => a.type === "BROKERAGE")) {
+    return { mode: "BROKERAGE", citation: "O. Reg. 567/05 s.22; RECO Bulletin 3.2",
+      explanation: "Brokerage representation for both clients: the brokerage represents seller and buyer, so this is multiple representation." };
+  }
+  if (agreements.every((a) => a.type === "DESIGNATED")) {
+    const sellerReps = new Set((sa as AgreementFacts[]).flatMap((a) => a.designatedRepresentativeIds));
+    const shared = (ba as AgreementFacts[]).flatMap((a) => a.designatedRepresentativeIds).filter((id) => sellerReps.has(id));
+    return shared.length
+      ? { mode: "DESIGNATED_SAME", citation: "O. Reg. 567/05 s.22.0.1; RECO Bulletin 3.2",
+          explanation: "The same designated representative acts for both seller and buyer: multiple representation." }
+      : { mode: "SEPARATE_DESIGNATED", citation: "O. Reg. 567/05 s.22.0.1; RECO Bulletins 2.2 and 3.2",
+          explanation: "Separate designated representatives for seller and buyer: not multiple representation. Each keeps their client's confidential information from the other side." };
+  }
+  return { mode: "MIXED", citation: "O. Reg. 567/05 s.22.0.2; RECO Bulletin 3.2",
+    explanation: "Brokerage representation for one client and designated representation for the other: multiple representation." };
+}
 
 export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string } = {}): Finding[] {
   const out: Finding[] = [];
@@ -88,7 +137,12 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
           message: `${p.name}'s representation agreement wasn't in force on the offer date (${agreement.effectiveFrom} to ${agreement.expiresOn})` });
       }
       if (agreement.type === "DESIGNATED") {
-        const undesignated = f.agentIds.filter((id) => !agreement.designatedRepresentativeIds.includes(id));
+        // On a same-brokerage deal only the agents on this client's side act for them
+        const mySide = SELLER_ROLES.includes(p.role) ? "LISTING" : "BUYER";
+        const actingFor = f.side === "DUAL" && f.agentSides
+          ? f.agentSides.filter((a) => a.side === mySide || a.side === "BOTH").map((a) => a.userId)
+          : f.agentIds;
+        const undesignated = actingFor.filter((id) => !agreement.designatedRepresentativeIds.includes(id));
         if (undesignated.length) {
           out.push({ rule: "DESIGNATED_REPRESENTATIVES", citation: "O. Reg. 567/05 s.13.4; RECO Bulletin 2.2", severity: "WARNING", partyId: p.id,
             message: `An agent on the deal isn't named as ${p.name}'s designated representative` });
@@ -98,23 +152,27 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
   }
 
   // ── Multiple representation: disclosure and written consent before any step ──
+  // Decided from the agreements, not from the deal type: separate designated representatives aren't multiple
+  // representation. Consent is recorded by a managing broker or compliance admin (database rule, migration 021).
   const clients = principals.filter((x) => x.representation === "OUR_CLIENT");
-  const multiple = f.side === "DUAL" || (clients.some((c) => ["SELLER", "LANDLORD"].includes(c.role)) && clients.some((c) => ["BUYER", "TENANT"].includes(c.role)));
+  const mode = classifyRepresentation(f);
+  const multiple = !["NONE", "SEPARATE_DESIGNATED"].includes(mode.mode);
   if (multiple) {
+    const kind = { BROKERAGE: "brokerage", DESIGNATED_SAME: "designated", MIXED: "mixed brokerage and designated", UNDETERMINED: "possible" }[mode.mode as "BROKERAGE"];
     for (const p of clients) {
       const disclosed = of(p.id, "MULTIPLE_REPRESENTATION_DISCLOSURE")[0];
       const consent = of(p.id, "MULTIPLE_REPRESENTATION_CONSENT")[0];
       if (!disclosed || !consent) {
-        out.push({ rule: "MULTIPLE_REPRESENTATION", citation: "O. Reg. 567/05 s.22; RECO Bulletin 3.2", severity: "BLOCKING", partyId: p.id,
-          message: `Multiple representation: give ${p.name} the written disclosure and get their written consent` });
+        out.push({ rule: "MULTIPLE_REPRESENTATION", citation: mode.citation, severity: "BLOCKING", partyId: p.id,
+          message: `Multiple representation (${kind}): give ${p.name} the written disclosure and get their written consent before any further step` });
         continue;
       }
       if (consent.acknowledgedAt! > endOfDay(f.offerDate)) {
-        out.push({ rule: "MULTIPLE_REPRESENTATION_LATE", citation: "O. Reg. 567/05 s.22; RECO Bulletin 3.2", severity: "BREACH", partyId: p.id,
+        out.push({ rule: "MULTIPLE_REPRESENTATION_LATE", citation: mode.citation, severity: "BREACH", partyId: p.id,
           message: `${p.name}'s consent to multiple representation is dated after the offer; RECO considers consent at offer time almost always too late` });
       }
       if (!disclosed.acknowledgedAt && !disclosed.bestEffortsNote) {
-        out.push({ rule: "MULTIPLE_REPRESENTATION_ACKNOWLEDGEMENT", citation: "O. Reg. 567/05 s.22(5)", severity: "WARNING", partyId: p.id,
+        out.push({ rule: "MULTIPLE_REPRESENTATION_ACKNOWLEDGEMENT", citation: `${mode.citation}; s.22(5)`, severity: "WARNING", partyId: p.id,
           message: `Record ${p.name}'s written acknowledgement of the disclosure, or the best efforts made to get it` });
       }
     }
@@ -181,10 +239,29 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
         for (const o of written) check(o, "COMPETING_OFFERS_CONTENT", "COMPETING_OFFERS_CONTENT", "O. Reg. 567/05 s.22.7", "the offer content the seller directed be shared");
       }
     }
-    if (f.side !== "DUAL" && written.some((o) => o.fromOurBrokerage)) {
+    // Seller and buyer clients in this brokerage (a same-brokerage deal, or a buyer client's offer on our
+    // listing): every other buyer making a written offer is told, before any offer is accepted (s.22.0.3).
+    // This applies whatever the representation mode, separate designated representatives included.
+    const bothClients = mode.mode !== "NONE" || written.some((o) => o.fromOurBrokerage);
+    if (bothClients) {
       for (const o of written.filter((x) => !x.fromOurBrokerage)) {
         check(o, "SAME_BROKERAGE_REPRESENTATION", "SAME_BROKERAGE_REPRESENTATION", "O. Reg. 567/05 s.22.0.3; RECO Bulletin 3.2",
-          "that this brokerage also represents a buyer making an offer");
+          "that this brokerage represents both the seller and a buyer making an offer");
+      }
+    }
+    // Two buyers this brokerage represents competing for the property: each buyer's consent to that multiple
+    // representation (or confirmation that they have separate designated representatives), recorded against
+    // their offer by a managing broker or compliance admin before any offer is accepted
+    const ours = written.filter((o) => o.fromOurBrokerage);
+    if (ours.length >= 2) {
+      for (const o of ours) {
+        const consent = offerOf(o, "COMPETING_BUYERS_CONSENT");
+        if (consent.length === 0) {
+          out.push({ rule: "COMPETING_BUYER_CLIENTS", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletin 3.2", severity: accepted ? "BREACH" : "BLOCKING", offerId: o.id,
+            message: accepted
+              ? `${o.label} was one of ${ours.length} competing buyers this brokerage represents; their consent wasn't recorded before acceptance`
+              : `${ours.length} buyers this brokerage represents are competing: record ${o.label}'s written consent to multiple representation (or that they have separate designated representatives) before any offer is accepted` });
+        }
       }
     }
   }

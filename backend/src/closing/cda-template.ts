@@ -12,6 +12,8 @@
 
 import type { AgentClosingLine, ClosingComputation, Taxed } from "./calculate.ts";
 
+const SIDE_TEXT = { LISTING: "Represents the seller", BUYER: "Represents the buyer", BOTH: "Represents seller and buyer" } as const;
+
 export interface BrokerageProfile {
   legalName: string;
   address: string;
@@ -47,7 +49,8 @@ const pct = (bps: number): string => `${(bps / 100).toFixed(bps % 100 === 0 ? 0 
 const SIDE_LABEL: Record<string, string> = {
   LISTING: "Listing Brokerage",
   BUYER: "Buyer's (Co-operating) Brokerage",
-  DUAL: "Listing and Buyer's Brokerage (multiple representation)",
+  // Whether this is multiple representation depends on the representation agreements, not on both sides being ours
+  DUAL: "Listing and Buyer's Brokerage (seller and buyer are both clients of this brokerage)",
   LANDLORD: "Listing Brokerage (lease, landlord's brokerage)",
   TENANT: "Tenant's (Co-operating) Brokerage (lease)",
 };
@@ -77,7 +80,8 @@ function agentStatement(a: AgentClosingLine, rate: number, brokerageName: string
   <div class="statement">
     <h3>${esc(a.name)}${a.isPrec ? ` <span class="tag">PREC</span>` : ""}</h3>
     <p class="meta">Payee: <strong>${esc(a.payeeName)}</strong> · ${tax} ${a.hstNumber ? `Reg. ${esc(a.hstNumber)}` : `not registered (no ${tax} charged on split)`}
-      · Share of deal GCI ${money(a.allocatedBaseGci)} · Effective split ${pct(a.effectiveSplitBps)}</p>
+      · ${a.fromSides ? `${SIDE_TEXT[a.side ?? "BOTH"]}: ${[a.fromSides.listing ? `${money(a.fromSides.listing)} from the listing side` : "", a.fromSides.buyer ? `${money(a.fromSides.buyer)} from the buyer side` : ""].filter(Boolean).join(" + ")}`
+        : `Share of deal GCI ${money(a.allocatedBaseGci)}`} · Effective split ${pct(a.effectiveSplitBps)}</p>
     <table>
       <thead><tr><th></th><th class="num">Base</th><th class="num">${tax} ${pct(rate)}</th><th class="num">Total</th></tr></thead>
       <tbody>
@@ -241,6 +245,8 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
       <thead><tr><th>Item</th><th class="num">Base</th><th class="num">${tax} ${pct(c.hstRate)}</th><th class="num">Total</th></tr></thead>
       <tbody>
         ${taxedRow(`Commission – ${b.legalName}`, c.incoming.commission)}
+        ${c.incoming.sides ? `<tr><td class="indent">of which listing side (seller's agreement)</td><td class="num">${money(c.incoming.sides.listing)}</td><td></td><td></td></tr>
+        <tr><td class="indent">of which buyer side (buyer's agreement)</td><td class="num">${money(c.incoming.sides.buyer)}</td><td></td><td></td></tr>` : ""}
         ${c.incoming.coop.total > 0 ? taxedRow("Co-operating brokerage commission", c.incoming.coop, "Payable to the co-operating brokerage through the listing brokerage") : ""}
         <tr class="total"><td>Total commission payable</td>
           <td class="num">${money(c.incoming.commission.base + c.incoming.coop.base)}</td>

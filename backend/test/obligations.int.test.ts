@@ -17,7 +17,7 @@ const TODAY = "2026-10-18";
 describe("compliance obligations", { skip }, () => {
   const prisma = new PrismaClient();
   const app = buildApp({ prisma, resolveUserId: devHeaderResolver, fileStore: new MemoryStore(), brokerage: TEST_BROKERAGE, today: () => TODAY });
-  const u = { agent: "", broker: "", compliance: "" };
+  const u = { agent: "", agent2: "", broker: "", compliance: "" };
   let account = "";
 
   const as = (user: string, method: "GET" | "POST", url: string, body?: object) =>
@@ -27,7 +27,8 @@ describe("compliance obligations", { skip }, () => {
     const res = await as(u.agent, "POST", "/api/deals", {
       side, streetAddress: "5 Lake Ave", city: "Stoney Creek", salePrice: "690000", offerDate: "2026-10-10", closeDate: "2026-12-10",
       depositAmount: "20000", trustDepositHolder: "OUR_BROKERAGE", totalGci: "17250",
-      agents: [{ userId: u.agent, role: "PRIMARY", splitPct: 80 }], parties, ...extra,
+      ...(side === "DUAL" ? { listingSideGci: "8625", buyerSideGci: "8625" } : {}),
+      agents: [{ userId: u.agent, role: "PRIMARY", splitPct: 80, ...(side === "DUAL" ? { side: "BOTH" } : {}) }], parties, ...extra,
     });
     assert.equal(res.statusCode, 201, res.body);
     return res.json();
@@ -38,6 +39,7 @@ describe("compliance obligations", { skip }, () => {
       data: { email: `${role.toLowerCase()}-${randomUUID()}@zareh.test`, firstName: "Ob", lastName: role, role },
     })).id;
     u.agent = await make("AGENT");
+    u.agent2 = await make("AGENT");
     u.broker = await make("MANAGING_BROKER");
     u.compliance = await make("COMPLIANCE_ADMIN");
     await designateBroker(app, prisma, u.broker);
@@ -95,6 +97,134 @@ describe("compliance obligations", { skip }, () => {
     const yes = (await as(u.agent, "POST", `/api/deals/${d.deal.id}/offer-directions`, {
       givenAt: "2026-10-09T18:00:00-04:00", shareContent: true, scope: "Price and closing date only" })).json();
     assert.equal((await share(yes.id)).statusCode, 201);
+  });
+
+  // ── Same brokerage on both sides (O. Reg. 567/05 s.22 to s.22.0.3) ─────────────────────────────────────
+  /** A $1,000,000 sale, 2% per side, Agent A for the seller and Agent B for the buyer */
+  async function twoAgentDeal() {
+    const res = await as(u.agent, "POST", "/api/deals", {
+      side: "DUAL", streetAddress: "1 Escarpment Cres", city: "Hamilton", salePrice: "1000000", offerDate: "2026-10-20", closeDate: "2026-12-15",
+      depositAmount: "50000", trustDepositHolder: "OUR_BROKERAGE", listingSideGci: "20000", buyerSideGci: "20000",
+      agents: [{ userId: u.agent, role: "PRIMARY", splitPct: 80, side: "LISTING" }, { userId: u.agent2, role: "CO_AGENT", splitPct: 80, side: "BUYER" }],
+      parties: [{ role: "SELLER", fullName: "Ana Seller" }, { role: "BUYER", fullName: "Ben Buyer" }],
+    });
+    assert.equal(res.statusCode, 201, res.body);
+    const id = res.json().deal.id as string;
+    const parties = await prisma.transactionParty.findMany({ where: { transactionId: id } });
+    return { id, seller: parties.find((p) => p.role === "SELLER")!.id, buyer: parties.find((p) => p.role === "BUYER")!.id };
+  }
+  const agreement = (dealId: string, partyId: string, type: "BROKERAGE" | "DESIGNATED", reps: string[] = []) =>
+    as(u.agent, "POST", `/api/deals/${dealId}/representation-agreements`, {
+      partyId, type, ...(type === "DESIGNATED" ? { designatedRepresentativeIds: reps } : {}), signedAt: "2026-09-01T10:00:00-04:00",
+      effectiveFrom: "2026-09-01", expiresOn: "2027-03-01", remunerationTerms: "2% of the sale price plus HST", services: "Full service", terminationTerms: "On written notice" });
+  const obligations = async (dealId: string) => (await as(u.broker, "GET", `/api/deals/${dealId}/obligations`)).json();
+  const rules = (o: { tresa: { rule: string }[] }) => o.tresa.map((f) => f.rule);
+
+  test("same brokerage: the deal records each side's commission and each agent's side; the deal's commission is their total", async () => {
+    const d = await twoAgentDeal();
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: d.id }, include: { agents: true } });
+    assert.deepEqual([row.totalGci.toFixed(2), row.listingSideGci!.toFixed(2), row.buyerSideGci!.toFixed(2)], ["40000.00", "20000.00", "20000.00"]);
+    assert.deepEqual(row.agents.map((a) => [a.side, a.gciSharePct.toFixed(2)]).sort(), [["BUYER", "100.00"], ["LISTING", "100.00"]]);
+    const bad = await as(u.agent, "POST", "/api/deals", {
+      side: "DUAL", streetAddress: "2 Escarpment Cres", city: "Hamilton", salePrice: "1000000", offerDate: "2026-10-20", closeDate: "2026-12-15",
+      depositAmount: "50000", trustDepositHolder: "OUR_BROKERAGE", totalGci: "40000",
+      agents: [{ userId: u.agent, role: "PRIMARY", splitPct: 80 }], parties: [{ role: "SELLER", fullName: "Ana Seller" }, { role: "BUYER", fullName: "Ben Buyer" }],
+    });
+    assert.equal(bad.statusCode, 400);
+    const fields = bad.json().error.details.issues.map((i: { field: string }) => i.field);
+    for (const f of ["listingSideGci", "buyerSideGci", "agents[0].side"]) assert.ok(fields.includes(f), f);
+    // The trade record carries both sides, and a freshly prepared one matches the deal
+    assert.equal((await as(u.agent, "POST", `/api/deals/${d.id}/trade-record`)).statusCode, 201);
+    const sheet = async () => (await as(u.agent, "GET", `/api/deals/${d.id}/trade-record`)).json();
+    assert.deepEqual((await sheet()).differsFromDeal, []);
+    // A side's commission is amended under its own agreement; the deal's commission follows
+    const amend = (field: string, newValue: string) => as(u.broker, "POST", `/api/deals/${d.id}/amendments`, { field, newValue, reference: "Amendment to the listing agreement" });
+    assert.equal((await amend("TOTAL_GCI", "45000")).json().error.code, "AMEND_A_SIDE");
+    assert.equal((await amend("LISTING_SIDE_GCI", "25000")).statusCode, 201);
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: d.id } });
+    assert.deepEqual([after.listingSideGci!.toFixed(2), after.buyerSideGci!.toFixed(2), after.totalGci.toFixed(2)], ["25000.00", "20000.00", "45000.00"]);
+    assert.match((await sheet()).differsFromDeal.join(), /listing side \$25,000\.00/);
+  });
+
+  test("separate designated representatives on opposite sides: not multiple representation, and the deal can go firm", async () => {
+    const d = await twoAgentDeal();
+    assert.equal((await obligations(d.id)).representation.mode, "UNDETERMINED"); // until the agreements are recorded
+    await agreement(d.id, d.seller, "DESIGNATED", [u.agent]);
+    await agreement(d.id, d.buyer, "DESIGNATED", [u.agent2]);
+    const o = await obligations(d.id);
+    assert.equal(o.representation.mode, "SEPARATE_DESIGNATED");
+    assert.ok(!rules(o).includes("MULTIPLE_REPRESENTATION"));
+    assert.ok(!rules(o).includes("DESIGNATED_REPRESENTATIVES"), "each agent is checked against their own client's agreement");
+    const firm = await as(u.agent, "POST", `/api/deals/${d.id}/firm`);
+    assert.equal(firm.statusCode, 200, firm.body);
+    // Each agent sees only their own client's identification record; staff see both
+    const names = async (user: string) => ((await as(user, "GET", `/api/deals/${d.id}/documents`)).json().slots as { party: { fullName: string } | null }[])
+      .map((x) => x.party?.fullName).filter(Boolean);
+    assert.deepEqual(await names(u.agent), ["Ana Seller"]);
+    assert.deepEqual(await names(u.agent2), ["Ben Buyer"]);
+    assert.deepEqual((await names(u.broker)).sort(), ["Ana Seller", "Ben Buyer"]);
+  });
+
+  test("brokerage representation, the same designated representative, or mixed: multiple representation; no firm deal until each client consents", async () => {
+    for (const [seller, buyer, mode] of [
+      [["BROKERAGE"], ["BROKERAGE"], "BROKERAGE"],
+      [["DESIGNATED", "a"], ["DESIGNATED", "a"], "DESIGNATED_SAME"],
+      [["BROKERAGE"], ["DESIGNATED", "b"], "MIXED"],
+    ] as const) {
+      const d = await twoAgentDeal();
+      const rep = (x: readonly string[]) => (x[1] === "a" ? [u.agent] : x[1] === "b" ? [u.agent2] : []);
+      await agreement(d.id, d.seller, seller[0] as "BROKERAGE" | "DESIGNATED", rep(seller));
+      await agreement(d.id, d.buyer, buyer[0] as "BROKERAGE" | "DESIGNATED", rep(buyer));
+      const o = await obligations(d.id);
+      assert.equal(o.representation.mode, mode);
+      assert.equal(o.tresa.filter((f: { rule: string }) => f.rule === "MULTIPLE_REPRESENTATION").length, 2, mode);
+      const firm = await as(u.agent, "POST", `/api/deals/${d.id}/firm`);
+      assert.equal(firm.json().error?.code, "CONSENT_OUTSTANDING", mode);
+    }
+  });
+
+  test("consent is recorded by a managing broker or compliance, never by the agent; with it, the deal can go firm", async () => {
+    const d = await twoAgentDeal();
+    await agreement(d.id, d.seller, "BROKERAGE");
+    await agreement(d.id, d.buyer, "BROKERAGE");
+    const record = (user: string, kind: string, partyId: string) => as(user, "POST", `/api/deals/${d.id}/disclosures`, {
+      kind, partyId, deliveredAt: "2026-10-15T10:00:00-04:00", method: "Signed disclosure and consent, PDF on file", acknowledgedAt: "2026-10-15T10:30:00-04:00" });
+    const byAgent = await record(u.agent, "MULTIPLE_REPRESENTATION_CONSENT", d.seller);
+    assert.equal(byAgent.statusCode, 403, byAgent.body);
+    for (const p of [d.seller, d.buyer]) {
+      assert.equal((await record(u.agent, "MULTIPLE_REPRESENTATION_DISCLOSURE", p)).statusCode, 201); // the agent delivers the disclosure
+      assert.equal((await record(u.compliance, "MULTIPLE_REPRESENTATION_CONSENT", p)).statusCode, 201); // compliance confirms the signed consent
+    }
+    assert.ok(!rules(await obligations(d.id)).includes("MULTIPLE_REPRESENTATION"));
+    assert.equal((await as(u.agent, "POST", `/api/deals/${d.id}/firm`)).statusCode, 200);
+  });
+
+  test("other buyers are told when we act for seller and buyer (also on a same-brokerage deal); two of our buyers competing need consent", async () => {
+    // Same-brokerage deal with separate designated representatives: another buyer's written offer still gets the s.22.0.3 disclosure
+    const d = await twoAgentDeal();
+    await agreement(d.id, d.seller, "DESIGNATED", [u.agent]);
+    await agreement(d.id, d.buyer, "DESIGNATED", [u.agent2]);
+    await as(u.agent, "POST", `/api/deals/${d.id}/offers`, { receivedAt: "2026-10-19T19:00:00-04:00", written: true, offerorBrokerage: "Other Realty" });
+    assert.ok(rules(await obligations(d.id)).includes("SAME_BROKERAGE_REPRESENTATION"));
+
+    // A listing with offers from two buyers this brokerage represents, and one from elsewhere
+    const l = await deal("LISTING", [{ role: "SELLER", fullName: "Ann Lee" }, { role: "BUYER", fullName: "Bo Kim" }, { role: "COOP_BROKERAGE", fullName: "Other Realty" }]);
+    for (const [at, ours] of [["2026-10-09T19:00:00-04:00", true], ["2026-10-09T19:30:00-04:00", true], ["2026-10-09T20:00:00-04:00", false]] as const) {
+      const r = await as(u.agent, "POST", `/api/deals/${l.deal.id}/offers`, { receivedAt: at, written: true, offerorBrokerage: ours ? "This brokerage" : "Other Realty", fromOurBrokerage: ours });
+      assert.equal(r.statusCode, 201, r.body);
+    }
+    const offers = await prisma.offer.findMany({ where: { listingDealId: l.deal.id }, orderBy: { receivedAt: "asc" } });
+    const o = await obligations(l.deal.id);
+    assert.equal(o.tresa.filter((f: { rule: string }) => f.rule === "COMPETING_BUYER_CLIENTS").length, 2);
+    assert.ok(o.tresa.some((f: { rule: string; offerId: string }) => f.rule === "SAME_BROKERAGE_REPRESENTATION" && f.offerId === offers[2]!.id));
+    const accept = await as(u.agent, "POST", `/api/offers/${offers[0]!.id}/events`, { status: "ACCEPTED" });
+    assert.equal(accept.json().error.code, "OFFER_DISCLOSURES_OUTSTANDING");
+    const consent = (user: string, offerId: string) => as(user, "POST", `/api/deals/${l.deal.id}/disclosures`, {
+      kind: "COMPETING_BUYERS_CONSENT", offerId, deliveredAt: "2026-10-09T21:00:00-04:00", method: "Signed consent, PDF on file",
+      acknowledgedAt: "2026-10-09T21:10:00-04:00", content: "Buyer consented in writing to multiple representation" });
+    assert.equal((await consent(u.agent, offers[0]!.id)).statusCode, 403);
+    for (const off of offers.slice(0, 2)) assert.equal((await consent(u.broker, off.id)).statusCode, 201);
+    assert.ok(!rules(await obligations(l.deal.id)).includes("COMPETING_BUYER_CLIENTS"));
   });
 
   test("FINTRAC: cash over $10,000 within 24 hours opens a report task due in 15 days; receipt of funds details are encrypted", async () => {

@@ -30,13 +30,31 @@ Citations and the points still unverified are in `regulatory-references.md` §5 
 |---|---|
 | Information Guide (s.13) | Delivered **and explained** to each client before services began (the earlier of the agreement and the offer date) |
 | Representation agreement (s.13.4) | On file with dates, remuneration, services and termination terms; in force on the offer date; designated agreements name the agents |
-| Multiple representation (s.22) | Written disclosure and each client's **written consent**, before the offer; acknowledgement or best efforts |
+| Multiple representation (s.22–22.0.2) | Decided from the representation agreements (see below). Written disclosure and each client's **written consent**, before the offer; acknowledgement or best efforts. Consent dated after the offer is a breach |
+| Competing buyers we represent (s.22.0.1–22.0.2, Bulletin 3.2) | Two or more written offers from buyers who are our clients: written consent recorded against each offer before acceptance |
 | Self-represented party (s.13, Code s.10) | Guide and the RECO SRP form (the right version) before assisting; acknowledgement or best efforts |
 | Competing offers: number (s.22.7) | With two or more **written** offers, each offeror is told the number, after their offer and before acceptance |
 | Competing offers: content (s.22.7) | Only under the seller's written direction in force at the time (enforced by the database), and then to every offeror |
 | Same brokerage (s.22.0.3) | If the brokerage also represents an offering buyer, every other written offeror is told before acceptance |
 
-**Accepting an offer is refused** while any offer disclosure is owed. Disclosures are recorded with `POST /api/deals/:id/disclosures`, agreements with `…/representation-agreements`, and directions with `…/offer-directions`.
+**Accepting an offer is refused** while any offer disclosure or competing-buyer consent is owed. **Marking a deal firm is refused** while multiple-representation consent is owed.
+
+## Same-brokerage deals (both sides ours)
+
+A deal where we act for seller and buyer is classified from the latest representation agreement of each client:
+
+| Agreements | Result | Consent needed |
+|---|---|---|
+| Each client designates a different agent | Separate designated representatives: **not** multiple representation (s.22.0.1) | No; each agent keeps their client's information from the other side |
+| Brokerage representation for both | Multiple representation, brokerage (s.22) | Yes |
+| The same agent designated for both | Multiple representation, designated (s.22.0.1) | Yes |
+| One brokerage, one designated | Mixed (s.22.0.2) | Yes |
+| An agreement not recorded yet | Undetermined: treated as multiple representation | Until both are recorded |
+
+- **Who records consent:** only an active managing broker or compliance admin, after seeing the signed consent. An agent's attempt is refused by the database (migration 021), not just the screen.
+- **Other buyers (s.22.0.3):** told before acceptance whenever we act for the seller and also represent an offering buyer, including separate designated representatives.
+- **Confidential information:** on a same-brokerage deal, an agent on one side can't see or upload the other client's documents or identification records. Staff, and an agent acting for both, see everything.
+- **Commission:** each side's commission is entered separately (`listingSideGci`, `buyerSideGci`), billed once, and counted once (their total is the deal's commission). See `commission-engine.md`. Disclosures are recorded with `POST /api/deals/:id/disclosures`, agreements with `…/representation-agreements`, and directions with `…/offer-directions`.
 
 ## FINTRAC rules
 
@@ -65,6 +83,9 @@ Each is recorded with `POST /api/fintrac/program`, by the compliance officer or 
 
 ## Needs sign-off
 
+- Counsel: the reading of O. Reg. 567/05 s.22–22.0.5 and the subsection citations shown on screen. The e-Laws text and RECO Bulletins couldn't be fetched from the build environment, so they come from the earlier research notes (`regulatory-references.md`).
+- Counsel: that separate designated representatives at one brokerage need no consent, and that a consent dated after the offer is a breach rather than a warning.
+- Broker of record: the wording of the competing-buyer consent and of the written disclosure to other buyers.
 - Counsel: the PEP/HIO trigger and timing; using the offer date as "the time of the transaction".
 - Counsel: the exact fields of the unrepresented-party record.
 - The compliance officer: the written policies these rules implement, and the yearly training and risk-assessment cadence.

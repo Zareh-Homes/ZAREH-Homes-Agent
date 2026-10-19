@@ -208,6 +208,21 @@ async function assertDealAccess(db: Tx | PrismaClient, actor: Actor, dealId: str
   if (!onDeal) throw new ForbiddenError("You can only work on documents for your own deals");
 }
 
+/**
+ * Same-brokerage deals: an agent who acts for one side doesn't see the other client's identification records
+ * and documents (their confidential information belongs to their own representative). Staff and an agent on
+ * both sides see everything. Returns whether a party with this role is on the other side from the actor.
+ */
+async function otherSideFilter(db: Tx | PrismaClient, actor: Actor, dealId: string): Promise<(partyRole: string | null) => boolean> {
+  if (STAFF.includes(actor.role)) return () => false;
+  const [row] = await db.$queryRaw<{ dealSide: string; agentSide: string | null }[]>`
+    SELECT t.side::text AS "dealSide", a.side::text AS "agentSide" FROM "Transaction" t
+      JOIN "TransactionAgent" a ON a."transactionId" = t.id AND a."userId" = ${actor.id}::uuid WHERE t.id = ${dealId}::uuid`;
+  if (!row || row.dealSide !== "DUAL" || !row.agentSide || row.agentSide === "BOTH") return () => false;
+  const theirs = row.agentSide === "LISTING" ? ["BUYER", "BUYER_LAWYER"] : ["SELLER", "SELLER_LAWYER"];
+  return (role) => role !== null && theirs.includes(role);
+}
+
 function rethrow(err: unknown): never {
   if (err instanceof DomainError) throw err;
   throw fromDatabaseError(err) ?? err;
@@ -288,12 +303,14 @@ export async function createDeal(deps: ComplianceDeps, actor: Actor, input: Crea
           trustDepositHolder: input.trustDepositHolder,
           depositStatus: input.trustDepositHolder === "OUR_BROKERAGE" ? "AWAITING" : "HELD_ELSEWHERE",
           totalGci: formatCents(input.totalGci),
+          listingSideGci: input.listingSideGci === null ? null : formatCents(input.listingSideGci),
+          buyerSideGci: input.buyerSideGci === null ? null : formatCents(input.buyerSideGci),
           coopBrokerageName: input.coopBrokerageName,
           coopCommission: formatCents(input.coopCommission),
           outsideReferralPayee: input.outsideReferralPayee,
           outsideReferralPct: input.outsideReferralPct === null ? null : input.outsideReferralPct.toFixed(2),
           // Amounts are worked out by the commission engine at closing
-          agents: { create: input.agents.map((a) => ({ ...a, grossShare: "0", netPayout: "0" })) },
+          agents: { create: input.agents.map((a) => ({ ...a, gciSharePct: a.gciSharePct.toFixed(2), grossShare: "0", netPayout: "0" })) },
           parties: { create: input.parties },
         },
         select: { id: true },
@@ -335,7 +352,8 @@ export async function getDealDocuments(db: PrismaClient, actor: Actor, dealId: s
     ${SLOT_SELECT}
     WHERE s."transactionId" = ${dealId}::uuid
     ORDER BY t."sortOrder", p."fullName" NULLS FIRST, s."createdAt"`;
-  const slots = rows.map(toSlotView);
+  const hidden = await otherSideFilter(db, actor, dealId);
+  const slots = rows.map(toSlotView).filter((s) => !hidden(s.party?.role ?? null));
   const required = slots.filter((s) => s.isRequired);
   const count = (status: string) => required.filter((s) => s.status === status).length;
 
@@ -386,7 +404,7 @@ export async function uploadDocument(
       status: true,
       transactionId: true,
       documentType: { select: { name: true, metadataKind: true } },
-      party: { select: { fullName: true } },
+      party: { select: { fullName: true, role: true } },
     },
   });
   if (!slot) throw new NotFoundError("Document slot", slotId);
@@ -395,6 +413,9 @@ export async function uploadDocument(
   }
   const dealId = slot.transactionId;
   await assertDealAccess(deps.prisma, actor, dealId);
+  if ((await otherSideFilter(deps.prisma, actor, dealId))(slot.party?.role ?? null)) {
+    throw new ForbiddenError("That record belongs to the other side's client; their representative handles it");
+  }
   if (!canUpload(slot.status)) {
     throw new ConflictError("DOCUMENT_LOCKED", `${slot.documentType.name} is ${slot.status}; it can't be replaced`);
   }
@@ -565,10 +586,13 @@ export async function getFile(
 ): Promise<{ file: FileView & { slotId: string; metadata: FintracRecord | null }; bytes: () => Promise<Buffer> }> {
   const file = await deps.prisma.documentFile.findUnique({
     where: { id: fileId },
-    include: { slot: { select: { transactionId: true } } },
+    include: { slot: { select: { transactionId: true, party: { select: { role: true } } } } },
   });
   if (!file || !file.slot.transactionId) throw new NotFoundError("File", fileId);
   await assertDealAccess(deps.prisma, actor, file.slot.transactionId);
+  if ((await otherSideFilter(deps.prisma, actor, file.slot.transactionId))(file.slot.party?.role ?? null)) {
+    throw new ForbiddenError("That record belongs to the other side's client; their representative handles it");
+  }
   const metadata = file.metadata as unknown as FintracRecord | null;
   return {
     file: {
