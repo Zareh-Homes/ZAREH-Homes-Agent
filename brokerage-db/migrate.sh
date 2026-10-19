@@ -31,7 +31,8 @@ psqlq -c 'CREATE SCHEMA IF NOT EXISTS zareh_meta; CREATE TABLE IF NOT EXISTS zar
   filename TEXT PRIMARY KEY, sha256 TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), applied_by TEXT NOT NULL DEFAULT current_user)'
 
 pending=()
-for f in $(ls "$DIR"/*.sql | sort); do
+# Byte order, whatever the operator's locale: en_US would sort 001a_ before 001_
+for f in $(ls "$DIR"/*.sql | LC_ALL=C sort); do
   name="$(basename "$f")"
   sum="$(sha256sum "$f" | cut -d' ' -f1)"
   recorded="$(psqlq -At -c "SELECT sha256 FROM zareh_meta.schema_migrations WHERE filename = '$name'")"

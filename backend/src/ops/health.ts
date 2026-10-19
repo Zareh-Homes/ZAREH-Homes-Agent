@@ -21,7 +21,7 @@ export async function healthRoutes(app: FastifyInstance, opts: { prisma: PrismaC
     try {
       const [row] = await opts.prisma.$queryRaw<{ latest: string | null; tracked: boolean }[]>`
         SELECT to_regclass('zareh_meta.schema_migrations') IS NOT NULL AS tracked,
-               (SELECT MAX(filename) FROM zareh_meta.schema_migrations) AS latest`;
+               (SELECT MAX(filename COLLATE "C") FROM zareh_meta.schema_migrations) AS latest`;
       if (row!.tracked && row!.latest !== EXPECTED_MIGRATION) {
         return reply.code(503).send({ status: "not_ready", reason: `database is at ${row!.latest}, this release needs ${EXPECTED_MIGRATION}` });
       }
