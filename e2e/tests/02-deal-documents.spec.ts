@@ -63,6 +63,7 @@ test("agent uploads the listing agreement; compliance sends it back, then approv
   await comp.reload();
   await comp.getByRole("button", { name: "Review" }).first().click();
   await comp.getByRole("button", { name: "Approve" }).click();
+  await expect(comp.getByText("Listing Agreement (Form 200)")).toHaveCount(0); // the approval is saved
   await agent.reload();
   await expect(slot.getByText("Approved")).toBeVisible();
   await shot(agent, "11-documents-approved");
