@@ -175,7 +175,7 @@ describe("deal lifecycle and trade record sheet", { skip }, () => {
     // Conditional: can't sign yet
     assert.match((await as(u.agent, "POST", `/api/deals/${deal}/trade-record/sign`)).json().error.message, /no conditions remain outstanding/);
     await as(u.agent, "POST", `/api/deals/${deal}/firm`);
-    assert.match((await as(u.agent, "POST", `/api/deals/${deal}/trade-record/sign`)).json().error.message, /complete every item/);
+    assert.match((await as(u.agent, "POST", `/api/deals/${deal}/trade-record/sign`)).json().error.message, /Complete these items before signing/);
 
     const registrants = [...item(sheet, "registrants").slice(0, 1),
       { side: "BUYER", brokerage: "Harbourfront Realty Inc.", name: "Carla Diaz", email: "carla@harbourfront.test", phone: null }];
@@ -209,7 +209,7 @@ describe("deal lifecycle and trade record sheet", { skip }, () => {
     const final = await as(u.broker, "POST", `/api/deals/${deal}/trade-record/broker-sign`);
     assert.equal(final.statusCode, 200, final.body);
     assert.equal(final.json().status, "SIGNED_BY_BROKER_OF_RECORD");
-    assert.match(final.json().differsFromDeal[0], /3\. True consideration: the deal now shows "845000\.00"/);
+    assert.match(final.json().differsFromDeal[0], /3\. True consideration: the deal now shows \$845,000\.00/);
     assert.equal(final.json().retainUntil.slice(0, 4), String(new Date().getUTCFullYear() + 6));
     const frozen = await as(u.broker, "POST", `/api/deals/${deal}/trade-record/corrections`, { item: "additionalItems", value: "y", reason: "y" });
     assert.equal(frozen.json().error.code, "APPEND_ONLY");

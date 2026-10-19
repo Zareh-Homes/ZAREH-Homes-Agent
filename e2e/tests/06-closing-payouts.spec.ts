@@ -272,3 +272,16 @@ test("payment: the approver can't record it; the admin records it once even with
   await admin.getByText("History").last().click();
   await shot(admin, "29-payout-history");
 });
+
+test("trade record sheet: signing is refused, in plain words, until every item is complete", async ({ browser }) => {
+  const agent = await as(browser, "agent");
+  await agent.goto(dealUrl("record"));
+  await agent.getByRole("button", { name: "Prepare the trade record sheet" }).click();
+  await agent.getByRole("button", { name: "Sign as the agent" }).click();
+  await agent.getByRole("group", { name: "Sign as the agent" }).getByRole("button", { name: "Sign as the agent" }).click();
+  // The seller and the other brokerage's agent aren't on this deal yet
+  await expect(agent.getByRole("alert").filter({ hasText: "Complete these items before signing: 4. Parties (both sides of the trade must be named)" })).toBeVisible();
+  await expect(agent.getByText(/"amount"/)).toHaveCount(0); // no raw data in messages
+  await expect(agent.getByText("Prepared; not signed")).toBeVisible();
+  await shot(agent, "31-trade-record-incomplete");
+});

@@ -14,7 +14,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { loadActor, requireRole, type Actor, type ResolveUserId } from "../auth.ts";
-import { ConflictError, DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
+import { ConflictError, DomainError, fromDatabaseError, NotFoundError, RuleViolationError } from "../errors.ts";
 import { Reader } from "../lib/reader.ts";
 import { validatePathUuid } from "../trust/validation.ts";
 import { assertDealAccess } from "./lifecycle.ts";
@@ -34,6 +34,19 @@ const LABEL: Record<TrsItem, string> = {
   brokerageRemuneration: "8. Our remuneration and who pays it", otherBrokerageRemuneration: "9. Remuneration to another brokerage",
   additionalItems: "Further items (s.17 list beyond item 9 not yet verified)",
 };
+
+/** A record value in words, for messages: "$18,750.00 · payer Lakeshore Realty Ltd. · plus HST" */
+function describe(v: unknown): string {
+  const dollars = (x: string) => `$${Number(x).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (v === null || v === undefined || v === "") return "nothing";
+  if (typeof v === "string") return /^-?\d+(\.\d+)?$/.test(v) ? dollars(v) : v;
+  if (typeof v !== "object") return String(v);
+  if (Array.isArray(v)) return v.map(describe).join("; ");
+  return Object.entries(v as Record<string, unknown>)
+    .filter(([, x]) => x !== null && x !== undefined && x !== false)
+    .map(([k, x]) => (k === "taxExtra" ? "plus HST" : k === "amount" ? describe(x) : `${k.replace(/([A-Z])/g, " $1").toLowerCase()} ${describe(x)}`))
+    .join(" · ");
+}
 
 const NATURE: Record<string, string> = {
   LISTING: "Sale of real property: the brokerage represents the seller",
@@ -124,7 +137,7 @@ export async function tradeRecordView(prisma: PrismaClient, dealId: string) {
   // The deal changed after the sheet was prepared (an amendment): flag it, don't rewrite the record
   const drift = (["consideration", "deposit", "otherBrokerageRemuneration", "brokerageRemuneration"] as const)
     .filter((k) => JSON.stringify(items[k]) !== JSON.stringify(current[k]))
-    .map((k) => `${LABEL[k]}: the deal now shows ${JSON.stringify(current[k])}`);
+    .map((k) => `${LABEL[k]}: the deal now shows ${describe(current[k])}`);
   const name = (u: { firstName: string; lastName: string } | null) => (u ? `${u.firstName} ${u.lastName}` : null);
   const initials = (u: { firstName: string; lastName: string }) => `${u.firstName[0]}${u.lastName[0]}`.toUpperCase();
   return {
@@ -207,6 +220,12 @@ export async function signTradeRecord(prisma: PrismaClient, actor: Actor, dealId
          WHERE id = ${sheet.id}::uuid`;
     }
   } catch (err) {
+    // The database lists the missing items as data; say them in words
+    if (/complete every item before signing/.test((err as Error)?.message ?? "")) {
+      const missing = ((await tradeRecordView(prisma, dealId)).missing ?? []) as { item: string; reason: string }[];
+      throw new RuleViolationError("TRS_INCOMPLETE",
+        `Complete these items before signing: ${missing.map((m) => `${LABEL[m.item as TrsItem] ?? m.item} (${m.reason})`).join("; ")}`, { missing });
+    }
     rethrow(err);
   }
   return tradeRecordView(prisma, dealId);
