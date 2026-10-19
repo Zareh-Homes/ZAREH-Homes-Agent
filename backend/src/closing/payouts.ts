@@ -22,7 +22,7 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { requireRole, TRUST_VIEWERS, type Actor } from "../auth.ts";
-import { ConflictError, DomainError, fromDatabaseError, NotFoundError, RuleViolationError } from "../errors.ts";
+import { ConflictError, DomainError, fromDatabaseError, NotFoundError, RuleViolationError, uniqueViolation } from "../errors.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents, type Cents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
@@ -212,6 +212,10 @@ export async function recordCommissionReceived(deps: Deps, actor: Actor, dealId:
       VALUES (gen_random_uuid(), ${s.id}::uuid, ${formatCents(input.amount)}::numeric, ${input.receivedDate}::date,
               ${input.reference}, ${actor.id}::uuid, ${trust}::uuid, ${operating}::uuid)`;
   } catch (err) {
+    // The same reference twice on one closing: a double-submitted form, or the same cheque entered again (migration 019)
+    if (uniqueViolation(err)) {
+      throw new ConflictError("DUPLICATE_RECEIPT", `A receipt with reference "${input.reference}" is already recorded for this closing`);
+    }
     rethrow(err);
   }
   return getPayouts(deps, actor, dealId);
@@ -283,7 +287,7 @@ export async function approvePayout(deps: Deps, actor: Actor, t: Target, body: u
   const current = view.payouts.find((p) => p.id === t.id);
   if (!current) throw new RuleViolationError("CDA_VOIDED", "This payout belongs to a voided CDA; use the reissued one");
   const refusals: Partial<Record<PayoutStatus, [string, string]>> = {
-    AWAITING_COMMISSION: ["COMMISSION_NOT_RECEIVED", `The commission for ${view.cdaNumber} hasn't been received in full ($${view.commissionReceived} of $${view.commissionDue})`],
+    AWAITING_COMMISSION: ["COMMISSION_NOT_RECEIVED", `The commission for ${view.cdaNumber} hasn't been received in full ($${view.commissionReceived} of $${view.commissionDue}). Paying part of a commission isn't supported: payouts wait until all of it is in`],
     AWAITING_BANK_VERIFICATION: ["COMMISSION_NOT_CLEARED", `The commission for ${view.cdaNumber} is recorded but not yet matched to a verified bank record`],
     AWAITING_POLICY_APPROVAL: ["POLICY_NOT_APPROVED", "Co-op and referral payments stay disabled until counsel and the accountant approve how those funds are held"],
     NOTHING_OWED: ["NOTHING_OWED", "Nothing is owed on this payout under the current CDA"],

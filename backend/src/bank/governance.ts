@@ -39,6 +39,10 @@ export const POLICIES = {
     "Allows the operating account's obligations (payroll, HST, rent, bills) to be entered by hand, line by line with the source " +
     "document, instead of read from the accounting system. Each figure still needs a second person's attestation. Off until the " +
     "accountant approves the written procedure.",
+  LEASE_SETTLEMENT:
+    "Allows a lease's CDA and payments out of trust on a lease (commission from the first and last month's rent, the balance to the " +
+    "landlord). Off until counsel confirms the landlord's written direction, the tenant's entitlement to the deposit, and that the " +
+    "commission is the signed agreement's (docs/pilot-scope.md). Receiving the deposit and refunding it stay allowed.",
 } as const;
 export type PolicyKey = keyof typeof POLICIES;
 

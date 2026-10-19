@@ -197,15 +197,15 @@ describe("closing and CDA API", { skip }, () => {
     const unapproved = await as(u.admin, "POST", `/api/payouts/${payoutId}/paid`, { paidDate: "2026-12-01", reference: "EFT-1" });
     assert.equal(unapproved.json().error.code, "PAYOUT_NOT_APPROVED");
 
-    const receive = (amount: string, user = u.admin) => as(user, "POST", `/api/deals/${dealId}/closing/commission-received`,
-      { amount, receivedDate: "2026-11-30", reference: "WIRE-PATEL-77", account: { type: "OPERATING", id: operating } });
+    const receive = (amount: string, user = u.admin, reference = "WIRE-PATEL-77") => as(user, "POST", `/api/deals/${dealId}/closing/commission-received`,
+      { amount, receivedDate: "2026-11-30", reference, account: { type: "OPERATING", id: operating } });
     assert.equal((await receive("15935.00", u.agent)).statusCode, 403);
     assert.equal((await receive("10000.00")).statusCode, 201);
     assert.equal((await receive("6000.00")).json().error.code, "COMMISSION_OVER_RECEIVED");
     const intoRealEstateTrust = await as(u.admin, "POST", `/api/deals/${dealId}/closing/commission-received`,
       { amount: "1.00", receivedDate: "2026-11-30", reference: "X", account: { type: "COMMISSION_TRUST", id: account } });
     assert.match(intoRealEstateTrust.json().error.message, /never the real estate trust account/);
-    const full = await receive("5935.00");
+    const full = await receive("5935.00", u.admin, "WIRE-PATEL-78");
     assert.equal(full.json().commissionReceived, "15935.00");
     assert.equal(full.json().payouts[0].status, "AWAITING_BANK_VERIFICATION");
     assert.equal((await as(u.broker, "POST", `/api/payouts/${payoutId}/approve`, {})).json().error.code, "COMMISSION_NOT_CLEARED");
@@ -216,7 +216,7 @@ describe("closing and CDA API", { skip }, () => {
       openingBalance: "0.00", closingBalance: "31075.00", receivedDate: "2026-12-01", source: "BANK_PORTAL_DOWNLOAD",
       fileName: "general-nov.csv", autoMatch: false,
       csv: "Date,Description,Amount\n11/30/2026,TRANSFER FROM TRUST,15140.00\n" +
-        "11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,10000.00\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,5935.00\n",
+        "11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-77,10000.00\n11/30/2026,WIRE IN PATEL LAW LLP WIRE-PATEL-78,5935.00\n",
     });
     assert.equal(imported.statusCode, 201, imported.body);
     const receipts: { id: string; amount: string }[] = full.json().receipts;

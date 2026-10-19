@@ -1060,10 +1060,12 @@ def preflight(engine: Engine, broker_email: str, trust_account: str | None) -> t
         for name, needed in (('"SalesTaxRate"', "014 (commission engine)"), ('"TradeRecordSheet"', "015 (trade lifecycle)"),
                              ('"ReceiptOfFundsRecord"', "016 (TRESA and FINTRAC)")):
             if conn.execute(text("SELECT to_regclass(:t)"), {"t": name}).scalar() is None:
-                raise StructuralError(f"database is missing migration {needed}; run the schema migrations through 018 first")
+                raise StructuralError(f"database is missing migration {needed}; run the schema migrations through 019 first")
         if not conn.execute(text("SELECT EXISTS (SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
                                  "WHERE t.typname = 'TrustEntryType' AND e.enumlabel = 'DISBURSEMENT_TO_LANDLORD')")).scalar():
-            raise StructuralError("database is missing migration 018 (leases); run the schema migrations through 018 first")
+            raise StructuralError("database is missing migration 018 (leases); run the schema migrations through 019 first")
+        if conn.execute(text("SELECT to_regproc('require_lease_settlement_policy')")).scalar() is None:
+            raise StructuralError("database is missing migration 019 (pilot guards); run the schema migrations through 019 first")
         if not conn.execute(text("SELECT is_broker_of_record(CAST(:b AS uuid), (now() AT TIME ZONE 'America/Toronto')::date)"),
                             {"b": str(broker["id"])}).scalar():
             raise StructuralError(f"{broker_email} must be designated broker of record (or substitute): they attest the migrated trust history")
@@ -1191,6 +1193,8 @@ def insert_trust(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: d
                 raise RowError("can't tell which trust account these entries belong to; pass --trust-account")
             deal_status = deals[deal_legacy].status
             with engine.begin() as conn:
+                # Past lease payouts are history, not new settlements (migration 019; owner login only)
+                conn.execute(text("SET LOCAL zareh.historical_import = 'lonewolf'"))
                 done = set(conn.execute(text('SELECT "idempotencyKey"::text FROM "TrustLedgerEntry" WHERE "transactionId" = CAST(:d AS uuid)'),
                                         {"d": deal_ids[deal_legacy]}).scalars())
                 conn.execute(text('SELECT 1 FROM "TrustAccount" WHERE id = CAST(:a AS uuid) FOR UPDATE'), {"a": account_id})

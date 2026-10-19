@@ -127,7 +127,7 @@ describe("money controls", { skip }, () => {
     const policies = (await as(u.admin, "GET", "/api/financial-policies")).json().policies;
     assert.deepEqual(policies.map((p: { policy: string; enabled: boolean }) => [p.policy, p.enabled]),
       [["SOLE_OPERATOR_EXCEPTION", false], ["THIRD_PARTY_PAYABLES", false], ["COMMISSION_TRUST_ACCOUNT", false],
-        ["CIVIC_HOLIDAY_IS_HOLIDAY", false], ["UNCLAIMED_MONEY_REMITTANCE", false], ["MANUAL_OBLIGATIONS_PROCEDURE", false]]);
+        ["CIVIC_HOLIDAY_IS_HOLIDAY", false], ["UNCLAIMED_MONEY_REMITTANCE", false], ["MANUAL_OBLIGATIONS_PROCEDURE", false], ["LEASE_SETTLEMENT", false]]);
   });
 
   test("interim bank record: commission verified the day it lands; overlapping files never double-count a line", async () => {

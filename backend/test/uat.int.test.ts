@@ -103,10 +103,20 @@ describe("UAT workflows", { skip }, () => {
     assert.equal(due, 3_531_250);
 
     // Lakeshore Realty wires the commission; it's recorded, then verified at the bank by a second person
-    const received = await ok(as(u.admin, "POST", `/api/deals/${dealId}/closing/commission-received`,
-      { amount: "35312.50", receivedDate: TODAY, reference: "WIRE-LAKESHORE-118", account: { type: "OPERATING", id: operating } }), 201);
+    // It arrives in two parts. Until all of it is in, nothing can be approved: partial payouts aren't supported
+    const receive = (amount: string, reference: string) => as(u.admin, "POST", `/api/deals/${dealId}/closing/commission-received`,
+      { amount, receivedDate: TODAY, reference, account: { type: "OPERATING", id: operating } });
+    const part = await ok(receive("15000.00", "WIRE-LAKESHORE-118"), 201);
+    assert.deepEqual([part.commissionReceived, part.payouts[0].status], ["15000.00", "AWAITING_COMMISSION"]);
+    const early = await as(u.broker2, "POST", `/api/payouts/${part.payouts[0].id}/approve`, {});
+    assert.equal(early.json().error.code, "COMMISSION_NOT_RECEIVED", early.body);
+    // The same wire entered twice (or a double-submitted form) is refused, not counted twice
+    const twice = await receive("15000.00", "WIRE-LAKESHORE-118");
+    assert.deepEqual([twice.statusCode, twice.json().error.code], [409, "DUPLICATE_RECEIPT"]);
+    assert.equal((await receive("20312.51", "WIRE-LAKESHORE-119")).json().error.code, "COMMISSION_OVER_RECEIVED");
+    const received = await ok(receive("20312.50", "WIRE-LAKESHORE-119"), 201);
     assert.equal(received.payouts[0].status, "AWAITING_BANK_VERIFICATION");
-    await bankFile([["WIRE IN WIRE-LAKESHORE-118", "35312.50"]], "35312.50");
+    await bankFile([["WIRE IN WIRE-LAKESHORE-118", "15000.00"], ["WIRE IN WIRE-LAKESHORE-119", "20312.50"]], "35312.50");
     const payouts = await ok(as(u.admin, "GET", `/api/deals/${dealId}/closing/payouts`));
     const payout = payouts.payouts[0];
     assert.deepEqual([payout.status, payout.payeeName], ["READY_FOR_APPROVAL", "Priya Uat Real Estate Professional Corporation"]);
@@ -158,7 +168,22 @@ describe("UAT workflows", { skip }, () => {
     await ok(as(u.agent, "POST", `/api/deals/${dealId}/firm`));
     await ok(as(u.agent, "POST", `/api/deals/${dealId}/close`, { closedOn: "2026-11-15" }));
 
+    // Lease settlement is off until counsel signs off: no CDA, nothing paid out of trust; a refund stays possible
+    const blocked = await as(u.broker, "POST", `/api/deals/${dealId}/closing/finalize`);
+    assert.equal(blocked.statusCode, 409, blocked.body);
+    assert.equal(blocked.json().error.code, "POLICY_NOT_APPROVED");
+    assert.match(blocked.json().error.message, /lease.*LEASE_SETTLEMENT/);
+    const payout = await as(u.broker, "POST", "/api/trust/disbursements", {
+      dealId, trustAccountId: trust, amount: "100.00", method: "EFT", dateDisbursed: "2026-11-15", payeeType: "LANDLORD",
+      payeeName: "Rita Olsen", authorizationMethod: "CLOSING_COMPLETED" });
+    assert.equal(payout.statusCode, 409, payout.body);
+    assert.equal(await prisma.closingStatement.count({ where: { transactionId: dealId } }), 0);
+    const policy = (enabled: boolean) => ok(as(u.broker, "POST", "/api/financial-policies",
+      { policy: "LEASE_SETTLEMENT", enabled, reference: enabled ? "Test: counsel's lease opinion" : "Test: back off" }));
+    await policy(true);
+
     const cda = await ok(as(u.broker, "POST", `/api/deals/${dealId}/closing/finalize`), 201);
+    await policy(false);
     assert.deepEqual(cda.computation.payer, { kind: "LANDLORD", name: "Rita Olsen" });
     // Landlord owes ($3,000 + $1,500) × 1.13 = $5,085: all of it from the $6,000 deposit, $915 back to the landlord
     assert.deepEqual(cda.trustEntries.map((e: { entryType: string; amount: string }) => [e.entryType, e.amount]), [
