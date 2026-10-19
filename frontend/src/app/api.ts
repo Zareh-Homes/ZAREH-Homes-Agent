@@ -3,7 +3,7 @@
  *   - The session cookie identifies the user; the browser sends it.
  *   - Every change carries the session's CSRF token and a fresh idempotency key.
  *   - Errors come back as ApiError with the server's code, message and field issues.
- *   - A 401 (session ended, MFA needed) is announced so the app can return to sign-in.
+ *   - A 401 for an ended session (or MFA still needed) is announced so the app can return to sign-in.
  */
 
 export interface FieldIssue { field: string; message: string }
@@ -38,6 +38,7 @@ let csrfToken: string | null = null;
 export const setCsrfToken = (token: string | null) => { csrfToken = token; };
 
 export const SESSION_ENDED = "app:session-ended";
+const SESSION_GONE = new Set(["UNAUTHENTICATED", "SESSION_EXPIRED", "SESSION_INVALID", "MFA_REQUIRED", "MFA_ENROLLMENT_REQUIRED", "HTTP_401"]);
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -65,7 +66,8 @@ export async function api<T = unknown>(method: Method, path: string, body?: unkn
   if (!res.ok) {
     const e = (parsed as { error?: { code?: string; message?: string; details?: Record<string, unknown> } } | null)?.error;
     const error = new ApiError(res.status, e?.code ?? `HTTP_${res.status}`, e?.message ?? `The request failed (${res.status})`, e?.details);
-    if (res.status === 401 && !path.startsWith("/api/auth/login")) window.dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: error }));
+    // Only a missing or ended session returns to sign-in; a mistyped password or code stays on the form
+    if (res.status === 401 && SESSION_GONE.has(error.code)) window.dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: error }));
     throw error;
   }
   return parsed as T;

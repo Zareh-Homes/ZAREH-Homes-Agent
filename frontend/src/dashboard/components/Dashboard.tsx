@@ -63,14 +63,14 @@ export function Dashboard({ data }: { data: DashboardResponse }) {
         </div>
       </header>
 
-      <main
+      <div
         id={`${tabsId}-panel`}
         role={available.length > 1 ? "tabpanel" : undefined}
         aria-labelledby={available.length > 1 ? `${tabsId}-${view}` : undefined}
       >
         {view === "brokerage" && data.brokerage && <AdminDashboard data={data.brokerage} year={year} />}
         {view === "personal" && data.personal && <AgentDashboard data={data.personal} year={year} />}
-      </main>
+      </div>
     </div>
   );
 }

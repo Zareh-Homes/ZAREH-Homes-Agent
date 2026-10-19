@@ -1,0 +1,17 @@
+{
+  "name": "zareh-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser tests: the built web app against the real API and a fresh PostgreSQL database",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "bash prepare.sh && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.20.4"
+  }
+}
