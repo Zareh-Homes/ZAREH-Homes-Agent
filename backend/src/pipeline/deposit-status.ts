@@ -1,10 +1,15 @@
 /**
  * Deposit badge for a deal, from the trust ledger. Pure function.
  *
- * TRESA / RECO: a deposit the brokerage receives must be placed in its trust
- * account within 5 business days of receipt. The ledger records both dates
- * for every deposit (receivedDate, effectiveDate), so a late deposit is
- * provable. A deposit that never arrives is caught by the APS due date.
+ * O. Reg. 567/05 s.17(1): trust money must be deposited into the trust
+ * account within 5 business days after it comes into the brokerage's hands.
+ * What counts is the deposit at the bank, not the receipt entered here:
+ *   - matched to a bank record: the bank's posting date is the evidence
+ *     (a later posting than the date someone typed in is what's measured);
+ *   - no bank record yet: once 5 business days have passed since receipt,
+ *     it's flagged, not left as "awaiting bank";
+ *   - cleared by a pre-cutover attestation (no bank line): the attested date.
+ * A deposit that never arrives is caught by the APS due date.
  *
  * "Cleared" means the deposit has been matched to the trust account's bank
  * statement: money the bank actually holds, not just an entry in the ledger.
@@ -42,7 +47,16 @@ export interface DepositFacts {
   holder: "OUR_BROKERAGE" | "COOP_BROKERAGE" | "LAWYER" | "BUILDER";
   expectedCents: Cents;
   dueDate: string | null;
-  deposits: { amountCents: Cents; receivedDate: string; depositedDate: string; receiptNumber: number | null; bankCleared: boolean }[];
+  deposits: {
+    amountCents: Cents;
+    receivedDate: string;
+    /** Date entered when recording it (what staff say) */
+    depositedDate: string;
+    receiptNumber: number | null;
+    bankCleared: boolean;
+    /** Earliest bank posting matched to it (what the bank says), if any */
+    bankDate?: string | null;
+  }[];
   today: string;
   calendar?: BusinessCalendar;
 }
@@ -68,16 +82,24 @@ export function depositStatus(f: DepositFacts): DepositBadge {
     };
   }
 
-  // A deposit banked more than 5 business days after receipt is a breach on record
+  // More than 5 business days from receipt to the bank, or still not at the bank after 5, is a breach on record
   const late = f.deposits
-    .map((d) => ({ ...d, days: businessDaysBetween(d.receivedDate, d.depositedDate, cal) }))
+    .map((d) => {
+      const evidence = d.bankDate ?? (d.bankCleared ? d.depositedDate : null);
+      const banked = evidence && evidence > d.depositedDate ? evidence : d.depositedDate;
+      return evidence || businessDaysBetween(d.receivedDate, f.today, cal) <= TRUST_DEPOSIT_BUSINESS_DAYS
+        ? { ...d, atBank: true, on: banked, days: businessDaysBetween(d.receivedDate, banked, cal) }
+        : { ...d, atBank: false, on: f.today, days: businessDaysBetween(d.receivedDate, f.today, cal) };
+    })
     .filter((d) => d.days > TRUST_DEPOSIT_BUSINESS_DAYS);
   if (late.length > 0) {
     const worst = late.reduce((a, b) => (b.days > a.days ? b : a));
     return {
       ...base, state: "LATE_TO_TRUST", tone: "critical",
-      label: "Deposited late to trust",
-      detail: `Received ${shortDate(worst.receivedDate)}, banked ${shortDate(worst.depositedDate)}: ${worst.days} business days (limit ${TRUST_DEPOSIT_BUSINESS_DAYS})`,
+      label: worst.atBank ? "Deposited late to trust" : "Not at the bank after 5 business days",
+      detail: worst.atBank
+        ? `Received ${shortDate(worst.receivedDate)}, at the bank ${shortDate(worst.on)}${worst.bankDate ? " (bank statement)" : ""}: ${worst.days} business days (limit ${TRUST_DEPOSIT_BUSINESS_DAYS})`
+        : `Received ${shortDate(worst.receivedDate)}; no bank record of the deposit ${worst.days} business days later (limit ${TRUST_DEPOSIT_BUSINESS_DAYS})`,
     };
   }
 

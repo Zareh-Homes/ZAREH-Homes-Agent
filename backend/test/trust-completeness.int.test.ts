@@ -131,6 +131,25 @@ describe("trust completeness", { skip }, () => {
     assert.equal((await event(t.incident, { kind: "RESOLVED", note: "Reported and replenished" })).statusCode, 201);
   });
 
+  test("an unresolved shortfall doesn't hold up the monthly sign-off, and signing doesn't close it (O. Reg. 579/05 ss.13-14)", async () => {
+    // Prepared with the shortfall explained: the incident is already open and the broker was alerted at preparation
+    const { reconId, incident } = await shortfallFromFee();
+    const signed = await as(u.broker, "POST", `/api/trust/reconciliations/${reconId}/sign`, { note: "Signed on time; shortfall reported separately" });
+    assert.equal(signed.statusCode, 200, signed.body);
+    assert.equal(signed.json().status, "SIGNED_WITH_DISCREPANCY"); // the discrepancy stays visible on the signed record
+    assert.ok(signed.json().details.exceptions.length > 0);
+    const after = (await as(u.broker, "GET", `/api/trust/incidents/${incident}`)).json();
+    assert.equal(after.open, true);
+    assert.ok(after.outstanding.some((o: string) => /Notify the RECO registrar immediately/.test(o)));
+    // Without an explanation of the exceptions it can't be signed at all
+    const { reconId: bare } = await (async () => {
+      const x = await shortfallFromFee();
+      const again = await as(u.admin, "POST", "/api/trust/reconciliations", { statementId: x.statementId });
+      return { reconId: again.json().id as string };
+    })();
+    assert.equal((await as(u.broker, "POST", `/api/trust/reconciliations/${bare}/sign`, {})).json().error.code, "RECONCILIATION_NEEDS_EXPLANATION");
+  });
+
   test("a signed reconciliation is never changed: a correction supersedes it, with a reason", async () => {
     const s = await shortfallFromFee();
     const signed = await as(u.broker, "POST", `/api/trust/reconciliations/${s.reconId}/sign`, { note: "Reviewed" });

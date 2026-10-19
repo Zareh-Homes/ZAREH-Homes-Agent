@@ -118,6 +118,8 @@ describe("compliance obligations", { skip }, () => {
     assert.equal(report.kind, "LARGE_CASH");
     assert.equal(report.trustEntryIds.length, 2);
     assert.equal(report.dueAt.toISOString(), "2026-10-29T03:59:00.000Z"); // Oct 28, 23:59 Toronto
+    // Prepared, not submitted: nothing is sent to FINTRAC; the report stays open until a person records the filing
+    assert.equal(await prisma.fintracReportEvent.count({ where: { reportId: report.id } }), 0);
     const ob = (await as(u.agent, "GET", `/api/deals/${d.deal.id}/obligations`)).json();
     assert.equal(ob.fintrac.filter((f: { rule: string }) => f.rule === "RECEIPT_OF_FUNDS").length, 2);
     assert.ok(ob.fintrac.some((f: { rule: string; severity: string }) => f.rule === "REPORT_LARGE_CASH" && f.severity === "BLOCKING"));

@@ -139,5 +139,31 @@ test("reconcile: stale deposits and overdrawn deals are flagged", () => {
   assert.equal(r.clientLiabilities, $(25_000));
   assert.equal(r.isBalanced, false);
   assert.ok(r.details.exceptions.some((x) => /Deal B is overdrawn by \$100\.00/.test(x)));
-  assert.ok(r.details.exceptions.some((x) => /isn't at the bank after 11 business days/.test(x)));
+  assert.ok(r.details.exceptions.some((x) => /isn't at the bank 11 business days after it was received \(limit 5\)/.test(x)));
+});
+
+test("reconcile: the 5 business days run from receipt to the bank's posting, not from the date entered (O. Reg. 567/05 s.17)", () => {
+  const received = (entry: ReconLedgerEntry, receivedDate: string): ReconLedgerEntry => ({ ...entry, receivedDate });
+  const r = reconcile({
+    periodEnd: "2026-10-30",
+    bankClosingBalance: $(40_000),
+    entries: [
+      // Received Oct 1, entered as deposited Oct 2, but the bank posted it Oct 14: 8 business days (Thanksgiving Oct 12)
+      received(e("1", "A", 30_000, "2026-10-02", atBank("2026-10-14")), "2026-10-01"),
+      // Received Oct 19, at the bank Oct 20: on time
+      received(e("2", "B", 10_000, "2026-10-20", atBank("2026-10-20")), "2026-10-19"),
+      // Received Oct 21, entered as deposited Oct 29, still not at the bank on Oct 30: counted from receipt (7 days), not entry (1)
+      received(e("3", "C", 5_000, "2026-10-29", null), "2026-10-21"),
+      // Posted late in September: reported in September's reconciliation, not again in October's
+      received(e("4", "D", 1_000, "2026-09-20", atBank("2026-09-30")), "2026-09-10"),
+    ],
+    bankLines: [
+      { id: "b1", postedDate: "2026-10-14", amount: $(30_000), description: "DEPOSIT", matchedEntryDate: "2026-10-02" },
+      { id: "b2", postedDate: "2026-10-20", amount: $(10_000), description: "DEPOSIT", matchedEntryDate: "2026-10-20" },
+    ],
+  });
+  assert.deepEqual(r.details.lateDeposits.map((l) => [l.dealNumber, l.businessDays]), [["A", 8]]);
+  assert.deepEqual(r.details.staleDeposits.map((s) => [s.dealNumber, s.businessDaysOutstanding]), [["C", 7]]);
+  assert.ok(r.details.exceptions.includes("Deposit of $30000.00 on deal A received 2026-10-01 reached the bank 2026-10-14: 8 business days (limit 5)"));
+  assert.ok(r.details.exceptions.some((x) => /deal C isn't at the bank 7 business days after it was received/.test(x)));
 });

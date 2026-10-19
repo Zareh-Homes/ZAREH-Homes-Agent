@@ -548,7 +548,7 @@ export async function computeForStatement(db: Db, statementId: string): Promise<
   const D = iso(s.periodEnd);
 
   type Row = {
-    id: string; dealId: string; dealNumber: string; entryType: string; signed: string; effectiveDate: string;
+    id: string; dealId: string; dealNumber: string; entryType: string; signed: string; effectiveDate: string; receivedDate: string | null;
     referenceNo: string | null; counterparty: string | null; basis: "BANK_STATEMENT" | "PRE_CUTOVER" | null; postedDate: string | null;
   };
   // A commission trust account's ledger is its receipts and payments (migration 012)
@@ -559,6 +559,7 @@ export async function computeForStatement(db: Db, statementId: string): Promise<
       FROM commission_trust_ledger(${s.trustAccountId}::uuid, ${D}::date)` : await db.$queryRaw<Row[]>`
     SELECT e.id::text, e."transactionId"::text AS "dealId", t."dealNumber", e."entryType"::text AS "entryType",
            (e.amount * e.direction)::text AS signed, to_char(e."effectiveDate", 'YYYY-MM-DD') AS "effectiveDate",
+           to_char(e."receivedDate", 'YYYY-MM-DD') AS "receivedDate",
            e."referenceNo", e.counterparty, m.basis::text AS basis, to_char(b."postedDate", 'YYYY-MM-DD') AS "postedDate"
       FROM "TrustLedgerEntry" e
       JOIN "Transaction" t ON t.id = e."transactionId"
@@ -583,7 +584,7 @@ export async function computeForStatement(db: Db, statementId: string): Promise<
     bankClosingBalance: cents(s.closingBalance),
     entries: entries.map((e): ReconLedgerEntry => ({
       id: e.id, dealId: e.dealId, dealNumber: e.dealNumber, entryType: e.entryType, signedAmount: numericToCents(e.signed),
-      effectiveDate: e.effectiveDate, referenceNo: e.referenceNo, counterparty: e.counterparty,
+      effectiveDate: e.effectiveDate, receivedDate: e.receivedDate, referenceNo: e.referenceNo, counterparty: e.counterparty,
       match: e.basis ? { basis: e.basis, postedDate: e.postedDate } : null,
     })),
     bankLines: lines.map((l): ReconBankLine => ({ ...l, amount: numericToCents(l.amount) })),

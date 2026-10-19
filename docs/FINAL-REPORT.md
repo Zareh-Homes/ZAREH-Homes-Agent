@@ -8,6 +8,21 @@ As of 2026-10-18. Branch: `claude/realestate-brokerage-schema-sfn0i9`.
 
 ---
 
+## Review follow-ups (2026-10-19)
+
+1. **Five business days runs to the bank, not to data entry.** Before this fix, the late check compared the date received with the "date deposited" someone typed in. Now:
+   - Once a bank line is matched, the bank's posting date is what's measured.
+   - A deposit with no bank record 5 business days after receipt is flagged red ("Not at the bank after 5 business days").
+   - The monthly reconciliation lists deposits the bank posted late that month, and counts "not at the bank yet" from receipt.
+   - Bank posting dates can trail a branch deposit by a day. The broker of record reviews each flag with the deposit slip.
+   - Tests: `pipeline-deposit.test.ts`, `bank.test.ts`.
+2. **Shortfalls and signing.** The code already allowed a timely sign-off with the discrepancy shown. My earlier summary ("blocks signing") was wrong and is corrected above. A new test proves the sequence: `trust-completeness.int.test.ts` "an unresolved shortfall doesn't hold up the monthly sign-off…".
+3. **Large cash is preparation only.** When cash or virtual currency from the same payer reaches $10,000 across the receipt day and the day before, the system opens an internal report task due 15 calendar days after receipt.
+   - This is a conservative stand-in for the 24-hour rule, because receipts are recorded by date, not time. It can over-flag, never under-flag.
+   - Nothing is sent to FINTRAC. The system has no code that contacts FINTRAC.
+   - The report stays OPEN until compliance staff record that they filed it in FINTRAC's own system, with FINTRAC's reference number. The database refuses "filed" without one.
+   - Tests: `obligations.int.test.ts`.
+
 ## A. Completed
 
 The full list, with code location, commit and test for each item, is in `docs/requirements-matrix.md`. In summary:
@@ -151,9 +166,9 @@ All data was synthetic test data in a local, throwaway database. The system has 
 
 1. **Create the deal:** agent `POST /api/deals` (parties, agents, deposit holder). FINTRAC and document slots are created automatically.
 2. **Upload documents:** `POST /api/documents/slots/:slotId/files`. The compliance reviewer uses `POST /api/documents/slots/:slotId/review` (Approved / Needs Revision with a comment).
-3. **Deposit:** a managing broker receipts it, `POST /api/trust/deposits`, within 5 business days. It can't be paid out until it has cleared the bank.
+3. **Deposit:** a managing broker records the receipt (`POST /api/trust/deposits`), then takes the money to the bank. O. Reg. 567/05 s.17 requires the deposit *into the trust account* within 5 business days after the money comes into the brokerage's hands. The system measures that from the date received to the bank's posting date once the bank file is matched, and flags it if there's no bank record 5 business days after receipt. Recording the receipt alone doesn't satisfy it. The money can't be paid out until it has cleared the bank.
 4. **Bank file:** admin `POST /api/bank/statements`. A second person verifies it (`…/verify`). Lines auto-match; others are matched with `POST /api/bank/matches`.
-5. **Reconcile:** `POST /api/trust/reconciliations` (prepare), then the broker of record signs (`…/:id/sign`). Shortfalls block signing until a cause is recorded.
+5. **Reconcile:** `POST /api/trust/reconciliations` (prepare), then the broker of record signs (`…/:id/sign`). A shortfall doesn't hold up the monthly sign-off. At preparation it opens a trust incident and alerts the brokers, so the s.14 response starts immediately. The broker of record then signs on time with a written explanation of every exception. The record shows "signed with discrepancy", and the incident stays open until the registrar is notified and the money is replenished. A month with a shortfall can't be signed if no incident is recorded, and nothing can be signed without the explanation.
 6. **Firm, then close:** `POST /api/deals/:dealId/firm` (all conditions resolved), then `…/close`. The TRS is signed by the agent, then the BoR.
 7. **CDA:** a broker `POST /api/deals/:dealId/closing/finalize`. This posts trust distributions and freezes the CDA.
 8. **Commission and payout:** `…/closing/commission-received` waits for bank verification. A different broker approves (`/api/payouts/:id/approve`). Admin records it paid after sending it in the bank portal (`…/paid`). The next verified bank file confirms it.

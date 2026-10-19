@@ -16,12 +16,31 @@ test("full deposit banked within 5 business days: green, Received & Cleared", ()
   assert.equal(b.detail, "$50,000 in trust · receipt #1042");
 });
 
-test("recorded on time but not yet matched to the bank statement: amber, not yet cleared", () => {
-  const b = depositStatus({ ...base, deposits: [dep("2026-10-02", "2026-10-09", 5_000_000, false)] });
+test("recorded, not yet matched to the bank, still within 5 business days of receipt: amber, not yet cleared", () => {
+  // Received Fri Oct 9; today Thu Oct 15 is 3 business days later (Thanksgiving Oct 12 doesn't count)
+  const b = depositStatus({ ...base, deposits: [dep("2026-10-09", "2026-10-09", 5_000_000, false)] });
   assert.equal(b.state, "AWAITING_BANK");
   assert.equal(b.tone, "warning");
   assert.equal(b.label, "Received – not yet cleared");
   assert.equal(b.detail, "$50,000 recorded in trust but not yet matched to the bank statement");
+});
+
+test("no bank record 5 business days after receipt: red, whatever date was typed in", () => {
+  // Received Fri Oct 2 and entered as deposited the same day, but no bank line matches it by Thu Oct 15
+  const b = depositStatus({ ...base, deposits: [dep("2026-10-02", "2026-10-02", 5_000_000, false)] });
+  assert.equal(b.state, "LATE_TO_TRUST");
+  assert.equal(b.label, "Not at the bank after 5 business days");
+  assert.equal(b.detail, "Received Oct 2; no bank record of the deposit 8 business days later (limit 5)");
+});
+
+test("the bank's posting date is the evidence: entered as deposited on time, posted by the bank late", () => {
+  // Received Fri Oct 2, entered as deposited Mon Oct 5, but the bank statement shows it on Wed Oct 14
+  const b = depositStatus({ ...base, deposits: [{ ...dep("2026-10-02", "2026-10-05"), bankDate: "2026-10-14" }] });
+  assert.equal(b.state, "LATE_TO_TRUST");
+  assert.equal(b.detail, "Received Oct 2, at the bank Oct 14 (bank statement): 7 business days (limit 5)");
+  // ...and posted on time, it's green
+  const ok = depositStatus({ ...base, deposits: [{ ...dep("2026-10-02", "2026-10-05"), bankDate: "2026-10-06" }] });
+  assert.equal(ok.state, "CLEARED");
 });
 
 test("banked on the 6th business day: red, late to trust", () => {

@@ -37,6 +37,8 @@ export interface ReconLedgerEntry {
   entryType: string;
   signedAmount: Cents; // amount × direction
   effectiveDate: string;
+  /** Deposits: the day the money came into the brokerage's hands (s.17's five business days run from here) */
+  receivedDate?: string | null;
   referenceNo: string | null;
   counterparty: string | null;
   match: { basis: "BANK_STATEMENT" | "PRE_CUTOVER"; postedDate: string | null } | null;
@@ -97,7 +99,8 @@ export interface ReconResult {
     deals: DealLiability[];
     outstanding: OutstandingItem[];
     unrecorded: { bankTransactionId: string; postedDate: string; amount: Cents; description: string }[];
-    staleDeposits: OutstandingItem[]; // recorded as received, still not at the bank after 5 business days
+    staleDeposits: OutstandingItem[]; // received, still not at the bank 5 business days later
+    lateDeposits: { entryId: string; dealNumber: string; amount: Cents; receivedDate: string; postedDate: string; businessDays: number }[];
     shortfalls: { dealId: string; dealNumber: string; balance: Cents }[];
     exceptions: string[];
   };
@@ -144,7 +147,7 @@ export function reconcile(input: ReconInput): ReconResult {
     .map((e) => ({
       entryId: e.id, dealNumber: e.dealNumber, entryType: e.entryType, amount: e.signedAmount,
       effectiveDate: e.effectiveDate, referenceNo: e.referenceNo, counterparty: e.counterparty,
-      businessDaysOutstanding: businessDaysBetween(e.effectiveDate, D, input.calendar ?? STATUTORY_CALENDAR),
+      businessDaysOutstanding: businessDaysBetween(e.receivedDate ?? e.effectiveDate, D, input.calendar ?? STATUTORY_CALENDAR),
     }));
   const outstandingDeposits = outstanding.filter((o) => o.amount > 0).reduce((s, o) => s + o.amount, 0);
   const outstandingDisbursements = -outstanding.filter((o) => o.amount < 0).reduce((s, o) => s + o.amount, 0);
@@ -175,6 +178,15 @@ export function reconcile(input: ReconInput): ReconResult {
 
   const difference = adjustedBankBalance - ledgerBalance;
   const staleDeposits = outstanding.filter((o) => o.amount > 0 && o.businessDaysOutstanding > STALE_DEPOSIT_BUSINESS_DAYS);
+  // Deposits the bank posted this month more than 5 business days after receipt (O. Reg. 567/05 s.17)
+  const lateDeposits = entries
+    .filter((e) => e.entryType === "DEPOSIT_RECEIVED" && e.receivedDate && e.match?.basis === "BANK_STATEMENT"
+      && e.match.postedDate! <= D && e.match.postedDate!.slice(0, 7) === D.slice(0, 7))
+    .map((e) => ({
+      entryId: e.id, dealNumber: e.dealNumber, amount: e.signedAmount, receivedDate: e.receivedDate!, postedDate: e.match!.postedDate!,
+      businessDays: businessDaysBetween(e.receivedDate!, e.match!.postedDate!, input.calendar ?? STATUTORY_CALENDAR),
+    }))
+    .filter((l) => l.businessDays > STALE_DEPOSIT_BUSINESS_DAYS);
 
   const exceptions: string[] = [];
   if (difference !== 0) {
@@ -185,7 +197,10 @@ export function reconcile(input: ReconInput): ReconResult {
   }
   for (const s of shortfalls) exceptions.push(`Deal ${s.dealNumber} is overdrawn by ${money(-s.balance)}`);
   for (const s of staleDeposits) {
-    exceptions.push(`Deposit of ${money(s.amount)} on deal ${s.dealNumber} recorded ${s.effectiveDate} isn't at the bank after ${s.businessDaysOutstanding} business days`);
+    exceptions.push(`Deposit of ${money(s.amount)} on deal ${s.dealNumber} isn't at the bank ${s.businessDaysOutstanding} business days after it was received (limit 5)`);
+  }
+  for (const l of lateDeposits) {
+    exceptions.push(`Deposit of ${money(l.amount)} on deal ${l.dealNumber} received ${l.receivedDate} reached the bank ${l.postedDate}: ${l.businessDays} business days (limit 5)`);
   }
   for (const u of unrecorded) {
     exceptions.push(`${money(u.amount)} on ${u.postedDate} at the bank isn't in the trust ledger (${u.description})`);
@@ -201,6 +216,6 @@ export function reconcile(input: ReconInput): ReconResult {
     clientLiabilities,
     difference,
     isBalanced: difference === 0 && ledgerBalance === clientLiabilities,
-    details: { deals, outstanding, unrecorded, staleDeposits, shortfalls, exceptions },
+    details: { deals, outstanding, unrecorded, staleDeposits, lateDeposits, shortfalls, exceptions },
   };
 }
