@@ -21,12 +21,21 @@ export interface TradeRecord {
 }
 
 const isMoneyKey = (k: string) => /amount|price|consideration|remuneration/i.test(k);
-const human = (k: string) => labelOf(k.replace(/([A-Z])/g, "_$1"));
+const KEY_LABEL: Record<string, string> = { mlsNumber: "MLS® number", recoRegistrationNo: "RECO registration no.", taxExtra: "Plus HST", entityType: "Individual or corporation" };
+const human = (k: string) => KEY_LABEL[k] ?? labelOf(k.replace(/([A-Z])/g, "_$1"));
+const CODE_LABEL: Record<string, string> = {
+  OUR_BROKERAGE: "Our brokerage (in trust)", COOP_BROKERAGE: "The other brokerage", BUYER_LAWYER: "Buyer's lawyer", SELLER_LAWYER: "Seller's lawyer",
+  LANDLORD_LAWYER: "Landlord's lawyer", TENANT_LAWYER: "Tenant's lawyer", OUR_CLIENT: "Our client",
+};
+/** Stored codes (COOP_BROKERAGE, INDIVIDUAL) in words; two-letter values such as the province stay as they are */
+const codeText = (s: string) => (/^[A-Z]{3,}(_[A-Z]+)*$/.test(s) ? CODE_LABEL[s] ?? labelOf(s) : s);
+/** The server's labels are already numbered ("1. Nature of the trade") */
+export const itemTitle = (label: string, n: number) => (/^\d+\./.test(label) ? label : `${n + 1}. ${label}`);
 
 /** A record value as readable text: strings as-is, objects as "label: value" lines, lists as bullets. */
 export function TrsValue({ value }: { value: unknown }): ReactNode {
   if (value === null || value === undefined || value === "") return <span className="text-ink-3">—</span>;
-  if (typeof value === "string") return /^-?\d+\.\d{2}$/.test(value) ? moneyText(value) : value;
+  if (typeof value === "string") return /^-?\d+\.\d{2}$/.test(value) ? moneyText(value) : codeText(value);
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="text-ink-3">None</span>;
@@ -101,7 +110,7 @@ export function TradeRecordTab({ deal }: TabProps) {
           {t.items.map((it, n) => (
             <li key={it.item} className="py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
-                <p className="text-sm font-medium text-ink">{n + 1}. {it.label}</p>
+                <p className="text-sm font-medium text-ink">{itemTitle(it.label, n)}</p>
                 {canCorrect && (
                   <InlineForm label="Correct">{(close) => <Correct dealId={deal.id} item={it} onDone={() => { close(); trs.reload(); }} onCancel={close} />}</InlineForm>
                 )}

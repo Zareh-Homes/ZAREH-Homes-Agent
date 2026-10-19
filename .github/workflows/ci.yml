@@ -155,6 +155,13 @@ jobs:
           grep -q 'http://localhost:8080/accept-invite#token=' /tmp/trial.out
           curl -fsS http://localhost:8080/readyz
           ops/local-trial.sh reset
+      - name: Demo brokerage (ops/local-trial.sh demo) fills itself through the screens and hands over every account
+        shell: bash
+        run: |
+          set -o pipefail
+          ops/local-trial.sh demo --yes | tee /tmp/demo.out
+          test "$(grep -c 'http://localhost:8080/reset-password#token=' /tmp/demo.out)" -eq 5
+          ops/local-trial.sh reset
       - name: Rehearsal report, screenshots and container logs
         if: always()
         uses: actions/upload-artifact@v4

@@ -2,6 +2,13 @@
 
 Versions are the database migration level. The app checks for it at `/readyz`.
 
+## 0.18.2 (2026-10-19): Local demo
+
+- `ops/local-trial.sh demo`: a fictional brokerage filled through the real screens, with a one-time sign-in link per demo person (`backend/scripts/demo-handover.ts`, demo databases only). Walkthrough in `docs/demo-walkthrough.md`.
+- Fix: a half-finished sign-in in the same browser no longer blocks signing in or using an invitation or reset link.
+- Trade record items show words instead of stored codes, without double numbering.
+- Browser tests 31 → 37 (demo brokerage, walkthrough tour, handover). Backend 185 → 186.
+
 ## 0.18.1 (2026-10-19): Pilot acceptance checks
 
 - **Migration 019:** `LEASE_SETTLEMENT` policy (off): no lease CDA or payment out of trust until counsel signs off; duplicate commission receipt references refused.

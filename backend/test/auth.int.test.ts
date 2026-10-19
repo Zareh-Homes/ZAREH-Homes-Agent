@@ -12,7 +12,7 @@ import { buildApp } from "../src/app.ts";
 import { MemoryStore } from "../src/compliance/storage.ts";
 import { AuthService } from "../src/security/auth-service.ts";
 import { loadSecurityConfig } from "../src/security/config.ts";
-import { base32Decode, currentStep, hashPassword, totpAt } from "../src/security/crypto.ts";
+import { base32Decode, currentStep, hashPassword, newToken, sha256, totpAt } from "../src/security/crypto.ts";
 import { TEST_BROKERAGE } from "./fixtures.ts";
 
 const skip = process.env.DATABASE_URL ? false : "DATABASE_URL not set";
@@ -212,6 +212,23 @@ describe("authentication and sessions", { skip }, () => {
     assert.equal((await anon.call("POST", "/api/auth/password-resets/complete", { token: reset.json().resetToken, password: next })).statusCode, 200);
     assert.equal((await anon.call("POST", "/api/auth/password-resets/complete", { token: reset.json().resetToken, password: next })).statusCode, 400);
     assert.equal((await new Browser().login(email, next)).statusCode, 200);
+  });
+
+  test("a half-finished sign-in in the same browser doesn't block a reset link or signing in as someone else", async () => {
+    const half = new Browser();
+    await half.login((await makeUser("COMPLIANCE_ADMIN")).email);
+    assert.equal((await half.call("GET", "/api/pipeline")).json().error.code, "MFA_ENROLLMENT_REQUIRED");
+
+    const other = await makeUser("AGENT");
+    const token = newToken();
+    await prisma.authToken.create({ data: { id: randomUUID(), userId: other.id, purpose: "PASSWORD_RESET", tokenHash: sha256(token),
+      expiresAt: new Date(clock + 3_600_000), createdById: u.admin } });
+    const next = "Another fresh passphrase 81";
+    const done = await half.call("POST", "/api/auth/password-resets/complete", { token, password: next });
+    assert.equal(done.statusCode, 200, done.body);
+    const signIn = await half.login(other.email, next);
+    assert.equal(signIn.statusCode, 200, signIn.body);
+    assert.equal((await half.call("GET", "/api/pipeline")).statusCode, 200); // now the agent's session
   });
 
   test("every sign-in event and admin action is in the append-only audit log", async () => {

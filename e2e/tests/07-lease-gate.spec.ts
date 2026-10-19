@@ -2,7 +2,7 @@
 import { test, expect } from "@playwright/test";
 import { shot } from "../lib/people.ts";
 import { apiAs, as, closeWindowsAfterEach } from "../lib/contexts.ts";
-import { day } from "../lib/state.ts";
+import { day, remember } from "../lib/state.ts";
 
 closeWindowsAfterEach();
 
@@ -24,6 +24,7 @@ test("a lease: deposit received into trust, but no CDA and nothing paid out of t
   await agent.getByRole("button", { name: "Open the deal" }).click();
   await expect(agent).toHaveURL(/\/deals\/[0-9a-f-]{36}$/);
   const dealId = agent.url().split("/").pop()!;
+  remember({ leaseId: dealId });
   await expect(agent.getByText("Outside the pilot")).toBeVisible();
   await agent.getByRole("button", { name: "Mark firm" }).click();
   await agent.getByRole("group", { name: "Mark firm" }).getByRole("button", { name: "Mark firm" }).click();

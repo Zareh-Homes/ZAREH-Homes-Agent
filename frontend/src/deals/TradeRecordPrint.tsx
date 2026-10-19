@@ -8,7 +8,7 @@ import { useApi } from "../app/useApi.ts";
 import { Link } from "../app/router.tsx";
 import { Button, Loading, Notice } from "../ui/kit.tsx";
 import { dateText, dateTimeText, SIDE_LABEL } from "../ui/format.ts";
-import { TrsValue, type TradeRecord } from "./TradeRecordTab.tsx";
+import { itemTitle, TrsValue, type TradeRecord } from "./TradeRecordTab.tsx";
 import type { Deal } from "./DealWorkspace.tsx";
 
 export function TradeRecordPrint({ dealId }: { dealId: string }) {
@@ -33,7 +33,7 @@ export function TradeRecordPrint({ dealId }: { dealId: string }) {
       <ol className="space-y-4">
         {t.items.map((it, n) => (
           <li key={it.item} className="break-inside-avoid">
-            <p className="font-semibold">{n + 1}. {it.label}</p>
+            <p className="font-semibold">{itemTitle(it.label, n)}</p>
             <div className="mt-1"><TrsValue value={it.value} /></div>
             {it.history.length > 1 && (
               <ol className="mt-1 space-y-1 border-l border-line pl-3 text-xs text-ink-2">

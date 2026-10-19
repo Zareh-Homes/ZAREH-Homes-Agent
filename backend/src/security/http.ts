@@ -122,8 +122,10 @@ export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOpt
       }
     }
 
+    // Signing in and using a link don't act on the current session, so a half-finished sign-in in the same
+    // browser (someone else's, or one abandoned before two-factor) mustn't block them
     if (request.auth && !request.auth.mfaSatisfied && opts.auth.mfaRequiredFor(request.auth.role)
-        && !MFA_STEP.some((p) => path.startsWith(p))) {
+        && !MFA_STEP.some((p) => path.startsWith(p)) && !PRE_SESSION.includes(path)) {
       return reply.code(401).send({
         error: {
           code: request.auth.mfaEnabled ? "MFA_REQUIRED" : "MFA_ENROLLMENT_REQUIRED",

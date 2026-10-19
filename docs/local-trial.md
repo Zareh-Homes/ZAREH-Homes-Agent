@@ -27,6 +27,16 @@ your phone's authenticator app. You're the admin.
 Then work through `docs/pilot-test-checklist.md`. For the second person the system requires (a different person
 must approve, verify or sign), invite a plus-address of your email and use a second browser (or a private window).
 
+## Or: a demo brokerage, already filled in
+
+```sh
+ops/local-trial.sh demo
+```
+
+Builds the same app, then fills it with a fictional brokerage (two agents, five deals including a lease, documents,
+deposits, a CDA, commission plans, a paid payout and a signed reconciliation) and prints a sign-in link for each demo
+person. Follow `demo-walkthrough.md`. It erases any earlier trial data.
+
 ## Stop, restart, erase
 
 - `ops/local-trial.sh stop`: stops it; your test data stays.

@@ -8,6 +8,23 @@ As of 2026-10-19. Branch: `claude/realestate-brokerage-schema-sfn0i9`.
 
 ---
 
+## Local demo and improvement backlog (2026-10-19)
+
+- `ops/local-trial.sh demo` builds the app on your own computer, fills a fictional brokerage through the real screens
+  (two agents, five deals including a lease, documents, deposits, a CDA, plans, a paid payout, a signed reconciliation)
+  and prints a one-time sign-in link per demo person. Walkthrough: `demo-walkthrough.md`. CI runs it on every push.
+- **Fixed (found by the demo):** a half-finished sign-in in the browser (someone else's, or one abandoned before
+  two-factor) blocked signing in again and using invitation or reset links ("Set up two-factor sign-in to continue").
+  Regression test in `auth.int.test.ts`. Trade record items no longer show stored codes (`COOP_BROKERAGE`) or double
+  numbers.
+- **Backlog (not built, in this order):**
+  1. Breached-password screening at invite, reset and password change: **required before production**.
+  2. Sign-in rate limits shared across app instances (today in memory, correct only with one instance): **required
+     before running more than one instance**. The staging plan runs one.
+  3. Inline document preview in the review queue (documents download today).
+- **Unchanged:** an independent penetration test of staging is required before any real data. No claim is made that
+  this authentication is stronger than an established library without that assessment.
+
 ## Review follow-ups (2026-10-19)
 
 1. **Five business days runs to the bank, not to data entry.** Before this fix, the late check compared the date received with the "date deposited" someone typed in. Now:

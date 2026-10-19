@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
 import { totp } from "./totp.ts";
 
-export type Who = "admin" | "broker" | "compliance" | "agent";
+export type Who = "admin" | "broker" | "compliance" | "agent" | "agent2";
 export interface Person { email: string; first: string; last: string; role: string; password: string; secret?: string; recovery?: string[] }
 
 const FILE = new URL("../.state/people.json", import.meta.url);
@@ -18,6 +18,7 @@ export const PEOPLE: Record<Who, Omit<Person, "password">> = {
   broker: { email: "broker@e2e.test", first: "Blake", last: "Broker", role: "MANAGING_BROKER" },
   compliance: { email: "compliance@e2e.test", first: "Casey", last: "Compliance", role: "COMPLIANCE_ADMIN" },
   agent: { email: "agent@e2e.test", first: "Morgan", last: "Agent", role: "AGENT" },
+  agent2: { email: "agent2@e2e.test", first: "Jamie", last: "Rivera", role: "AGENT" },
 };
 
 export function load(): Partial<Record<Who, Person>> {
@@ -46,7 +47,7 @@ export async function acceptInvite(page: Page, who: Who, link: string) {
   await page.getByRole("button", { name: "Go to sign in" }).click();
   save(who, { ...PEOPLE[who], password });
   await signInWithPassword(page, who);
-  if (who !== "agent") await enrolMfa(page, who);
+  if (PEOPLE[who].role !== "AGENT") await enrolMfa(page, who);
 }
 
 export async function signInWithPassword(page: Page, who: Who) {
