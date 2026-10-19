@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22.18", cache: npm, cache-dependency-path: backend/package-lock.json }
+        with: { node-version: "22.23.3", cache: npm, cache-dependency-path: backend/package-lock.json }
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client age
       - name: Migrations apply from scratch, and re-running changes nothing
         run: brokerage-db/migrate.sh && brokerage-db/migrate.sh | grep -q "Up to date"
@@ -35,9 +35,9 @@ jobs:
       - name: Production configuration check refuses an unsafe configuration
         working-directory: backend
         run: "! NODE_ENV=production node scripts/check-config.ts"
-      - name: Dependency vulnerabilities (production dependencies)
+      - name: Dependency vulnerabilities (high or critical fails the build)
         working-directory: backend
-        run: npm audit --omit=dev --json | node scripts/audit-gate.ts
+        run: npm audit --audit-level=high
       - name: Backup and restore round trip
         run: |
           age-keygen -o /tmp/key.txt
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22.18" }
+        with: { node-version: "22.23.3" }
       - run: npm test
         working-directory: commission-engine
 
@@ -59,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22.18", cache: npm, cache-dependency-path: frontend/package-lock.json }
+        with: { node-version: "22.23.3", cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci && npm run typecheck && npm test && npm run build
         working-directory: frontend
       - run: npm audit --omit=dev --audit-level=high
@@ -82,6 +82,23 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client && brokerage-db/migrate.sh
       - run: pip install -r requirements-dev.txt && python -m pytest -q
         working-directory: migration
+
+  images:
+    # Build the two deployable images, run them the way production does, and scan them
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: docker build -f backend/Dockerfile -t zareh-api:ci .
+      - run: docker build -f frontend/Dockerfile -t zareh-web:ci .
+      - name: Images start and behave as in production (TLS database, restricted login, non-root, refusals)
+        run: ops/image-smoke.sh zareh-api:ci zareh-web:ci
+      - name: Vulnerability scan (fixable high or critical fails the build)
+        run: |
+          for image in zareh-api:ci zareh-web:ci; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image \
+              --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$image"
+          done
 
   secrets:
     runs-on: ubuntu-24.04

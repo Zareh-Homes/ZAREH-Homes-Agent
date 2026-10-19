@@ -1,13 +1,14 @@
 # Back office API. Node 22.18+ runs the TypeScript sources directly (type stripping).
-FROM node:22.18-bookworm-slim AS deps
+FROM node:22.23.3-bookworm-slim AS deps
 WORKDIR /app/backend
 COPY brokerage-db/schema.prisma /app/brokerage-db/schema.prisma
 COPY backend/package.json backend/package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts && npx --yes prisma@6.16.2 generate --schema ../brokerage-db/schema.prisma
+# Everything comes from the lockfile (including its security overrides): install, generate the client, drop dev tools
+RUN npm ci --ignore-scripts && npx prisma generate --schema ../brokerage-db/schema.prisma && npm prune --omit=dev
 
-FROM node:22.18-bookworm-slim
+FROM node:22.23.3-bookworm-slim
 ENV NODE_ENV=production
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --home /app appuser
 WORKDIR /app/backend
 COPY --from=deps /app/backend/node_modules ./node_modules
