@@ -61,3 +61,9 @@ export const ROLE_LABEL: Record<string, string> = {
 };
 
 export const isLease = (side: string) => side === "LANDLORD" || side === "TENANT";
+
+/** Today's date in the browser's time zone, as the API's YYYY-MM-DD */
+export function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}

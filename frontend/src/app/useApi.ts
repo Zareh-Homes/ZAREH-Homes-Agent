@@ -34,23 +34,26 @@ export function useAction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [failure, setFailure] = useState<ApiError | null>(null);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
   const run = useCallback(async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
     setBusy(true);
     setError(null);
     setFields({});
+    setFailure(null);
     try {
       return await fn();
     } catch (err) {
       if (!mounted.current) return undefined;
       setError(errorMessage(err));
-      if (err instanceof ApiError) setFields(err.fieldErrors);
+      if (err instanceof ApiError) { setFields(err.fieldErrors); setFailure(err); }
       return undefined;
     } finally {
       if (mounted.current) setBusy(false);
     }
   }, []);
-  const clear = useCallback(() => { setError(null); setFields({}); }, []);
-  return { busy, error, fields, run, clear };
+  const clear = useCallback(() => { setError(null); setFields({}); setFailure(null); }, []);
+  /** failure: the server's error itself, for screens that show its code or details */
+  return { busy, error, fields, failure, run, clear };
 }

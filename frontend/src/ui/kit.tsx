@@ -150,6 +150,11 @@ export function Notice({ kind, title, children }: { kind: keyof typeof NOTICE; t
 
 // ── Layout ───────────────────────────────────────────────────────────────────
 
+/** Width and gutters for a screen inside the app frame. */
+export function Page({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
+  return <div className={`mx-auto px-4 py-5 sm:px-6 lg:px-8 ${wide ? "max-w-[1600px]" : "max-w-7xl"}`}>{children}</div>;
+}
+
 export function PageHeader({ title, eyebrow, actions, children }: { title: ReactNode; eyebrow?: ReactNode; actions?: ReactNode; children?: ReactNode }) {
   return (
     <header className="mb-5 flex flex-wrap items-end justify-between gap-3">

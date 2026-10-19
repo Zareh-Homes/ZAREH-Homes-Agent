@@ -1,67 +1,39 @@
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import { AppNav } from "./app/AppNav.tsx";
-import { Dashboard, DashboardPage } from "./dashboard/components/Dashboard.tsx";
-import { useDashboard } from "./dashboard/useDashboard.ts";
-import { PipelineBoard, PipelinePage } from "./pipeline/components/PipelineBoard.tsx";
-import { usePipeline } from "./pipeline/usePipeline.ts";
-import { LiveOversight } from "./oversight/OversightPanel.tsx";
+import { App } from "./app/App.tsx";
 
-function LiveDashboard() {
-  const { state, reload } = useDashboard();
-  return <DashboardPage state={state} onRetry={reload} />;
-}
+const params = new URLSearchParams(location.search);
+const theme = params.get("theme");
+if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
 
-// ?q= pre-fills the search, so a filtered board can be shared as a link
-const initialQuery = new URLSearchParams(location.search).get("q") ?? "";
-
-function LivePipeline() {
-  const { state, reload } = usePipeline();
-  return <PipelinePage state={state} onRetry={reload} initialQuery={initialQuery} />;
-}
-
-async function demoScreen(route: string, key: string): Promise<ReactNode | null> {
-  if (route === "/pipeline") {
-    const { demoPipeline } = await import("./pipeline/demo-data.ts");
-    return <PipelineBoard data={demoPipeline} initialQuery={initialQuery} />;
-  }
-  const { demoResponses } = await import("./dashboard/demo-data.ts");
-  const data = demoResponses[key];
-  return data ? <Dashboard data={data} /> : null;
-}
-
-async function boot() {
-  const params = new URLSearchParams(location.search);
-  const theme = params.get("theme");
-  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
-
+/**
+ * Demo screens with invented figures, for design work only. They exist in a
+ * development build or one built with VITE_ENABLE_DEMO=true, never otherwise,
+ * and they bypass nothing: no API call is made and no session is created.
+ */
+async function demoScreen(): Promise<ReactNode | null> {
+  const key = params.get("demo");
+  if (!key || !(import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO === "true")) return null;
   const route = location.pathname.replace(/\/+$/, "") || "/";
-  const oversight = { "/oversight/broker": "broker", "/oversight/accounting": "accounting", "/oversight/me": "agent" } as const;
-  let screen: ReactNode = route === "/pipeline" ? <LivePipeline />
-    : route in oversight ? <LiveOversight view={oversight[route as keyof typeof oversight]} />
-    : <LiveDashboard />;
-
-  const demoKey = params.get("demo");
-  const demoAllowed = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO === "true";
-  if (demoKey && demoAllowed) {
-    const demo = await demoScreen(route, demoKey);
-    if (demo) {
-      screen = (
-        <>
-          <p className="bg-warning/20 px-4 py-1.5 text-center text-xs font-medium text-ink">Demo data — not real figures</p>
-          {demo}
-        </>
-      );
-    }
+  let screen: ReactNode = null;
+  if (route === "/pipeline") {
+    const [{ demoPipeline }, { PipelineBoard }] = await Promise.all([import("./pipeline/demo-data.ts"), import("./pipeline/components/PipelineBoard.tsx")]);
+    screen = <PipelineBoard data={demoPipeline} initialQuery={params.get("q") ?? ""} />;
+  } else {
+    const [{ demoResponses }, { Dashboard }] = await Promise.all([import("./dashboard/demo-data.ts"), import("./dashboard/components/Dashboard.tsx")]);
+    const data = demoResponses[key];
+    if (data) screen = <Dashboard data={data} />;
   }
-
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <AppNav current={route} />
+  if (!screen) return null;
+  return (
+    <>
+      <p className="bg-warning/20 px-4 py-1.5 text-center text-xs font-medium text-ink">Demo data — not real figures</p>
       {screen}
-    </StrictMode>,
+    </>
   );
 }
 
-void boot();
+void demoScreen().then((demo) => {
+  createRoot(document.getElementById("root")!).render(<StrictMode>{demo ?? <App />}</StrictMode>);
+});

@@ -18,14 +18,17 @@ export class ApiError extends Error {
     this.code = code;
     this.details = details;
   }
-  /** Field problems from a 400, keyed by field name ("parties[0].fullName" → also "parties") */
+  /**
+   * Field problems from a 400, keyed by the server's field path ("parties[0].fullName").
+   * A nested object's problem is also filed under its parent ("payerDetails.address" → "payerDetails");
+   * a list item's stays on the item, so the form shows it next to that row.
+   */
   get fieldErrors(): Record<string, string> {
     const issues = (this.details?.issues ?? []) as FieldIssue[];
     const out: Record<string, string> = {};
     for (const i of issues) {
       out[i.field] ??= i.message;
-      const root = i.field.split(/[.[]/)[0]!;
-      out[root] ??= i.message;
+      if (!i.field.includes("[")) out[i.field.split(".")[0]!] ??= i.message;
     }
     return out;
   }
@@ -38,13 +41,13 @@ export const SESSION_ENDED = "app:session-ended";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-export async function api<T = unknown>(method: Method, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
+export async function api<T = unknown>(method: Method, path: string, body?: unknown, init: { signal?: AbortSignal; idempotencyKey?: string } = {}): Promise<T> {
   const headers: Record<string, string> = { accept: "application/json" };
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
   if (body !== undefined && !isForm) headers["content-type"] = "application/json";
   if (method !== "GET") {
     if (csrfToken) headers["x-csrf-token"] = csrfToken;
-    headers["idempotency-key"] = crypto.randomUUID();
+    headers["idempotency-key"] = init.idempotencyKey ?? crypto.randomUUID();
   }
   let res: Response;
   try {
