@@ -10,6 +10,7 @@ import { closingRoutes } from "./closing/routes.ts";
 import type { BrokerageProfile } from "./closing/cda-template.ts";
 import { dashboardRoutes } from "./dashboard/routes.ts";
 import { pipelineRoutes } from "./pipeline/routes.ts";
+import { directoryRoutes } from "./directory/routes.ts";
 import { bankRoutes } from "./bank/routes.ts";
 import { privacyRoutes } from "./security/privacy.ts";
 import { unclaimedRoutes } from "./bank/unclaimed.ts";
@@ -94,6 +95,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
   app.register(dashboardRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(pipelineRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(directoryRoutes, { prisma: opts.prisma, resolveUserId });
   app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId, today: opts.today });
   app.register(privacyRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(unclaimedRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });

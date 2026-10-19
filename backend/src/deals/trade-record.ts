@@ -194,6 +194,9 @@ export async function signTradeRecord(prisma: PrismaClient, actor: Actor, dealId
   if (as === "broker") {
     requireRole(actor, ["MANAGING_BROKER"], "Signing the trade record sheet as broker of record"); // the database checks the designation
     await requireNoBlockingFindings(prisma, dealId, today, "Signing the trade record sheet");
+  } else {
+    // Only an agent on the deal signs as its agent (the database checks this too)
+    await assertDealAccess(prisma, actor, dealId);
   }
   try {
     if (as === "agent") {
