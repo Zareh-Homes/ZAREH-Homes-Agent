@@ -233,6 +233,15 @@ export async function journal(deps: FundsDeps, actor: Actor, from: string, to: s
   return { from, to, entries, ready: entries.every((e) => e.ready), unmappedRoles: unmapped, csv: journalCsv(entries) };
 }
 
+/** Recent obligations figures for an operating account, newest first, so a second person can find one to attest. */
+export async function listObligations(prisma: PrismaClient, actor: Actor, operatingAccountId: string) {
+  requireRole(actor, TRUST_VIEWERS, "Viewing obligations figures");
+  const rows = await prisma.fundsObligationSnapshot.findMany({
+    where: { operatingAccountId }, orderBy: [{ asOf: "desc" }, { createdAt: "desc" }], take: 20, select: { id: true },
+  });
+  return { obligations: await Promise.all(rows.map((r) => snapshotView(prisma, r.id))) };
+}
+
 export async function fundsRoutes(app: FastifyInstance, opts: FundsDeps & { resolveUserId: ResolveUserId }) {
   const actorOf = async (request: FastifyRequest) => loadActor(opts.prisma, await opts.resolveUserId(request));
   const today = () => opts.today?.() ?? todayInToronto();
@@ -242,6 +251,8 @@ export async function fundsRoutes(app: FastifyInstance, opts: FundsDeps & { reso
     if (!type) throw new RuleViolationError("ACCOUNT_TYPE", "accountType must be OPERATING or COMMISSION_TRUST");
     return fundsAvailability(opts.prisma, { type, id: validatePathUuid(req.query.accountId ?? "", "accountId") }, today());
   });
+  app.get<{ Querystring: { operatingAccountId?: string } }>("/api/funds/obligations", async (req) =>
+    listObligations(opts.prisma, await actorOf(req), validatePathUuid(req.query.operatingAccountId ?? "", "operatingAccountId")));
   app.post("/api/funds/obligations", async (req, reply) => reply.code(201).send(await recordManualObligations(opts, await actorOf(req), req.body)));
   app.post("/api/funds/obligations/pull", async (req, reply) => reply.code(201).send(await pullObligations(opts, await actorOf(req), req.body)));
   app.post<{ Params: Record<string, string> }>("/api/funds/obligations/:id/attest", async (req) =>

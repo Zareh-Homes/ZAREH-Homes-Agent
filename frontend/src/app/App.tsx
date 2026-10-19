@@ -79,6 +79,7 @@ const ROUTES: Route[] = [
   { path: "/trust/incidents/:id", render: (p) => <Gate roles={STAFF}><TrustPage tab="incidents" id={p.id} /></Gate> },
   { path: "/bank", render: () => <Gate roles={BANK}><BankPage tab="statements" /></Gate> },
   { path: "/bank/reconciliations", render: () => <Gate roles={BANK}><BankPage tab="reconciliations" /></Gate> },
+  { path: "/bank/funds", render: () => <Gate roles={BANK}><BankPage tab="funds" /></Gate> },
   { path: "/bank/statements/:id", render: (p) => <Gate roles={BANK}><BankPage tab="statements" id={p.id} /></Gate> },
   { path: "/bank/reconciliations/:id", render: (p) => <Gate roles={BANK}><BankPage tab="reconciliations" id={p.id} /></Gate> },
   { path: "/approvals", render: () => <Gate roles={BANK}><ApprovalsPage /></Gate> },

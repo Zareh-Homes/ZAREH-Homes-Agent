@@ -39,6 +39,30 @@ interface PayoutsView {
 }
 interface Adjustment { id: string; agent: string; userId: string; kind: string; description: string; amount: string; taxable: boolean; status: string }
 
+const WARNINGS: Record<string, string> = {
+  CLOSING_LAWYER_HAS_NO_CONTACT_DETAILS: "The closing lawyer has no email or phone on the deal",
+  NO_COMMISSION_PLAN: "No approved commission plan for",
+  AGENT_NOT_HST_REGISTERED: "No HST number on file (no HST added to their split) for",
+  SPLIT_DIFFERS_FROM_PLAN: "The deal's split differs from the plan for",
+  AGENT_OWES_FEES: "Fees exceed the split; the agent owes the brokerage:",
+  TRUST_BALANCE_DIFFERS_FROM_DEPOSIT_AMOUNT: "The amount held in trust differs from the deposit in the agreement",
+};
+/** "AGENT_NOT_HST_REGISTERED:Morgan Agent" → "No HST number on file … for Morgan Agent" */
+const warningText = (w: string) => {
+  const [code, ...rest] = w.split(":");
+  const text = WARNINGS[code!] ?? labelOf(code);
+  return rest.length ? `${text} ${rest.join(": ")}` : text;
+};
+
+const PAYOUT_HELP: Record<string, string> = {
+  AWAITING_COMMISSION: "Waiting for the full commission. Paying part of a commission isn't supported: this payout waits until all of it is received.",
+  AWAITING_BANK_VERIFICATION: "Received, but not yet matched to a bank file someone else verified.",
+  AWAITING_POLICY_APPROVAL: "Co-op and referral payables stay off until the broker of record's THIRD_PARTY_PAYABLES decision.",
+  READY_FOR_APPROVAL: "A managing broker who didn't record or match the commission approves it.",
+  APPROVED: "Send the payment in the bank portal, then record it here.",
+  PAYMENT_RETURNED: "The payment came back. Send it again and record it.",
+};
+
 const PAYOUT_TONE: Record<string, Tone> = {
   AWAITING_COMMISSION: "neutral", AWAITING_BANK_VERIFICATION: "warning", AWAITING_POLICY_APPROVAL: "warning", READY_FOR_APPROVAL: "neutral",
   APPROVED: "neutral", PAID: "good", PAYMENT_RETURNED: "critical", NOTHING_OWED: "neutral",
@@ -49,19 +73,32 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
   const broker = hasRole(user, ["MANAGING_BROKER"]);
   const bank = hasRole(user, ["ADMIN", "MANAGING_BROKER"]);
   const view = useApi<ClosingView>(`/api/deals/${deal.id}/closing`);
+  const policies = useApi<{ policies: { policy: string; enabled: boolean }[] }>(isLease(deal.side) ? "/api/financial-policies" : null);
+  const leaseBlocked = isLease(deal.side) && !policies.data?.policies.find((p) => p.policy === "LEASE_SETTLEMENT")?.enabled;
   const act = useAction();
-  const [key] = useState(() => crypto.randomUUID());
+  // One key per CDA: a double-click replays it, but a new CDA after a void needs a new key
+  const [key, setKey] = useState(() => crypto.randomUUID());
   const lease = isLease(deal.side);
 
   const outstanding = (act.failure ?? (view.status === "error" ? view.error : null)) as { details?: Record<string, unknown> } | null;
   const detailList = (outstanding?.details?.outstanding as string[] | undefined) ?? [];
 
+  const leaseNotice = leaseBlocked && (
+    <Notice kind="warning" title="Lease settlement isn't enabled">
+      Any statement here is a preview only. A lease's CDA and payments out of trust stay off until the broker of record records counsel's
+      sign-off (Admin → Financial policies → Lease settlement): commission from the first and last month's rent, the tenant's entitlement
+      to that deposit, and the signed commission agreement. The deposit can still be received, held and refunded.
+    </Notice>
+  );
+
   if (view.status === "error" && !view.data) {
     return (
+      <div className="space-y-4">{leaseNotice}
       <Notice kind="warning" title="The closing statement can't be prepared yet">
         {view.message}
         {detailList.length > 0 && <ul className="mt-1 list-disc pl-5">{detailList.map((d) => <li key={d}>{d}</li>)}</ul>}
       </Notice>
+      </div>
     );
   }
   if (!view.data) return <Loading label="Preparing the closing statement" />;
@@ -76,16 +113,21 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
           {v.finalized ? `CDA ${c.cdaNumber} issued ${dateTimeText(v.finalizedAt)}` : `Draft: ${deal.status === "CLOSED" ? "ready to finalize" : `finalize after ${lease ? "commencement" : "closing"}`}`}
         </StatusBadge>
         <div className="flex flex-wrap gap-2">
-          {broker && !v.finalized && deal.status === "CLOSED" && (
+          {broker && !v.finalized && deal.status === "CLOSED" && !leaseBlocked && (
             <ConfirmButton label="Finalize the CDA" busy={act.busy}
               question="This issues the CDA and posts the trust distributions below to the ledger. It records them; it doesn't send any money."
-              onConfirm={() => void act.run(() => api("POST", `/api/deals/${deal.id}/closing/finalize`, {}, { idempotencyKey: key })).then((r) => r && reload())} />
+              onConfirm={() => void act.run(() => api("POST", `/api/deals/${deal.id}/closing/finalize`, {}, { idempotencyKey: key })).then((r) => { if (r) { setKey(crypto.randomUUID()); reload(); } })} />
           )}
           {broker && v.finalized && <InlineForm label="Void the CDA" variant="danger">{(close) => <VoidCda dealId={deal.id} onDone={() => { close(); reload(); }} onCancel={close} />}</InlineForm>}
         </div>
       </div>
+      {leaseNotice}
       {act.error && <Notice kind="error">{act.error}{detailList.length > 0 && <ul className="mt-1 list-disc pl-5">{detailList.map((d) => <li key={d}>{d}</li>)}</ul>}</Notice>}
-      {c.warnings.length > 0 && <Notice kind="warning" title="Check before finalizing"><ul className="list-disc pl-5">{c.warnings.map((w) => <li key={w}>{labelOf(w)}</li>)}</ul></Notice>}
+      {c.warnings.length > 0 && (
+        <Notice kind="warning" title={v.finalized ? "Noted when the CDA was issued" : "Check before finalizing"}>
+          <ul className="list-disc pl-5">{c.warnings.map((w) => <li key={w}>{warningText(w)}</li>)}</ul>
+        </Notice>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Section title="Commission">
@@ -102,7 +144,7 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
           <Facts items={[
             ["Held", centsText(c.trust.held)],
             ["Applied to commission", centsText(c.trust.appliedToCommission)],
-            [lease ? "Balance to the landlord" : "Balance to the seller's lawyer", centsText(c.trust.balanceDueToLawyer)],
+            [lease ? "Balance to the landlord" : "Deposit balance to the seller's lawyer", centsText(c.trust.balanceDueToLawyer)],
             ["Balance still owed to us", centsText(c.trust.balanceDueFromLawyer)],
           ]} />
           {c.trust.distributions.length > 0 && (
@@ -242,7 +284,8 @@ function Payouts({ dealId, broker, bank }: { dealId: string; broker: boolean; ba
   const updated = (v: PayoutsView) => setView(v);
   return (
     <>
-      <Section title="Commission received" description={`Due ${moneyText(p.commissionDue)} · received ${moneyText(p.commissionReceived)}`}
+      <Section title="Commission received" description={`Due ${moneyText(p.commissionDue)} · received ${moneyText(p.commissionReceived)}${
+        p.receipts.some((r) => !r.reversed) && p.payouts.some((l) => l.status === "AWAITING_COMMISSION") ? " · partly received: payouts wait for the rest" : ""}`}
         actions={bank && <InlineForm label="Record commission received" variant="primary">{(close) => <CommissionReceived dealId={dealId} accounts={accounts} onDone={(v) => { close(); updated(v); }} onCancel={close} />}</InlineForm>}>
         {p.receipts.length === 0 ? <Empty>Nothing received yet.</Empty> : (
           <ul className="divide-y divide-line text-sm">
@@ -275,6 +318,7 @@ function PayoutRow({ line, broker, bank, accounts, onUpdate }: { line: PayoutLin
           <span className="block">{moneyText(line.remaining)}{line.carriedForward !== "0.00" ? ` (of ${moneyText(line.amount)}; ${moneyText(line.carriedForward)} paid under an earlier CDA)` : ""}</span>
           {line.paymentReference && <span className="block text-xs text-ink-3">Paid {dateText(line.paidAt)} · {line.paymentReference}{line.paymentConfirmed === false ? " · not yet on a bank file" : ""}</span>}
           {line.recoveryRequired && <span className="block text-xs text-critical">Overpaid: a recovery is needed</span>}
+          {PAYOUT_HELP[line.status] && <span className="block text-xs text-ink-2">{PAYOUT_HELP[line.status]}</span>}
         </span>
         <StatusBadge tone={PAYOUT_TONE[line.status] ?? "neutral"}>{labelOf(line.status)}</StatusBadge>
       </div>
@@ -296,13 +340,14 @@ function PayoutRow({ line, broker, bank, accounts, onUpdate }: { line: PayoutLin
 
 function CommissionReceived({ dealId, accounts, onDone, onCancel }: { dealId: string; accounts: Account[]; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
+  const [key] = useState(() => crypto.randomUUID());
   const [f, setF] = useState({ amount: "", receivedDate: todayIso(), reference: "", account: accounts[0] ? `${accounts[0].type}:${accounts[0].id}` : "" });
   if (accounts.length === 0) return <Notice kind="warning">No active operating or commission trust account is set up.</Notice>;
   return (
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {
       e.preventDefault();
       const [type, id] = f.account.split(":");
-      const v = await act.run(() => api<PayoutsView>("POST", `/api/deals/${dealId}/closing/commission-received`, { amount: f.amount, receivedDate: f.receivedDate, reference: f.reference, account: { type, id } }));
+      const v = await act.run(() => api<PayoutsView>("POST", `/api/deals/${dealId}/closing/commission-received`, { amount: f.amount, receivedDate: f.receivedDate, reference: f.reference, account: { type, id } }, { idempotencyKey: key }));
       if (v) onDone(v);
     }}>
       {act.error && <div className="sm:col-span-2"><Notice kind="error">{act.error}</Notice></div>}
@@ -317,6 +362,7 @@ function CommissionReceived({ dealId, accounts, onDone, onCancel }: { dealId: st
 
 function Approve({ path, accounts, onDone, onCancel }: { path: string; accounts: Account[]; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
+  const [key] = useState(() => crypto.randomUUID());
   const [f, setF] = useState({ payFrom: "", note: "", exceptionReason: "" });
   return (
     <form className="space-y-3" onSubmit={async (e) => {
@@ -324,7 +370,7 @@ function Approve({ path, accounts, onDone, onCancel }: { path: string; accounts:
       const [type, id] = f.payFrom.split(":");
       const v = await act.run(() => api<PayoutsView>("POST", path, {
         ...(f.payFrom ? { payFrom: { type, id } } : {}), ...(f.note.trim() ? { note: f.note } : {}), ...(f.exceptionReason.trim() ? { exceptionReason: f.exceptionReason } : {}),
-      }));
+      }, { idempotencyKey: key }));
       if (v) onDone(v);
     }}>
       {act.error && <Notice kind="error">{act.error}</Notice>}
@@ -338,11 +384,12 @@ function Approve({ path, accounts, onDone, onCancel }: { path: string; accounts:
 
 function Paid({ path, onDone, onCancel }: { path: string; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
+  const [key] = useState(() => crypto.randomUUID());
   const [f, setF] = useState({ paidDate: todayIso(), reference: "", exceptionReason: "" });
   return (
     <form className="space-y-3" onSubmit={async (e) => {
       e.preventDefault();
-      const v = await act.run(() => api<PayoutsView>("POST", path, { paidDate: f.paidDate, reference: f.reference, ...(f.exceptionReason.trim() ? { exceptionReason: f.exceptionReason } : {}) }));
+      const v = await act.run(() => api<PayoutsView>("POST", path, { paidDate: f.paidDate, reference: f.reference, ...(f.exceptionReason.trim() ? { exceptionReason: f.exceptionReason } : {}) }, { idempotencyKey: key }));
       if (v) onDone(v);
     }}>
       {act.error && <Notice kind="error">{act.error}</Notice>}
@@ -358,13 +405,14 @@ function Paid({ path, onDone, onCancel }: { path: string; onDone: (v: PayoutsVie
 /** Reason (+ optional date and reference): receipt reversal, returned payment, cancellation. */
 function ReasonForm({ path, dateField, refOptional, submit, onDone, onCancel }: { path: string; dateField?: string; refOptional?: boolean; submit: string; onDone: (v: PayoutsView) => void; onCancel: () => void }) {
   const act = useAction();
+  const [key] = useState(() => crypto.randomUUID());
   const [f, setF] = useState({ reason: "", date: todayIso(), reference: "" });
   return (
     <form className="space-y-3" onSubmit={async (e) => {
       e.preventDefault();
       const body: Record<string, string> = { reason: f.reason };
       if (dateField) { body[dateField] = f.date; if (f.reference.trim() || !refOptional) body.reference = f.reference; }
-      const v = await act.run(() => api<PayoutsView>("POST", path, body));
+      const v = await act.run(() => api<PayoutsView>("POST", path, body, { idempotencyKey: key }));
       if (v) onDone(v);
     }}>
       {act.error && <Notice kind="error">{act.error}</Notice>}

@@ -58,8 +58,9 @@ export function BankPage({ tab, id }: { tab: string; id?: string }) {
       <TabLinks label="Bank sections" current={tab} tabs={[
         { key: "statements", label: "Statements", href: "/bank" },
         { key: "reconciliations", label: "Reconciliations", href: "/bank/reconciliations" },
+        { key: "funds", label: "Available funds", href: "/bank/funds" },
       ]} />
-      {tab === "reconciliations" ? (id ? <ReconciliationDetail id={id} /> : <Reconciliations />) : id ? <StatementDetail id={id} /> : <Statements />}
+      {tab === "funds" ? <AvailableFunds /> : tab === "reconciliations" ? (id ? <ReconciliationDetail id={id} /> : <Reconciliations />) : id ? <StatementDetail id={id} /> : <Statements />}
     </Page>
   );
 }
@@ -355,5 +356,130 @@ function ReconExceptions({ d }: { d: ReconDetails }) {
       {d.shortfalls.length > 0 && <Notice kind="error" title="Shortfall"><ul className="list-disc pl-5">{d.shortfalls.map((s) => <li key={s.dealId}>Deal {s.dealNumber}: {centsText(s.balance)}</li>)}</ul></Notice>}
       {d.exceptions.length > 0 && <Notice kind="warning" title="Exceptions"><ul className="list-disc pl-5">{d.exceptions.map((x) => <li key={x}>{x}</li>)}</ul></Notice>}
     </div>
+  );
+}
+
+// ── Available funds (operating accounts) ─────────────────────────────────────
+
+interface Availability {
+  asOf: string | null; bankBalance: string | null; unpresentedPayments: string; approvedNotSent: string; returnedStillOwed: string;
+  obligations: { amount: string; asOf: string; source: string; reference: string } | null; available: string | null; blockedBecause: string[]; definition: string;
+}
+interface Obligations {
+  id: string; asOf: string; amount: string; source: string; sourceReference: string; preparedBy: string;
+  lines: { description: string; amount: string; sourceDocument: string }[]; attestation: { by: string; note: string; at: string } | null;
+}
+
+/**
+ * What an operating account can pay out right now, as the database works it out
+ * before approving a payout. Other bills come from an obligations figure that a
+ * second person attests (entered by hand only under the accountant's procedure).
+ */
+function AvailableFunds() {
+  const accounts = useApi<{ accounts: { id: string; name: string; bankName: string; accountLast4: string; isActive: boolean }[] }>("/api/operating-accounts");
+  const [picked, setPicked] = useState("");
+  const active = (accounts.data?.accounts ?? []).filter((a) => a.isActive);
+  const accountId = picked || active[0]?.id || "";
+  if (accounts.status === "error" && !accounts.data) return <Notice kind="error">{accounts.message}</Notice>;
+  if (!accounts.data) return <Loading />;
+  if (active.length === 0) return <Empty>No operating account yet. Add one under Admin → Broker of record &amp; accounts.</Empty>;
+  return (
+    <div className="space-y-5">
+      {active.length > 1 && (
+        <div className="max-w-sm"><SelectField label="Account" value={accountId} onChange={(e) => setPicked(e.target.value)}
+          options={active.map((a) => ({ value: a.id, label: `${a.name} (${a.bankName} ••${a.accountLast4})` }))} /></div>
+      )}
+      <FundsFor key={accountId} accountId={accountId} />
+    </div>
+  );
+}
+
+function FundsFor({ accountId }: { accountId: string }) {
+  const { user } = useSession();
+  const bank = hasRole(user, ["ADMIN", "MANAGING_BROKER"]);
+  const funds = useApi<Availability>(`/api/funds/availability?accountType=OPERATING&accountId=${accountId}`);
+  const list = useApi<{ obligations: Obligations[] }>(`/api/funds/obligations?operatingAccountId=${accountId}`);
+  const reload = () => { funds.reload(); list.reload(); };
+  const f = funds.data;
+  return (
+    <>
+      <Section title="Available to pay out" description={f?.definition}
+        actions={f && <StatusBadge tone={f.blockedBecause.length ? "warning" : "good"}>{f.blockedBecause.length ? "Payouts blocked" : "Payouts can be approved"}</StatusBadge>}>
+        {!f ? (funds.status === "error" ? <Notice kind="error">{funds.message}</Notice> : <Loading />) : (
+          <>
+            <Facts items={[
+              ["Verified bank balance", f.bankBalance ? `${moneyText(f.bankBalance)} (${dateText(f.asOf)})` : "No verified bank file yet"],
+              ["− Payments sent, not yet through the bank", moneyText(f.unpresentedPayments)],
+              ["− Approved, not sent", moneyText(f.approvedNotSent)],
+              ["− Returned payments still owed", moneyText(f.returnedStillOwed)],
+              ["− Other obligations", f.obligations ? `${moneyText(f.obligations.amount)} (attested, ${dateText(f.obligations.asOf)})` : "No attested figure"],
+              ["Available", f.available ? moneyText(f.available) : "—"],
+            ]} />
+            {f.blockedBecause.length > 0 && <div className="mt-3"><Notice kind="warning" title="Why payouts are blocked"><ul className="list-disc pl-5">{f.blockedBecause.map((b) => <li key={b}>{b}</li>)}</ul></Notice></div>}
+          </>
+        )}
+      </Section>
+      <Section title="Other obligations" description="Unpaid bills from the books (payroll, HST, rent). Entered by one person, attested by another; a figure is good for 7 days."
+        actions={bank && <InlineForm label="Enter obligations">{(close) => <NewObligations accountId={accountId} onDone={() => { close(); reload(); }} onCancel={close} />}</InlineForm>}>
+        {!list.data ? (list.status === "error" ? <Notice kind="error">{list.message}</Notice> : <Loading />) : list.data.obligations.length === 0 ? <Empty>None entered yet.</Empty> : (
+          <ul className="divide-y divide-line text-sm">
+            {list.data.obligations.map((o) => (
+              <li key={o.id} className="py-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <span>
+                    <span className="font-medium">{moneyText(o.amount)}</span> as of {dateText(o.asOf)} · {labelOf(o.source)}
+                    <span className="block text-xs text-ink-2">{o.sourceReference} · entered by {o.preparedBy}</span>
+                    {o.lines.length === 0 ? <span className="block text-xs text-ink-3">No unpaid obligations listed</span>
+                      : <ul className="mt-1 text-xs text-ink-2">{o.lines.map((l, i) => <li key={i}>{l.description}: {moneyText(l.amount)} ({l.sourceDocument})</li>)}</ul>}
+                  </span>
+                  {o.attestation ? <StatusBadge tone="good">Attested by {o.attestation.by}</StatusBadge> : <StatusBadge tone="warning">Not attested</StatusBadge>}
+                </div>
+                {!o.attestation && bank && <div className="mt-2"><InlineForm label="Attest">{(close) => <Attest id={o.id} onDone={() => { close(); reload(); }} onCancel={close} />}</InlineForm></div>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function NewObligations({ accountId, onDone, onCancel }: { accountId: string; onDone: () => void; onCancel: () => void }) {
+  const act = useAction();
+  const [f, setF] = useState({ asOf: todayIso(), procedureReference: "" });
+  const [lines, setLines] = useState<{ description: string; amount: string; sourceDocument: string }[]>([]);
+  return (
+    <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {
+      e.preventDefault();
+      if (await act.run(() => api("POST", "/api/funds/obligations", { operatingAccountId: accountId, ...f, lines }))) onDone();
+    }}>
+      <p className="text-sm text-ink-2 sm:col-span-2">Needs the broker of record's MANUAL_OBLIGATIONS_PROCEDURE decision (the accountant's written procedure). List every unpaid obligation with its source document; leave the list empty if there are none.</p>
+      {act.error && <div className="sm:col-span-2"><Notice kind="error">{act.error}</Notice></div>}
+      <TextField label="As of" type="date" required value={f.asOf} onChange={(e) => setF({ ...f, asOf: e.target.value })} error={act.fields.asOf} />
+      <TextField label="Procedure reference" required hint="The accountant's procedure, with date" value={f.procedureReference} onChange={(e) => setF({ ...f, procedureReference: e.target.value })} error={act.fields.procedureReference} />
+      {lines.map((l, i) => (
+        <fieldset key={i} className="grid gap-2 rounded-lg border border-line p-3 sm:col-span-2 sm:grid-cols-[1fr_8rem_1fr_auto] sm:items-end">
+          <legend className="sr-only">Obligation {i + 1}</legend>
+          <TextField label="Description" value={l.description} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} error={act.fields[`lines[${i}].description`]} />
+          <TextField label="Amount" inputMode="decimal" value={l.amount} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))} error={act.fields[`lines[${i}].amount`]} />
+          <TextField label="Source document" value={l.sourceDocument} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, sourceDocument: e.target.value } : x)))} error={act.fields[`lines[${i}].sourceDocument`]} />
+          <Button variant="ghost" onClick={() => setLines(lines.filter((_, j) => j !== i))}>Remove</Button>
+        </fieldset>
+      ))}
+      <div className="sm:col-span-2"><Button onClick={() => setLines([...lines, { description: "", amount: "", sourceDocument: "" }])}>Add an obligation</Button></div>
+      <div className="flex gap-2 sm:col-span-2"><Button type="submit" variant="primary" busy={act.busy}>Save</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
+    </form>
+  );
+}
+
+function Attest({ id, onDone, onCancel }: { id: string; onDone: () => void; onCancel: () => void }) {
+  const act = useAction();
+  const [note, setNote] = useState("");
+  return (
+    <form className="space-y-3" onSubmit={async (e) => { e.preventDefault(); if (await act.run(() => api("POST", `/api/funds/obligations/${id}/attest`, { note }))) onDone(); }}>
+      {act.error && <Notice kind="error">{act.error}</Notice>}
+      <TextField label="What you checked" required hint="e.g. compared with payroll and the payables list" value={note} onChange={(e) => setNote(e.target.value)} error={act.fields.note} />
+      <div className="flex gap-2"><Button type="submit" variant="primary" busy={act.busy}>Attest</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
+    </form>
   );
 }

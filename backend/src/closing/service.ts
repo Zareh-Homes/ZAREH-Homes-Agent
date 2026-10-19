@@ -295,6 +295,13 @@ export async function finalizeClosing(
   };
   const earlier = await replay();
   if (earlier) return earlier;
+  // Said first, so a lease isn't sent chasing other preconditions it can't use yet (the database enforces it too: migration 019)
+  const [lease] = await deps.prisma.$queryRaw<{ blocked: boolean }[]>`
+    SELECT side IN ('LANDLORD', 'TENANT') AND NOT policy_enabled('LEASE_SETTLEMENT') AS blocked FROM "Transaction" WHERE id = ${dealId}::uuid`;
+  if (lease?.blocked) {
+    throw new DomainError("POLICY_NOT_APPROVED", 409,
+      "Issuing a CDA on a lease stays disabled until the broker of record records counsel's sign-off (LEASE_SETTLEMENT)");
+  }
 
   try {
     return await deps.prisma.$transaction(async (tx) => {

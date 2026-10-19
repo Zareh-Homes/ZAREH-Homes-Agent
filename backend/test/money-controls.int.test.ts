@@ -190,6 +190,10 @@ describe("money controls", { skip }, () => {
       assert.equal(snap.statusCode, 201, snap.body);
       assert.deepEqual([snap.json().amount, snap.json().source, snap.json().attestation], ["2000.00", "MANUAL", null]);
       const attest = (user: string) => as(user, "POST", `/api/funds/obligations/${snap.json().id}/attest`, { note: "Checked against payroll and AP" });
+      // The second person finds the figure in the account's list, still unattested
+      const listed = (await as(u.admin2, "GET", `/api/funds/obligations?operatingAccountId=${account}`)).json().obligations;
+      assert.deepEqual([listed[0].id, listed[0].attestation], [snap.json().id, null]);
+      assert.equal((await as(u.agent, "GET", `/api/funds/obligations?operatingAccountId=${account}`)).statusCode, 403);
       assert.equal((await attest(u.admin)).statusCode, 403); // the preparer can't attest their own figure
       assert.equal((await attest(u.admin2)).statusCode, 200);
 

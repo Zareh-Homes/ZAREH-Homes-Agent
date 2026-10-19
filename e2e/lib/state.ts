@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 const FILE = new URL("../.state/run.json", import.meta.url);
-type Run = { dealId?: string; dealNumber?: string };
+type Run = { dealId?: string; dealNumber?: string; saleId?: string; payoutId?: string };
 export const run = (): Run => (existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : {});
 export const remember = (patch: Run) => writeFileSync(FILE, JSON.stringify({ ...run(), ...patch }, null, 2));
 
