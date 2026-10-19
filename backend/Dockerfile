@@ -11,8 +11,11 @@ RUN npm ci --ignore-scripts && npx prisma generate --schema ../brokerage-db/sche
 
 FROM node:22.23.3-bookworm-slim
 ENV NODE_ENV=production
+# The running API only needs node, so the package managers bundled with the base image (and their
+# dependencies) are removed from the runtime image
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && useradd --system --uid 10001 --home /app appuser
+ && useradd --system --uid 10001 --home /app appuser \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 WORKDIR /app/backend
 COPY --from=deps /app/backend/node_modules ./node_modules
 COPY brokerage-db/schema.prisma /app/brokerage-db/schema.prisma

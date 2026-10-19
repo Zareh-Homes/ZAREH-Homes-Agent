@@ -99,10 +99,12 @@ jobs:
         run: ops/image-smoke.sh zareh-api:ci zareh-web:ci
       - name: Vulnerability scan (fixable high or critical fails the build)
         run: |
+          failed=0
           for image in zareh-api:ci zareh-web:ci; do
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image \
-              --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$image"
+              --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$image" || failed=1
           done
+          exit $failed
 
   secrets:
     runs-on: ubuntu-24.04
