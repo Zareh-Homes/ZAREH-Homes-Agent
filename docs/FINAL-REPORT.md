@@ -30,13 +30,12 @@ The full list, with code location, commit and test for each item, is in `docs/re
 | **Staff screens** for deal entry, uploads/review, trust receipts, bank import/match, reconciliation, CDA, payouts, sign-in/MFA | Back-end-first; only the dashboard, pipeline and oversight have screens | Staff can't use it day to day; this blocks a pilot | Build these screens on the existing API; add Playwright end-to-end tests |
 | Professional decisions (§C) | Not mine to make | Gated features stay off; some rules use the strict reading | Send §C to each professional |
 | Accounting connection (OAuth) and mapping UI | Provider not chosen; needs an app registration | Operating payouts need manual attestations | Pick QBO or Xero (§D) |
-| 4 high npm audit findings (Prisma tooling) | The fix is the Prisma 7 major upgrade | Low exposure (not in a request path); still a finding | Upgrade to Prisma 7 and re-run every suite |
 | Independent penetration test | External | Unknown vulnerabilities | Commission one against staging |
 | Lease transactions | Different remuneration rules | Leases must be handled outside the system | Define lease commission rules, then build |
 | Partial payouts | Each payout is all-or-nothing | Paying an agent in instalments isn't possible | Build if you need it |
 | TRS print/PDF | JSON view only | BoR reviews on screen/export | Add a print template |
 | Alert wiring to a pager | Host not chosen | Silent failures | Wire the rules in `deployment.md` |
-| Docker images built and scanned | No Docker daemon here | Image issues found late | Build in CI on the first run |
+| Prisma 7 upgrade | Not needed for security now (§E); breaking change | Falling behind on the ORM | Separate change, plan in `deployment.md` |
 | Real Lone Wolf migration and parallel month | Needs real exports and staff time | Can't prove tie-out | See §F |
 | Interest on unclaimed money | Recorded, not computed | Manual calculation | Confirm the rule with counsel first |
 
@@ -100,22 +99,20 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 |---|---|---|---|---|
 | Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 168 | 168 | 0 | 0 |
 | Lone Wolf migration (with database) | 48 | 48 | 0 | 0 |
-| Frontend | 24 | 24 | 0 | 0 |
+| Frontend (Node runner 10 + vitest 24) | 34 | 34 | 0 | 0 |
 | Commission engine | 6 | 6 | 0 | 0 |
 | Backup → restore → manifest comparison | 1 | 1 | 0 | — |
 
 **Backend coverage:** 96.47% lines, 84.86% branches, 93.71% functions (Node test coverage, `src/**`).
 
 **Security findings:**
-- `npm audit`, backend production dependencies: **4 high, open** (Prisma tooling: `effect`, `deepmerge-ts`). The fix is Prisma 7.
-- Frontend: dev-server findings only; they don't ship.
-- Typecheck is clean.
-- Gitleaks runs in CI; it has not run here.
+- Dependency audits, dev tools included: backend 0, frontend 0, Python migration tool 0. CI fails on any high or critical advisory, with no allow-list.
+- Container images: built, started and scanned (Trivy) on every push; see the CI section below.
+- Typecheck is clean. Gitleaks passes on every push.
 
 **Not tested:**
 - No penetration test.
 - No browser end-to-end tests.
-- No image scan.
 - No test on real Lone Wolf data.
 - UAT A–L are automated, not run by staff (`docs/uat.md`).
 
@@ -123,7 +120,7 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 
 | Stage | Ready? | What's missing |
 |---|---|---|
-| **Technical staging** | **Yes**, once a host exists | Provision the host; first green CI run; build images |
+| **Technical staging** | **Yes**, once a host exists | Provision the host |
 | **Controlled pilot** (real deals, Lone Wolf still the record) | **No** | Staff screens; §C decisions; commission plans entered; pen test; staff-run UAT |
 | **Real financial production** (replace Lone Wolf) | **No** | Everything above, plus the real migration with tie-out, one parallel month reconciling to the cent, the first signed reconciliation, Prisma 7 or an accepted-risk decision, your written go-live approval |
 
@@ -154,7 +151,7 @@ All data was synthetic test data in a local, throwaway database. The system has 
 1. **No staff screens for daily work.** This is the biggest one, and it's code.
 2. **Professional decisions not made** (§C): co-op routing, commission trust account, accounting map, FINTRAC policies.
 3. **No real migration or parallel month.** Until both systems reconcile to the same bank balance, nothing is proven.
-4. **Security sign-off:** the pen test, plus Prisma 7 or an accepted-risk decision.
+4. **Security sign-off:** the independent pen test.
 5. **Lease transactions** aren't supported. Keep them on the current process if you do leases.
 
 Everything else is done, or is a configuration step.

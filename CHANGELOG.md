@@ -2,6 +2,14 @@
 
 Versions are the database migration level. The app checks for it at `/readyz`.
 
+## 0.17.1 (2026-10-19): CI fixes, dependency advisories cleared, images verified in CI
+
+- **Backend CI failure fixed (`5e53f4d`).** The restricted-role end-to-end test logged in as `zareh_app_test` without a password. Local test databases trusted local connections, so it passed; GitHub's PostgreSQL requires a password over TCP (scram-sha-256), so it failed with "Authentication failed". The test now sets a fresh random password each run. It was reproduced first against a local cluster configured like CI.
+- **Backend dependencies (`0b054c4`):** Prisma 6.19.3 plus a `deepmerge-ts` 8.0.2 override; `npm audit` is clean, so the temporary allow-list was removed.
+- **Frontend tooling (`412c59c`):** vitest 4.1.11, vite 7.3.6, Tailwind 4.3.3; `npm audit` is clean with dev tools included. All 16 demo screens are pixel-identical before and after.
+- **Images:** node 22.23.3 and nginx 1.30.5. CI builds and starts both images against a TLS-only database as the restricted login, and scans them with Trivy.
+- **Migration tool:** pytest 9.1.1; `pip-audit` in CI.
+
 ## 0.17.0 (2026-10-18): Completion directive, phases 1–8
 
 Not released to production. Staging-ready only; see `docs/launch-checklist.md`.

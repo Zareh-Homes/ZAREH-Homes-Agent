@@ -85,3 +85,26 @@ The audit log is append-only in the database. Keep it for at least as long as th
 ## Cutover from Lone Wolf
 
 See `docs/launch-checklist.md` and `migration/README.md`.
+
+## Planned upgrades
+
+### Prisma 7 (separate change, not a security fix)
+
+Prisma 6.19.3 with the `deepmerge-ts` override has no open advisories, so there's no security reason to rush this. Prisma 7 is a breaking upgrade:
+
+- The client needs a driver adapter (`@prisma/adapter-pg`) instead of the built-in engine.
+- Configuration moves from `package.json#prisma` to `prisma.config.ts`.
+- The generated client moves to an explicit output folder.
+- The only release that bundles the fixed `deepmerge-ts` (7.10.1) was 3 days old when checked.
+
+Do it on its own branch:
+1. Upgrade `prisma` and `@prisma/client` together, add the adapter, move the config.
+2. Remove the `deepmerge-ts` override if Prisma's own dependency is already fixed.
+3. Run the full CI, including the restricted-role and concurrency tests, which depend on how connections are opened.
+4. Rehearse on staging with a restored backup before production.
+
+Rollback is redeploying the previous image. The database schema doesn't change.
+
+### Base images
+
+Rebuilding picks up OS patches. The Node and nginx versions are pinned, so bump them deliberately (Node 22 LTS security releases; the nginx stable branch), and the Trivy step in CI catches anything fixable that's been missed.

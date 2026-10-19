@@ -11,7 +11,7 @@ cd backend && DATABASE_URL=... node --test --test-concurrency=1
 cd migration && DATABASE_URL=... .venv/bin/python -m pytest
 ```
 
-Result as of 2026-10-18 (commit `c435d7d` plus docs): backend 168/168 passed; migration 48/48 passed with the database (36 without it, 12 skipped); frontend 24/24; commission engine 6/6.
+Result as of 2026-10-18 (commit `c435d7d` plus docs): backend 168/168 passed; migration 48/48 passed with the database (36 without it, 12 skipped); frontend 34/34; commission engine 6/6.
 
 | # | Scenario | Expected | Actual (automated) | Evidence |
 |---|---|---|---|---|

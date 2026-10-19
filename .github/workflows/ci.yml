@@ -83,6 +83,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client && brokerage-db/migrate.sh
       - run: pip install -r requirements-dev.txt && python -m pytest -q
         working-directory: migration
+      - name: Dependency vulnerabilities (any known advisory fails the build)
+        run: pip install pip-audit==2.10.1 && pip-audit -r requirements-dev.txt
+        working-directory: migration
 
   images:
     # Build the two deployable images, run them the way production does, and scan them

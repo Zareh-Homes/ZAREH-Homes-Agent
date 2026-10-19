@@ -5,13 +5,13 @@ Three separate gates. Pass each one before starting the next.
 ## 1. Technical staging
 
 - [x] Migrations apply from scratch through `migrate.sh`; a re-run changes nothing; a changed file is refused
-- [x] All automated suites green (backend 168, migration 48, frontend 24, commission engine 6)
+- [x] All automated suites green (backend 168, migration 48, frontend 34, commission engine 6)
 - [x] Encrypted backup → restore → manifest comparison passed
 - [x] Production config check refuses unsafe settings; the app refuses superuser
-- [ ] CI run green on GitHub (the workflow is committed; confirm the first run)
-- [ ] Docker images built and scanned (no Docker daemon in this environment)
+- [ ] CI green on GitHub on the final commit: all six jobs, re-run to rule out flaky failures
+- [x] Docker images built, started against a TLS database as the restricted login, and scanned (CI `images` job)
 - [ ] Staging host provisioned: TLS certificate, managed PostgreSQL 16 with PITR, secret store, uptime + log alerts
-- [ ] Prisma 7 upgrade, or a recorded decision to accept the 4 high audit findings for the pilot
+- [x] Dependency advisories: backend, frontend and migration audits all clean (CI enforces it)
 
 ## 2. Controlled pilot (real deals, Lone Wolf still the system of record)
 

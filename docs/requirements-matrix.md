@@ -227,7 +227,7 @@ This is the one authoritative matrix for the completion directive (§1–16). St
 | 26 | Feature-flag / approval-gate bypass | Done | `money-controls.int` (ZP001 at the database) |
 | — | Timezones, DST, leap years, holidays, rounding | Done | `trust-calendar.test`, `closing-calculate.test` |
 | — | Browser end-to-end tests | **Not done** | No Playwright suite (the staff UI doesn't exist yet) |
-| — | Static analysis | Partial | `tsc --noEmit` strict, gitleaks; no ESLint/Semgrep |
+| — | Static analysis | Partial | `tsc --noEmit` strict, gitleaks, npm audit / pip-audit, Trivy image scan; no ESLint/Semgrep |
 
 ## §14 Deployment
 
@@ -240,7 +240,7 @@ This is the one authoritative matrix for the completion directive (§1–16). St
 | Incident response | Done | `docs/deployment.md` |
 | Fail-closed feature flags | Done | Database policies |
 | Release notes | Done | `CHANGELOG.md` |
-| Regression gates | Done | `.github/workflows/ci.yml` (first GitHub run still to confirm) |
+| Regression gates | Done | `.github/workflows/ci.yml`: six jobs (backend, frontend, migration, commission engine, images, secrets) |
 | Audit retention and export | Done | `/api/audit/export` |
 | Cutover checklist | Done | `docs/launch-checklist.md` |
 | Security review checklist; external items flagged | Done | `docs/security-review-checklist.md` |
@@ -264,7 +264,7 @@ All 12 are automated and passing; none has been run by staff yet. See `docs/uat.
 | Mandatory transaction records | Yes (TRS); print format pending |
 | Migration and reconciliations tie out | **No**: not run on real data |
 | Backup recovery tested | Yes (test data) |
-| Critical security findings resolved | **No**: 4 high (Prisma tooling); pen test not done |
+| Critical security findings resolved | Dependency and image findings: **yes** (audits clean, CI enforces it). Independent pen test: **not done** |
 | Professional sign-offs | **No** |
 | Parallel trial passed | **No** |
 | Brokerage authorizes go-live | **No** |

@@ -52,14 +52,16 @@ Status key: **Done (tested)** = built and covered by an automated test. **Done (
 | Check | Status | Evidence |
 |---|---|---|
 | Exact dependency versions, lockfiles committed | Done | `package-lock.json` per package |
-| `npm audit`, backend production dependencies | **Open: 4 high** | All in Prisma's own tooling (`@prisma/config` → `effect`, `deepmerge-ts`). The fix is the Prisma 7 major upgrade. They are not in a request path, but they ship with the client. CI fails on any other high/critical advisory; these two (GHSA-ggr8-5vv4-36mx, GHSA-38f7-945m-qr2g) are listed in `backend/scripts/audit-gate.ts` as accepted open findings, and the gate also fails once they disappear so the list can't go stale. |
-| `npm audit`, frontend | Open: dev-only findings | vitest/vite/esbuild dev server; fixes need major upgrades. Nothing ships to the browser bundle. |
-| Secret scanning | In CI (gitleaks) | Not run locally in this environment |
-| Container image scan | Open | Images weren't built here (no Docker daemon) |
+| `npm audit`, backend (dev included) | Done: 0 findings | Prisma 6.16.2 → 6.19.3 (fixes `effect`, GHSA-38f7-945m-qr2g) plus an npm override pinning `deepmerge-ts` 8.0.2 (GHSA-ggr8-5vv4-36mx; Prisma 6 uses it only to merge config). CI fails on any high or critical advisory; no allow-list. |
+| `npm audit`, frontend (dev included) | Done: 0 findings | vitest 4.1.11 (tinypool, critical), vite 7.3.6, Tailwind 4.3.3 (Tailwind 3 depends on `braces`, which has no fixed release). The 16 demo screens were pixel-identical before and after. CI audits the full tree. |
+| Python migration tool | Done: 0 findings | `pip-audit` in CI; pytest 8.3.4 → 9.1.1 (PYSEC-2026-1845) |
+| Secret scanning | Done (CI) | gitleaks on every push |
+| Container images | Done (CI) | Built on every push and run against a TLS-only PostgreSQL with the restricted login (`ops/image-smoke.sh`). Trivy scan: fixable high or critical fails the build. Base images node 22.23.3 and nginx 1.30.5, with OS packages upgraded at build. |
+| Prisma 7 | Planned, separate change | Not required to clear any current advisory. See `docs/deployment.md` "Planned upgrades". |
 
 ## External (none done)
 
 - [ ] Independent penetration test of staging, including auth, IDOR, file upload, CSRF and session handling
 - [ ] Review of the hosting account (IAM, network, backups, logging)
 - [ ] Privacy review by counsel (PIPEDA; retention schedule)
-- [ ] Re-test after Prisma 7 upgrade
+- [ ] Re-run this checklist after the Prisma 7 upgrade (planned, separate change)
