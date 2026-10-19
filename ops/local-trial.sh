@@ -42,7 +42,11 @@ BROKER_OF_RECORD=Trial Broker of Record
 ENV
 fi
 
-docker compose up --build -d
+if ! docker compose up --build -d; then
+  docker compose logs --tail 60 migrate db
+  echo "Starting failed; the log above says why." >&2
+  exit 1
+fi
 echo "Waiting for the app to start..."
 for _ in $(seq 120); do curl -fsS http://localhost:8080/readyz > /dev/null 2>&1 && break; sleep 2; done
 curl -fsS http://localhost:8080/readyz > /dev/null || { docker compose logs --tail 40 api; echo "The app didn't start." >&2; exit 1; }
