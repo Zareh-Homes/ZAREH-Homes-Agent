@@ -378,6 +378,40 @@ describe("money controls", { skip }, () => {
     }
   });
 
+  test("restricted database role: every row a trigger locks can be locked by zareh_app, and still can't be changed", async () => {
+    // A trigger running as the app login that takes SELECT ... FOR UPDATE needs UPDATE privilege on that table (migration 020)
+    const fns = await prisma.$queryRaw<{ name: string; src: string }[]>`
+      SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.prosrc ~* 'for update'`;
+    const locked = new Set<string>();
+    for (const f of fns) {
+      // The first table after FROM is the one locked here (the one FOR UPDATE OF use names it first too)
+      for (const m of f.src.matchAll(/FROM\s+"(\w+)"[^;]*?FOR UPDATE/gi)) locked.add(m[1]!);
+    }
+    assert.ok(locked.has("ClosingStatement") && locked.has("Transaction"), [...locked].join(","));
+    for (const table of locked) {
+      const [{ ok }] = await prisma.$queryRawUnsafe<{ ok: boolean }[]>(`SELECT has_table_privilege('zareh_app', '"${table}"', 'UPDATE') AS ok`);
+      assert.ok(ok, `triggers lock rows of ${table}, but zareh_app can't`);
+    }
+    // Being able to lock doesn't make the append-only records editable
+    for (const table of ["ClosingStatement", "ClosingAgentPayout", "TrustIncident", "AgentRecovery", "UnclaimedTrustFund"]) {
+      let code: string | undefined;
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe("SET LOCAL ROLE zareh_app");
+          await tx.$executeRawUnsafe(`SELECT 1 FROM "${table}" LIMIT 1 FOR UPDATE`);
+          const [row] = await tx.$queryRawUnsafe<{ id: string }[]>(`SELECT id::text FROM "${table}" LIMIT 1`);
+          if (row) await tx.$executeRawUnsafe(`UPDATE "${table}" SET id = id WHERE id = '${row.id}'::uuid`);
+          else throw Object.assign(new Error("no rows"), { skip: true });
+        });
+      } catch (err) {
+        if ((err as { skip?: boolean }).skip) continue;
+        code = pgCode(err);
+      }
+      assert.ok(code && code !== "42501", `${table}: an update must be refused by its trigger, got ${code ?? "success"}`);
+    }
+  });
+
   test("restricted database role: the application works end to end as zareh_app", async () => {
     await prisma.$executeRawUnsafe(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zareh_app_test') THEN CREATE ROLE zareh_app_test LOGIN IN ROLE zareh_app; END IF;

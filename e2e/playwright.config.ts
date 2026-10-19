@@ -38,7 +38,7 @@ export default defineConfig({
       reuseExistingServer: false,
       stdout: "ignore",
       env: {
-        DATABASE_URL: state("database-url"),
+        DATABASE_URL: state("app-database-url"),
         PORT: String(API_PORT),
         NODE_ENV: "test",
         APP_ORIGINS: WEB,

@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
@@ -23,7 +24,9 @@ function codeAt(secret: string, step: number): string {
   return String(n % 1_000_000).padStart(6, "0");
 }
 
-const lastStep = new Map<string, number>();
+// Kept on disk: test files can run in fresh worker processes, and the server remembers every code used
+const STEPS = new URL("../.state/totp-steps.json", import.meta.url);
+const readSteps = (): Record<string, number> => (existsSync(STEPS) ? JSON.parse(readFileSync(STEPS, "utf8")) : {});
 
 /**
  * An authenticator code the server will accept: it refuses a code from the
@@ -33,9 +36,10 @@ const lastStep = new Map<string, number>();
 export async function totp(secret: string): Promise<string> {
   for (;;) {
     const now = Math.floor(Date.now() / 30_000);
-    const step = Math.max(now, (lastStep.get(secret) ?? -Infinity) + 1);
+    const steps = readSteps();
+    const step = Math.max(now, (steps[secret] ?? -Infinity) + 1);
     if (step <= now + 1 && step >= now) {
-      lastStep.set(secret, step);
+      writeFileSync(STEPS, JSON.stringify({ ...steps, [secret]: step }));
       return codeAt(secret, step);
     }
     await new Promise((r) => setTimeout(r, 1000));

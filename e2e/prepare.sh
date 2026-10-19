@@ -18,6 +18,10 @@ DB_URL="$(node -e 'const u=new URL(process.argv[1]); u.pathname="/"+process.argv
 DATABASE_URL="$DB_URL" "$REPO/brokerage-db/migrate.sh" | tail -1
 
 mkdir -p .state && rm -rf .state/* && echo "$DB_URL" > .state/database-url
+# The API connects as the restricted application login, as in production (never the owner)
+APP_PW="$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')"
+DATABASE_URL="$DB_URL" psql "$DB_URL" -Xq -v ON_ERROR_STOP=1 -v pw="$APP_PW" -f "$REPO/ops/create-app-login.sql"
+node -e 'const u=new URL(process.argv[1]); u.username="zareh_app_login"; u.password=process.argv[2]; console.log(u.toString())' "$DB_URL" "$APP_PW" > .state/app-database-url
 (cd "$REPO/backend" && DATABASE_URL="$DB_URL" node scripts/create-first-admin.ts \
   --email admin@e2e.test --first Avery --last Admin --app-url http://127.0.0.1:4173) | tail -1 > .state/admin-invite
 (cd "$REPO/frontend" && npx vite build --logLevel warn)
