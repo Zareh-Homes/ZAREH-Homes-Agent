@@ -2,6 +2,14 @@
 
 Versions are the database migration level. The app checks for it at `/readyz`.
 
+## 0.18.1 (2026-10-19): Pilot acceptance checks
+
+- **Migration 019:** `LEASE_SETTLEMENT` policy (off): no lease CDA or payment out of trust until counsel signs off; duplicate commission receipt references refused.
+- **Migration 020:** the restricted app login can take the row locks its triggers need (voiding a CDA failed in production; found by the staging rehearsal). Records stay unchangeable through their triggers.
+- Bank → Available funds screen; partial receipts and payout statuses explained; "Outside the pilot" notices; readable trade record and CDA messages; finalize after a void issues a new CDA.
+- Browser tests 21 → 31 (CDA, payouts, partial receipts, lease gate, trade record), run as the restricted login; CI `staging` job rehearses an HTTPS production deployment, then checks cookies, permissions, logs, audit and backup restore.
+- Docs: `pilot-scope.md`, `staff-onboarding.md`, `pilot-test-checklist.md`.
+
 ## 0.18.0 (2026-10-19): Staff application, leases, browser tests
 
 Not released to production. Staging-ready only.

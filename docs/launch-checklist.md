@@ -5,11 +5,12 @@ Three separate gates. Pass each one before starting the next.
 ## 1. Technical staging
 
 - [x] Migrations apply from scratch through `migrate.sh`; a re-run changes nothing; a changed file is refused
-- [x] All automated suites green (backend 184, migration 48, frontend 34, commission engine 6, browser end-to-end 21)
+- [x] All automated suites green (backend 185, migration 48, frontend 34, commission engine 6, browser end-to-end 31)
 - [x] Encrypted backup → restore → manifest comparison passed
 - [x] Production config check refuses unsafe settings; the app refuses superuser
 - [x] CI green on GitHub: all six jobs on runs #8 (`4fe3f77`), #8 re-run, and #9 (`5e35c52`)
 - [x] Docker images built, started against a TLS database as the restricted login, and scanned (CI `images` job)
+- [x] Staging deployment rehearsed in CI on every push (HTTPS, TLS database, restricted login, cookies, logs, audit, backup restore)
 - [ ] Staging host provisioned: TLS certificate, managed PostgreSQL 16 with PITR, secret store, uptime + log alerts
 - [x] Dependency advisories: backend, frontend and migration audits all clean (CI enforces it)
 

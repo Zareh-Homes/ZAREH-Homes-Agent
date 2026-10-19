@@ -39,11 +39,21 @@ The web app (`frontend/`) now covers the daily work, on the existing API. It sho
 | Admin | People and invitations, roles, suspend/reactivate, two-factor reset; broker of record; financial policies; trust and operating accounts; commission plans; business calendar |
 | Records | Printable Trade Record Sheet with every correction and initials |
 
-**Browser tests:** 21 Playwright tests (`e2e/`) run the built app in Chromium against the real API in session mode (cookies, CSRF, MFA) and a freshly migrated database, in CI on every push (`e2e` job, report and screenshots kept 30 days). They cover: invitation → password → two-factor; wrong password, wrong code and reused recovery code refused; admin inviting each role; sign-out ending the server session; deal entry with field errors; upload → send back → re-upload → approve; trade record prepare and print; agent and compliance permissions in the screens *and* at the API (403, CSRF, ignored client-supplied identity); broker of record designation; trust account; deposit; bank import; segregation of duties (importer can't verify); reconciliation prepared by one person and signed by the broker of record; network-error and not-found screens; phone layout with no sideways scrolling on eight screens.
+**Browser tests:** 31 Playwright tests (`e2e/`), Chromium, against the real API running as the **restricted database login** and a freshly migrated database, in CI on every push (`e2e` job). They cover: invitation → password → two-factor; wrong password, wrong code and reused recovery code refused; each role invited; sign-out ends the server session; deal entry with field errors; upload → send back → approve; trade record prepare, print, and a readable refusal to sign an incomplete sheet; permissions on screen and at the API (403, CSRF, ignored client identity); broker of record; deposit; bank import with segregation of duties; reconciliation signed by the broker of record; **CDA preview, finalize with a double-click (one CDA), lawyer copy, void and reissue (-R1)**; operating account and an attested obligations figure; **commission received in two parts (duplicate and over-receipt refused, payouts wait for the rest)**; bank verification; **payout approval (not by the admin), cancellation, re-approval, payment recorded once despite a double-click, returned payment and its replacement**; the lease gate; error screens; phone layout.
 
-Bugs the browser tests found and fixed: a mistyped two-factor code or current password sent you back to sign-in (every 401 was treated as an ended session); the deal trust tab hid deposit recording (wrong deposit-holder value); a nested `<main>` on the dashboard; the header overflowing at 1366px.
+**Staging rehearsal (CI job `staging`, `ops/staging-rehearsal.sh`):** the production images with a TLS-only database and the restricted login, HTTPS in front (HTTP redirected), the first admin created with the script inside the image, the whole browser suite over HTTPS, then: Secure / HttpOnly / SameSite=Strict session cookie and HSTS; the app login can't alter the ledger or audit log; no password, authenticator secret, recovery code or ID number in the API log or stored in clear; sign-ins and failures audited; an encrypted backup restored into a scratch database and compared. Green on runs #22 and #23.
 
-**Not covered by browser tests yet:** finalizing a CDA and the payout approve → paid path (covered by API tests `closing.int`, `money-controls.int`, `uat.int`), offers, leases, unclaimed money and the RECO filing screens. Partial payouts stay unsupported (sales-only pilot).
+**Real bugs these checks found and fixed:**
+- **Production-only:** under the restricted login, voiding a CDA (and trade record signing, payout events, incident and recovery steps) failed with "permission denied": database triggers lock rows the login couldn't update. Migration 020; a test now checks every lock a trigger takes.
+- After voiding a CDA, "Finalize" replayed the voided CDA (same request key) instead of issuing the correction.
+- A mistyped two-factor code or current password signed you out; the deposit button was hidden on our-brokerage deals; header overflow at 1366px; raw JSON in trade record messages and CDA warnings.
+- The same commission cheque could be recorded twice for one closing (now refused, migration 019).
+
+**Pilot guards (migration 019, `docs/pilot-scope.md`):**
+- **Lease settlement is off** (`LEASE_SETTLEMENT`): a lease's CDA and payments out of trust are refused until counsel signs off on commission from first and last month's rent, the tenant's entitlement to that deposit (RTA s.106), and the signed commission agreement. Receiving and refunding the deposit stay allowed.
+- **Partial payouts** aren't supported: with part of the commission in, payouts wait and approval is refused with that reason. Partial receipts are recorded.
+- Deals needing an unsupported workflow (lease settlement, builder-held deposit, outside referral) say "Outside the pilot".
+- New screen: Bank → Available funds (what the database checks before approving a payout; obligations entered under the accountant's procedure and attested by a second person). Without it no payout could be approved from the app.
 
 **Before a controlled pilot (outside this code):**
 1. Hosting: managed PostgreSQL 16 with PITR, container host, TLS, secret store, alerting.
@@ -142,8 +152,8 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 
 | Suite | Total | Passed | Failed | Skipped |
 |---|---|---|---|---|
-| Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 184 | 184 | 0 | 0 |
-| Browser end-to-end (Playwright, Chromium, real API + database) | 21 | 21 | 0 | 0 |
+| Backend (real PostgreSQL 16, migrated by `migrate.sh`) | 185 | 185 | 0 | 0 |
+| Browser end-to-end (Playwright, Chromium, real API as the restricted login) | 31 | 31 | 0 | 0 |
 | Lone Wolf migration (with database) | 48 | 48 | 0 | 0 |
 | Frontend (Node runner 10 + vitest 24) | 34 | 34 | 0 | 0 |
 | Commission engine | 6 | 6 | 0 | 0 |
@@ -158,7 +168,7 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 
 **Not tested:**
 - No penetration test.
-- Browser tests don't yet cover CDA finalize and payouts (API tests do).
+- No test on a real staging host (none exists yet); the CI rehearsal stands in for it.
 - No test on real Lone Wolf data.
 - UAT A–L are automated, not run by staff (`docs/uat.md`).
 
