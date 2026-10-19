@@ -147,6 +147,13 @@ jobs:
       - run: npm ci && npx playwright install --with-deps chromium
         working-directory: e2e
       - run: ops/staging-rehearsal.sh zareh-api:ci zareh-web:ci
+      - name: Local trial (ops/local-trial.sh) starts and hands out the first sign-in link
+        run: |
+          out=$(ops/local-trial.sh)
+          echo "$out"
+          grep -q 'http://localhost:8080/accept-invite#token=' <<< "$out"
+          curl -fsS http://localhost:8080/readyz
+          ops/local-trial.sh reset
       - name: Rehearsal report, screenshots and container logs
         if: always()
         uses: actions/upload-artifact@v4

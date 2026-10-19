@@ -1,6 +1,7 @@
 # Local development and staging rehearsal. Not a production deployment: production uses a managed
 # PostgreSQL with TLS, the deployment's secret store, and the restricted application login.
-#   cp ops/env/development.env.example .env && docker compose up --build
+#   Trial with real sign-in and two-factor: ops/local-trial.sh (writes .env, starts, prints the first sign-in link)
+#   Developer setup: cp ops/env/development.env.example .env && docker compose up --build
 services:
   db:
     image: postgres:16
@@ -22,6 +23,9 @@ services:
     build: { context: ., dockerfile: backend/Dockerfile }
     depends_on: { migrate: { condition: service_completed_successfully } }
     env_file: .env
+    # Local only: the image's default command first runs the production configuration check, which (rightly)
+    # refuses this setup (no TLS, http, not NODE_ENV=production). Deployments keep the default command.
+    command: ["node", "src/server.ts"]
     environment:
       DATABASE_URL: postgresql://zareh_app_login:${APP_DB_PASSWORD:?set in .env}@db:5432/zareh
     volumes: [uploads:/var/lib/zareh/uploads]
