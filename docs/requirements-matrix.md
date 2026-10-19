@@ -240,7 +240,7 @@ This is the one authoritative matrix for the completion directive (§1–16). St
 | Incident response | Done | `docs/deployment.md` |
 | Fail-closed feature flags | Done | Database policies |
 | Release notes | Done | `CHANGELOG.md` |
-| Regression gates | Done | `.github/workflows/ci.yml`: six jobs (backend, frontend, migration, commission engine, images, secrets) |
+| Regression gates | Done | `.github/workflows/ci.yml`: six jobs (backend, frontend, migration, commission engine, images, secrets); green on runs #8, #8 re-run, #9 |
 | Audit retention and export | Done | `/api/audit/export` |
 | Cutover checklist | Done | `docs/launch-checklist.md` |
 | Security review checklist; external items flagged | Done | `docs/security-review-checklist.md` |

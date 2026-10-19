@@ -8,7 +8,7 @@ Three separate gates. Pass each one before starting the next.
 - [x] All automated suites green (backend 168, migration 48, frontend 34, commission engine 6)
 - [x] Encrypted backup → restore → manifest comparison passed
 - [x] Production config check refuses unsafe settings; the app refuses superuser
-- [ ] CI green on GitHub on the final commit: all six jobs, re-run to rule out flaky failures
+- [x] CI green on GitHub: all six jobs on runs #8 (`4fe3f77`), #8 re-run, and #9 (`5e35c52`)
 - [x] Docker images built, started against a TLS database as the restricted login, and scanned (CI `images` job)
 - [ ] Staging host provisioned: TLS certificate, managed PostgreSQL 16 with PITR, secret store, uptime + log alerts
 - [x] Dependency advisories: backend, frontend and migration audits all clean (CI enforces it)

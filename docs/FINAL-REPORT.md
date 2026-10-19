@@ -126,7 +126,7 @@ No secrets are needed in chat. Each item goes into the host's secret store.
 - `b74c2e6`: the API image crashed on its first database query (OpenSSL missing at build time). A real deployment bug.
 - `4fe3f77`: 10 high advisories inside the npm bundled with the Node base image. npm was removed from the runtime image.
 
-**Result:** run #8 on `4fe3f77` passed all six jobs (backend, frontend, migration, commission engine, images, secrets). The same commit was re-run to check for intermittent failures; see the launch checklist for the re-run result.
+**Result:** run #8 on `4fe3f77` passed all six jobs (backend, frontend, migration, commission engine, images, secrets). The same commit was re-run to check for intermittent failures and passed again, and run #9 on `5e35c52` (docs only) passed too: three green runs in a row.
 
 ## F. Readiness
 
