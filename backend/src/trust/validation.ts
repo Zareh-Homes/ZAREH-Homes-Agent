@@ -13,7 +13,7 @@ export { isUuid };
 // Cash and virtual currency are recorded as received; they open FINTRAC large-transaction report tasks
 export const DEPOSIT_METHODS = ["BANK_DRAFT", "WIRE", "CERTIFIED_CHEQUE", "CASH", "VIRTUAL_CURRENCY"] as const;
 export const DISBURSEMENT_METHODS = ["CHEQUE", "EFT", "WIRE", "BANK_DRAFT"] as const;
-export const PAYEE_TYPES = ["OUR_BROKERAGE", "COOP_BROKERAGE", "LAWYER", "PAYOR_REFUND"] as const;
+export const PAYEE_TYPES = ["OUR_BROKERAGE", "COOP_BROKERAGE", "LAWYER", "LANDLORD", "PAYOR_REFUND"] as const;
 export const AUTHORIZATION_METHODS = ["CLOSING_COMPLETED", "MUTUAL_RELEASE", "COURT_ORDER"] as const;
 export const HOLD_REASONS = ["DISPUTED", "UNCLAIMED"] as const;
 
@@ -28,6 +28,7 @@ export const PAYEE_ENTRY_TYPE = {
   OUR_BROKERAGE: "DISBURSEMENT_TO_GENERAL",
   COOP_BROKERAGE: "DISBURSEMENT_TO_COOP",
   LAWYER: "DISBURSEMENT_TO_LAWYER",
+  LANDLORD: "DISBURSEMENT_TO_LANDLORD",
   PAYOR_REFUND: "REFUND_TO_PAYER",
 } as const satisfies Record<PayeeType, string>;
 

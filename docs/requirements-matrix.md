@@ -98,7 +98,7 @@ This is the one authoritative matrix for the completion directive (§1–16). St
 | CDA states the commission payable to our brokerage only | Done | `cda-template.ts` |
 | Calculation separate from accounting and approvals | Done | `closing/calculate.ts` (pure) vs payouts vs `accounting/journal.ts` |
 | Cancelled transactions | Done | Termination + CDA void |
-| Lease transactions | **Not done** | Lease CDAs are refused; leases need their own remuneration rules |
+| Lease transactions | Done | Migration 018; `closing/calculate.ts`; `closing-calculate.test` lease tests, `uat.int` M |
 | Partial payouts (paying an agent part of a payout) | **Not done** | Each payout is paid in full or not at all |
 | Disputes | Partial | Deposit holds/disputes done; commission disputes are handled as holds plus notes, with no separate workflow |
 
@@ -114,7 +114,7 @@ This is the one authoritative matrix for the completion directive (§1–16). St
 | Condition deadlines and warnings | Done | `DealCondition.dueAt`; dashboards |
 | Delayed closings | Done | Close-date amendment |
 | Disputed deposits | Done | Holds (`trust-ledger.int`) |
-| Commercial and lease workflows | Partial | Commercial uses the sale path; leases not supported (above) |
+| Commercial and lease workflows | Done (residential and commercial leases share the lease path) | `uat.int` M |
 | Listing / buyer representation records | Done | `RepresentationAgreement` (016) |
 
 ## §7 TRESA

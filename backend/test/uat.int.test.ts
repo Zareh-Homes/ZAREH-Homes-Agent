@@ -5,6 +5,7 @@
  *   A  Buyer-side closing: deposit held by the listing brokerage; commission received, verified, approved, paid, confirmed
  *   G  Returned agent payment, correction and replacement payment
  *   F  Failed conditional deal: deposit released only with a mutual release on record
+ *   M  Landlord-side lease: rent deposit in trust, commission from it, the balance to the landlord
  *
  * Needs DATABASE_URL; skipped otherwise.
  */
@@ -131,6 +132,41 @@ describe("UAT workflows", { skip }, () => {
     assert.equal(final.payouts[0].paymentConfirmed, true);
     assert.deepEqual(final.payouts[0].history.map((h: { kind: string }) => h.kind), ["APPROVED", "PAID", "PAYMENT_REVERSED", "PAID"]);
     assert.equal(await prisma.payoutEvent.count({ where: { payoutId: payout.id, kind: "PAID" } }), 2);
+  });
+
+  test("M: landlord-side lease — first and last month's rent in trust, commission applied, the balance to the landlord", async () => {
+    const created = await ok(as(u.agent, "POST", "/api/deals", {
+      side: "LANDLORD", streetAddress: "41 Ridge Rd", unit: "Upper", city: "Stoney Creek", salePrice: "3000", offerDate: "2026-11-02",
+      closeDate: "2026-11-15", depositAmount: "6000", trustDepositHolder: "OUR_BROKERAGE", totalGci: "3000",
+      coopCommission: "1500", coopBrokerageName: "Harbourfront Realty Inc.",
+      agents: [{ userId: u.agent, role: "PRIMARY", splitPct: 85 }],
+      parties: [{ role: "LANDLORD", fullName: "Rita Olsen", email: "rita@example.test" }, { role: "TENANT", fullName: "Kofi Mensah" },
+        { role: "COOP_BROKERAGE", fullName: "Harbourfront Realty Inc." }],
+    }), 201);
+    const dealId = created.deal.id;
+    // Lease paperwork, and no FINTRAC identification slots (FINTRAC covers purchases and sales)
+    const codes = created.slots.map((x: { code: string }) => x.code).sort();
+    assert.deepEqual(codes, ["AGREEMENT_TO_LEASE", "LEASE_LISTING"]);
+    // Only a broker or admin changes commission figures after the deal is opened, and it's recorded
+    assert.equal((await as(u.agent, "POST", `/api/deals/${dealId}/amendments`, {
+      field: "COOP_COMMISSION", newValue: "1400", reference: "Form 320" })).statusCode, 403);
+
+    const deposit = await ok(as(u.broker, "POST", "/api/trust/deposits", {
+      dealId, trustAccountId: trust, amount: "6000.00", method: "CERTIFIED_CHEQUE", dateReceived: "2026-11-03", dateDeposited: "2026-11-03",
+      payorName: "Kofi Mensah", bankReference: "CHQ-7781" }), 201);
+    await attestCleared(app, u.broker, [deposit.entry.id]);
+    await ok(as(u.agent, "POST", `/api/deals/${dealId}/firm`));
+    await ok(as(u.agent, "POST", `/api/deals/${dealId}/close`, { closedOn: "2026-11-15" }));
+
+    const cda = await ok(as(u.broker, "POST", `/api/deals/${dealId}/closing/finalize`), 201);
+    assert.deepEqual(cda.computation.payer, { kind: "LANDLORD", name: "Rita Olsen" });
+    // Landlord owes ($3,000 + $1,500) × 1.13 = $5,085: all of it from the $6,000 deposit, $915 back to the landlord
+    assert.deepEqual(cda.trustEntries.map((e: { entryType: string; amount: string }) => [e.entryType, e.amount]), [
+      ["DISBURSEMENT_TO_COOP", "1695.00"], ["DISBURSEMENT_TO_GENERAL", "3390.00"], ["DISBURSEMENT_TO_LANDLORD", "915.00"]]);
+    const ledger = await ok(as(u.broker, "GET", `/api/deals/${dealId}/trust`));
+    assert.equal(ledger.balances[0].balance, "0.00");
+    const html = (await as(u.broker, "GET", `/api/deals/${dealId}/closing/cda?audience=lawyer`)).body;
+    assert.ok(html.includes("To: Landlord") && html.includes("Lease commencement") && html.includes("rita@example.test"));
   });
 
   test("F: a failed conditional deal — the deposit goes back only with the signed mutual release on record", async () => {

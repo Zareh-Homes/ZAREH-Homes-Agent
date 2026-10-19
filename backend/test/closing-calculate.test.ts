@@ -277,3 +277,68 @@ test("plan: a deal split that differs from the agent's plan is flagged", () => {
   input.agents = [{ ...JANE, planSplitBps: 7000 }];
   assert.ok(computeClosing(input, "Test Brokerage Inc.").warnings.includes("SPLIT_DIFFERS_FROM_PLAN:Jane Smith:80% on the deal, 70% in the plan"));
 });
+
+// ── Leases ───────────────────────────────────────────────────────────────────
+
+/**
+ * Landlord-side residential lease at $3,000/month. We hold first and last month's rent ($6,000).
+ * Our commission: one month's rent $3,000; co-op: half a month, $1,500. Landlord owes $4,500 × 1.13 = $5,085.00.
+ */
+function landlordLease(side: "LANDLORD" | "TENANT" = "LANDLORD"): ClosingInput {
+  const base = toronto(6_000, side === "LANDLORD" ? "OUR_BROKERAGE" : "COOP_BROKERAGE");
+  return {
+    ...base,
+    deal: { ...base.deal, side, salePrice: $(3_000), sellers: ["Rita Olsen"], buyers: ["Kofi Mensah"], mlsNumber: null },
+    baseGci: side === "LANDLORD" ? $(3_000) : $(1_500),
+    coopCommission: side === "LANDLORD" ? $(1_500) : 0,
+    coopBrokerage: side === "LANDLORD" ? "Harbourfront Realty Inc." : "Lakeshore Realty Ltd.",
+    closingLawyer: null,
+    landlord: { name: "Rita Olsen", email: "rita@example.test", phone: null },
+    fintrac: { total: 0, outstanding: [] }, // FINTRAC's real estate record-keeping covers purchases and sales, not leases
+  };
+}
+
+test("landlord-side lease: commission comes out of the rent deposit, the balance goes to the landlord", () => {
+  const c = computeClosing(landlordLease(), BROKERAGE);
+  assert.deepEqual(c.payer, { kind: "LANDLORD", name: "Rita Olsen" });
+  assert.equal(c.incoming.totalPayable, $(5_085));
+  assert.deepEqual(c.trust.distributions.map((d) => [d.entryType, d.payee, d.amount]), [
+    ["DISBURSEMENT_TO_COOP", "Harbourfront Realty Inc.", $(1_695)],
+    ["DISBURSEMENT_TO_GENERAL", `${BROKERAGE} (general account)`, $(3_390)],
+    ["DISBURSEMENT_TO_LANDLORD", "Rita Olsen", $(915)],
+  ]);
+  assert.equal(c.trust.balanceAfter, 0);
+  assert.equal(c.wiresTotal, 0);
+  // Agent: 80% of $3,000 = $2,400 + HST $312, less fees $200 + HST $26
+  assert.equal(c.agents[0]!.payout, $(2_486));
+
+  const html = renderCda(c, TEST_BROKERAGE, { audience: "lawyer", status: "DRAFT", issuedOn: "2026-11-30" });
+  assert.ok(html.includes("Lease commencement") && html.includes("To: Landlord") && html.includes("Balance due TO landlord"));
+  assert.ok(html.includes("Landlord(s)") && html.includes("Tenant(s)") && !html.includes("Sale price"));
+});
+
+test("landlord-side lease with a deposit short of the commission: the landlord pays the rest to the brokerage", () => {
+  const input = landlordLease();
+  input.trust = { ...input.trust, balance: $(3_000), cleared: $(3_000), deposits: [{ ...input.trust.deposits[0]!, amount: $(3_000) }] };
+  input.deal = { ...input.deal, expectedDeposit: $(3_000) };
+  const c = computeClosing(input, BROKERAGE);
+  assert.equal(c.trust.balanceDueFromLawyer, $(2_085));
+  assert.deepEqual(c.wires.map((w) => w.amount), [$(2_085)]);
+  assert.ok(!c.trust.distributions.some((d) => d.entryType === "DISBURSEMENT_TO_LANDLORD"));
+});
+
+test("tenant-side lease: the listing brokerage pays us, as on a buyer-side sale", () => {
+  const c = computeClosing(landlordLease("TENANT"), BROKERAGE);
+  assert.deepEqual(c.payer, { kind: "COOPERATING_BROKERAGE", name: "Lakeshore Realty Ltd." });
+  assert.equal(c.trust.distributions.length, 0);
+  assert.equal(c.wiresTotal, $(1_695));
+});
+
+test("leases: no landlord on the deal, no CDA; and FINTRAC records that do exist must still be approved", () => {
+  assert.equal(auditCode(() => computeClosing({ ...landlordLease(), landlord: null }, BROKERAGE)), "LANDLORD_MISSING");
+  assert.equal(auditCode(() => computeClosing({ ...landlordLease(), fintrac: { total: 1, outstanding: ["ID record: PENDING"] } }, BROKERAGE)),
+    "FINTRAC_NOT_APPROVED");
+  // A sale still needs FINTRAC records
+  assert.equal(auditCode(() => computeClosing({ ...toronto(60_000, "OUR_BROKERAGE"), fintrac: { total: 0, outstanding: [] } }, BROKERAGE)),
+    "FINTRAC_NOT_APPROVED");
+});

@@ -1,4 +1,4 @@
-# UAT scenarios A–L
+# UAT scenarios A–M
 
 Each scenario below is an automated test that runs on a database built from scratch by `brokerage-db/migrate.sh`, against the real HTTP API with real database triggers. The data is synthetic test data, not brokerage records.
 
@@ -26,6 +26,7 @@ Result as of 2026-10-18 (commit `c435d7d` plus docs): backend 168/168 passed; mi
 | I | Corrected CDA | The old CDA is voided with a reason and the new one reissued. Earlier approvals and payments are kept and carried forward. A change to trust amounts must reverse those distributions first. | Passed | `closing.int.test.ts` "void and reissue…" |
 | J | FINTRAC review with missing or rejected evidence | The reviewer marks the record Needs Revision with a comment, and the agent is notified. Re-upload, then Approved locks it. No CDA until FINTRAC is approved. A name mismatch gives a warning. | Passed | `compliance.int.test.ts` "full lifecycle…", "FINTRAC upload warns…", `closing.int.test.ts` "no CDA until the deal is FINTRAC approved" |
 | K | Broker of record reviews a completed TRS | The TRS is generated from the deal and corrected with initials. The agent signs once the deal is firm, then the BoR signs. An agent can't sign as BoR. Open TRESA/FINTRAC findings block the BoR signature. | Passed | `deal-lifecycle.int.test.ts` "trade record sheet…", `obligations.int.test.ts` |
+| M | Landlord-side lease | First and last month's rent ($6,000) is held in trust. The commission plus co-op ($5,085 incl. HST) is paid from it, and $915 goes to the landlord. No FINTRAC slots; the lease forms are on the checklist. An agent can't change commission figures. The CDA is addressed to the landlord. | Passed | `uat.int.test.ts` "M", `closing-calculate.test.ts` lease tests |
 | L | Lone Wolf migration and reconciliation | A dry run writes nothing. Bad rows are rejected with reasons, and trust is all-or-nothing per deal. A re-run is idempotent. An interrupted run leaves nothing half-written. The written rows are read back and compared (exit 4 on a mismatch). | Passed **on fixture exports**. Not yet run on real Lone Wolf exports. | `migration/tests/test_end_to_end.py`, `test_interrupted.py`, `test_parsing.py` |
 
 ## Still needs a person

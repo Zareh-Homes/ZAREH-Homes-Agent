@@ -145,6 +145,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       FROM (SELECT sales_tax_on(${deal.province}, ${closeDate}::date) AS t) x WHERE (t).province IS NOT NULL`;
 
   const byRole = (role: string) => deal.parties.filter((p) => p.role === role);
+  const lease = deal.side === "LANDLORD" || deal.side === "TENANT";
   const lawyerRole = deal.side === "BUYER" ? "BUYER_LAWYER" : "SELLER_LAWYER";
   const lawyer = byRole(lawyerRole)[0];
 
@@ -163,8 +164,9 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       salePrice: cents(deal.salePrice),
       expectedDeposit: cents(deal.depositAmount),
       trustDepositHolder: deal.trustDepositHolder,
-      sellers: byRole("SELLER").map((p) => p.fullName),
-      buyers: byRole("BUYER").map((p) => p.fullName),
+      // On a lease, the landlord(s) and tenant(s) take the seller and buyer lines
+      sellers: byRole(lease ? "LANDLORD" : "SELLER").map((p) => p.fullName),
+      buyers: byRole(lease ? "TENANT" : "BUYER").map((p) => p.fullName),
     },
     baseGci: cents(deal.totalGci),
     ...(tax ? { hstRate: tax.rateBps, taxName: tax.taxName } : {}),
@@ -175,6 +177,7 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       : null,
     agents,
     closingLawyer: lawyer ? { name: lawyer.fullName, email: lawyer.email, phone: lawyer.phone } : null,
+    landlord: byRole("LANDLORD")[0] ? { name: byRole("LANDLORD").map((p) => p.fullName).join(" and "), email: byRole("LANDLORD")[0]!.email, phone: byRole("LANDLORD")[0]!.phone } : null,
     trust: {
       accountId: withFunds[0]?.trustAccountId ?? null,
       balance: withFunds.reduce((s, b) => s + numericToCents(b.balance), 0),
@@ -263,7 +266,7 @@ export interface FinalizeResult {
   replayed: boolean;
 }
 
-const METHOD = { DISBURSEMENT_TO_COOP: "EFT", DISBURSEMENT_TO_GENERAL: "EFT", DISBURSEMENT_TO_LAWYER: "WIRE" } as const;
+const METHOD = { DISBURSEMENT_TO_COOP: "EFT", DISBURSEMENT_TO_GENERAL: "EFT", DISBURSEMENT_TO_LAWYER: "WIRE", DISBURSEMENT_TO_LANDLORD: "EFT" } as const;
 
 export async function finalizeClosing(
   deps: ClosingDeps,

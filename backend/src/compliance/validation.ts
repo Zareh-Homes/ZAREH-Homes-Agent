@@ -48,6 +48,10 @@ export interface CreateDealInput {
   trustDepositHolder: DepositHolder;
   totalGci: Cents;
   coopBrokerageName: string | null;
+  /** Listing side: the co-operating brokerage's commission, before tax */
+  coopCommission: Cents;
+  outsideReferralPayee: string | null;
+  outsideReferralPct: number | null;
   agents: DealAgentInput[];
   parties: PartyInput[];
 }
@@ -77,7 +81,7 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
   const r = new Reader(body, [
     "side", "status", "streetAddress", "unit", "city", "mlsNumber", "listingId", "salePrice", "offerDate",
     "conditionsDueDate", "closeDate", "depositAmount", "depositDueDate", "trustDepositHolder", "totalGci",
-    "coopBrokerageName", "agents", "parties",
+    "coopBrokerageName", "coopCommission", "outsideReferralPayee", "outsideReferralPct", "agents", "parties",
   ]);
   const agentReaders = r.objects("agents", ["userId", "role", "splitPct"], { min: 1, max: 4 });
   const partyReaders = r.objects("parties", ["role", "entityType", "fullName", "email", "phone", "representation"], { min: 1, max: 20 });
@@ -99,6 +103,9 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
     trustDepositHolder: r.oneOf("trustDepositHolder", HOLDERS),
     totalGci: r.amount("totalGci"),
     coopBrokerageName: r.optionalText("coopBrokerageName", 200),
+    coopCommission: r.has("coopCommission") ? r.amount("coopCommission") : 0,
+    outsideReferralPayee: r.optionalText("outsideReferralPayee", 200),
+    outsideReferralPct: r.has("outsideReferralPct") ? r.percent("outsideReferralPct", 0, 100) : null,
     agents: agentReaders.map((a) => ({
       userId: a.uuid("userId"),
       role: a.oneOf("role", AGENT_ROLES),
@@ -107,6 +114,15 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
     parties: partyReaders.map(readParty),
   };
 
+  r.check((input.outsideReferralPayee === null) === (input.outsideReferralPct === null), "outsideReferralPct",
+    "an outside referral needs both the payee and the percentage");
+  if (input.outsideReferralPct !== null) {
+    r.check(input.outsideReferralPct > 0 && input.outsideReferralPct < 100, "outsideReferralPct", "must be more than 0 and less than 100");
+  }
+  if (input.side && input.coopCommission > 0) {
+    r.check(input.side === "LISTING" || input.side === "LANDLORD", "coopCommission",
+      "is only for listing-side deals (sale listings and landlord-side leases); on other deals the listing brokerage pays the co-op");
+  }
   if (input.offerDate && input.closeDate) {
     r.check(input.closeDate >= input.offerDate, "closeDate", "cannot be before offerDate");
   }

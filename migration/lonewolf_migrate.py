@@ -786,6 +786,7 @@ DEPOSIT_WORDS = ("deposit", "receipt", "received")
 OUTFLOW_WORDS = ("disburse", "release", "paid", "payment", "payout", "transfer", "withdraw", "commission", "cheque to", "wire to")
 DISBURSEMENT_TYPES = [
     (("co-op", "coop", "cooperating", "co op"), "DISBURSEMENT_TO_COOP"),
+    (("landlord", "lessor"), "DISBURSEMENT_TO_LANDLORD"),
     (("lawyer", "solicitor", "law office", "law firm", "llp", "professional corporation"), "DISBURSEMENT_TO_LAWYER"),
     (("commission", "general", "transfer to brokerage", "earned", "brokerage"), "DISBURSEMENT_TO_GENERAL"),
 ]
@@ -1059,7 +1060,10 @@ def preflight(engine: Engine, broker_email: str, trust_account: str | None) -> t
         for name, needed in (('"SalesTaxRate"', "014 (commission engine)"), ('"TradeRecordSheet"', "015 (trade lifecycle)"),
                              ('"ReceiptOfFundsRecord"', "016 (TRESA and FINTRAC)")):
             if conn.execute(text("SELECT to_regclass(:t)"), {"t": name}).scalar() is None:
-                raise StructuralError(f"database is missing migration {needed}; run the schema migrations through 016 first")
+                raise StructuralError(f"database is missing migration {needed}; run the schema migrations through 018 first")
+        if not conn.execute(text("SELECT EXISTS (SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                                 "WHERE t.typname = 'TrustEntryType' AND e.enumlabel = 'DISBURSEMENT_TO_LANDLORD')")).scalar():
+            raise StructuralError("database is missing migration 018 (leases); run the schema migrations through 018 first")
         if not conn.execute(text("SELECT is_broker_of_record(CAST(:b AS uuid), (now() AT TIME ZONE 'America/Toronto')::date)"),
                             {"b": str(broker["id"])}).scalar():
             raise StructuralError(f"{broker_email} must be designated broker of record (or substitute): they attest the migrated trust history")
@@ -1208,7 +1212,7 @@ def insert_trust(engine: Engine, trust: dict[str, list[TrustEntry]], deal_ids: d
                             ledger.warn("trust", e.row_number, e.legacy_id,
                                         f"receipt number {'%s already in use' % e.receipt_number if taken else 'missing'}; assigned #{receipt}", e.row)
                     authorization, auth_ref = None, None
-                    if e.entry_type in {"DISBURSEMENT_TO_GENERAL", "DISBURSEMENT_TO_COOP", "DISBURSEMENT_TO_LAWYER"}:
+                    if e.entry_type in {"DISBURSEMENT_TO_GENERAL", "DISBURSEMENT_TO_COOP", "DISBURSEMENT_TO_LAWYER", "DISBURSEMENT_TO_LANDLORD"}:
                         authorization = "CLOSING_COMPLETED" if deal_status == "CLOSED" else "MUTUAL_RELEASE"
                         auth_ref = f"Migrated from Lone Wolf entry {e.legacy_id}"
                     elif e.entry_type == "REFUND_TO_PAYER":

@@ -48,6 +48,8 @@ const SIDE_LABEL: Record<string, string> = {
   LISTING: "Listing Brokerage",
   BUYER: "Buyer's (Co-operating) Brokerage",
   DUAL: "Listing and Buyer's Brokerage (multiple representation)",
+  LANDLORD: "Listing Brokerage (lease, landlord's brokerage)",
+  TENANT: "Tenant's (Co-operating) Brokerage (lease)",
 };
 
 function taxedRow(label: string, t: Taxed, note = ""): string {
@@ -94,16 +96,21 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
   const d = c.deal;
   const tax = c.taxName ?? "HST";
   const address = `${d.unit ? `${d.unit} – ` : ""}${d.streetAddress}, ${d.city}, ${PROVINCES[d.province ?? "ON"] ?? d.province}`;
-  const toLawyer = c.payer.kind === "SELLER_LAWYER";
+  const lease = d.side === "LANDLORD" || d.side === "TENANT";
+  const toLandlord = c.payer.kind === "LANDLORD";
+  // The payer on our side of the trade: the seller's lawyer on a sale, the landlord on a landlord-side lease
+  const toLawyer = c.payer.kind === "SELLER_LAWYER" || toLandlord;
+  const who = toLandlord ? "landlord" : "lawyer";
   const appliesDeposit = c.trust.distributions.length > 0 || (toLawyer && d.trustDepositHolder === "OUR_BROKERAGE");
-  const dueLabel = c.trust.balanceDueToLawyer > 0 ? "Balance due TO lawyer" : toLawyer ? "Balance due FROM lawyer" : "Amount due from listing brokerage";
+  const dueLabel = c.trust.balanceDueToLawyer > 0 ? `Balance due TO ${who}` : toLawyer ? `Balance due FROM ${who}` : "Amount due from listing brokerage";
   const dueAmount = c.trust.balanceDueToLawyer > 0 ? c.trust.balanceDueToLawyer : c.wiresTotal;
   const holderLabel: Record<string, string> = {
     OUR_BROKERAGE: b.legalName, COOP_BROKERAGE: "the co-operating brokerage", LAWYER: "a lawyer in trust", BUILDER: "the builder / trustee",
   };
 
-  const contact = c.closingLawyer
-    ? `<strong>${esc(c.closingLawyer.name)}</strong>${c.closingLawyer.email ? `<br>${esc(c.closingLawyer.email)}` : ""}${c.closingLawyer.phone ? `<br>${esc(c.closingLawyer.phone)}` : ""}`
+  const person = toLandlord ? c.landlord ?? null : c.closingLawyer;
+  const contact = person
+    ? `<strong>${esc(person.name)}</strong>${person.email ? `<br>${esc(person.email)}` : ""}${person.phone ? `<br>${esc(person.phone)}` : ""}`
     : "—";
 
   const depositRows = c.trust.deposits.map((dep) =>
@@ -211,18 +218,18 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
 
   <div class="parties">
     <div class="box">
-      <h4>${toLawyer ? "To: Closing lawyer (Seller's solicitor)" : "To: Listing brokerage (commission payer)"}</h4>
+      <h4>${toLandlord ? "To: Landlord" : toLawyer ? "To: Closing lawyer (Seller's solicitor)" : "To: Listing brokerage (commission payer)"}</h4>
       ${toLawyer ? contact : `<strong>${esc(c.payer.name)}</strong>${c.closingLawyer ? `<div class="note">Closing lawyer: ${esc(c.closingLawyer.name)}</div>` : ""}`}
     </div>
     <div class="box">
       <h4>Re: Transaction</h4>
       <dl>
         <dt>Property</dt><dd>${esc(address)}</dd>
-        <dt>Closing date</dt><dd>${esc(longDate(d.closeDate))}</dd>
-        <dt>Sale price</dt><dd>${money(d.salePrice)}</dd>
+        <dt>${lease ? "Lease commencement" : "Closing date"}</dt><dd>${esc(longDate(d.closeDate))}</dd>
+        <dt>${lease ? "Rent" : "Sale price"}</dt><dd>${money(d.salePrice)}</dd>
         ${d.mlsNumber ? `<dt>MLS®</dt><dd>${esc(d.mlsNumber)}</dd>` : ""}
-        <dt>Seller(s)</dt><dd>${esc(d.sellers.join(", ") || "—")}</dd>
-        <dt>Buyer(s)</dt><dd>${esc(d.buyers.join(", ") || "—")}</dd>
+        <dt>${lease ? "Landlord(s)" : "Seller(s)"}</dt><dd>${esc(d.sellers.join(", ") || "—")}</dd>
+        <dt>${lease ? "Tenant(s)" : "Buyer(s)"}</dt><dd>${esc(d.buyers.join(", ") || "—")}</dd>
         <dt>Our role</dt><dd>${esc(SIDE_LABEL[d.side] ?? d.side)} · Deal ${esc(d.dealNumber)}</dd>
       </dl>
     </div>
@@ -294,7 +301,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
       Amounts include ${tax} at ${pct(c.hstRate)}. This authorization replaces any earlier version for this transaction.</p>
     <div class="sign">
       <div>${esc(b.brokerOfRecord)}, Broker of Record – signature and date</div>
-      <div>${toLawyer ? `Seller(s) acknowledgment – ${esc(d.sellers.join(", ") || "signature")}` : `Received by ${esc(c.payer.name)}`}</div>
+      <div>${toLawyer ? `${toLandlord ? "Landlord" : "Seller(s)"} acknowledgment – ${esc(d.sellers.join(", ") || "signature")}` : `Received by ${esc(c.payer.name)}`}</div>
     </div>
   </section>
   ${internal}

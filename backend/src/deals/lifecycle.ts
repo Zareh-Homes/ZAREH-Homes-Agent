@@ -8,7 +8,7 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { loadActor, type Actor, type ResolveUserId } from "../auth.ts";
+import { loadActor, requireRole, type Actor, type ResolveUserId } from "../auth.ts";
 import { ConflictError, DomainError, ForbiddenError, fromDatabaseError, NotFoundError, RuleViolationError } from "../errors.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
@@ -173,15 +173,21 @@ export async function markClosed(prisma: PrismaClient, actor: Actor, dealId: str
   return lifecycleView(prisma, dealId);
 }
 
-const AMENDABLE = { SALE_PRICE: "salePrice", CLOSE_DATE: "closeDate", DEPOSIT_AMOUNT: "depositAmount", DEPOSIT_DUE_DATE: "depositDueDate" } as const;
+const AMENDABLE = {
+  SALE_PRICE: "salePrice", CLOSE_DATE: "closeDate", DEPOSIT_AMOUNT: "depositAmount", DEPOSIT_DUE_DATE: "depositDueDate",
+  TOTAL_GCI: "totalGci", COOP_COMMISSION: "coopCommission",
+} as const;
+/** Commission figures feed the CDA: only a managing broker or admin changes them after the deal is opened */
+const COMMISSION_FIELDS = new Set(["TOTAL_GCI", "COOP_COMMISSION"]);
 
 /** Records the amendment and applies it to the deal, in one step. */
 export async function amendDeal(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown, today: string) {
   await assertDealAccess(prisma, actor, dealId);
   const r = new Reader(body, ["field", "newValue", "effectiveDate", "reference", "documentFileId", "description"]);
-  const field = r.oneOf("field", ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE", "OTHER"] as const);
+  const field = r.oneOf("field", ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE", "TOTAL_GCI", "COOP_COMMISSION", "OTHER"] as const);
   const isDate = field === "CLOSE_DATE" || field === "DEPOSIT_DUE_DATE";
-  const isMoney = field === "SALE_PRICE" || field === "DEPOSIT_AMOUNT";
+  const isMoney = field === "SALE_PRICE" || field === "DEPOSIT_AMOUNT" || COMMISSION_FIELDS.has(field);
+  if (COMMISSION_FIELDS.has(field)) requireRole(actor, ["MANAGING_BROKER", "ADMIN"], "Changing a deal's commission figures");
   const newValue = isDate ? r.date("newValue") : isMoney ? formatCents(r.amount("newValue")) : r.text("newValue", 2000);
   const input = {
     effectiveDate: r.has("effectiveDate") ? r.pastDate("effectiveDate", today) : today,

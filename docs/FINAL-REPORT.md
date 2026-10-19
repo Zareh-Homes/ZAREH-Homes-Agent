@@ -46,7 +46,6 @@ The full list, with code location, commit and test for each item, is in `docs/re
 | Professional decisions (§C) | Not mine to make | Gated features stay off; some rules use the strict reading | Send §C to each professional |
 | Accounting connection (OAuth) and mapping UI | Provider not chosen; needs an app registration | Operating payouts need manual attestations | Pick QBO or Xero (§D) |
 | Independent penetration test | External | Unknown vulnerabilities | Commission one against staging |
-| Lease transactions | Different remuneration rules | Leases must be handled outside the system | Define lease commission rules, then build |
 | Partial payouts | Each payout is all-or-nothing | Paying an agent in instalments isn't possible | Build if you need it |
 | TRS print/PDF | JSON view only | BoR reviews on screen/export | Add a print template |
 | Alert wiring to a pager | Host not chosen | Silent failures | Wire the rules in `deployment.md` |
@@ -179,7 +178,7 @@ All data was synthetic test data in a local, throwaway database. The system has 
 2. **Professional decisions not made** (§C): co-op routing, commission trust account, accounting map, FINTRAC policies.
 3. **No real migration or parallel month.** Until both systems reconcile to the same bank balance, nothing is proven.
 4. **Security sign-off:** the independent pen test.
-5. **Lease transactions** aren't supported. Keep them on the current process if you do leases.
+5. ~~Lease transactions~~: supported as of 2026-10-19 (migration 018).
 
 Everything else is done, or is a configuration step.
 

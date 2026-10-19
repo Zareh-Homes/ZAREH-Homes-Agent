@@ -289,6 +289,9 @@ export async function createDeal(deps: ComplianceDeps, actor: Actor, input: Crea
           depositStatus: input.trustDepositHolder === "OUR_BROKERAGE" ? "AWAITING" : "HELD_ELSEWHERE",
           totalGci: formatCents(input.totalGci),
           coopBrokerageName: input.coopBrokerageName,
+          coopCommission: formatCents(input.coopCommission),
+          outsideReferralPayee: input.outsideReferralPayee,
+          outsideReferralPct: input.outsideReferralPct === null ? null : input.outsideReferralPct.toFixed(2),
           // Amounts are worked out by the commission engine at closing
           agents: { create: input.agents.map((a) => ({ ...a, grossShare: "0", netPayout: "0" })) },
           parties: { create: input.parties },

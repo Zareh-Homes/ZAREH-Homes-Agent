@@ -146,16 +146,19 @@ export async function requireOfferDisclosures(db: Db, dealId: string, offerId: s
 // ── Large cash and virtual currency: opened automatically on receipt ─────────
 
 export async function checkLargeTransaction(tx: Prisma.TransactionClient, entryId: string): Promise<string | null> {
-  const [e] = await tx.$queryRaw<{ transactionId: string; method: string; counterparty: string; receivedDate: string }[]>`
-    SELECT "transactionId"::text AS "transactionId", method::text AS method, counterparty, to_char("receivedDate", 'YYYY-MM-DD') AS "receivedDate"
-      FROM "TrustLedgerEntry" WHERE id = ${entryId}::uuid`;
-  if (!e || (e.method !== "CASH" && e.method !== "VIRTUAL_CURRENCY")) return null;
-  // The 24-hour rule: everything of the same kind from the same payer that day or the day before
+  const [e] = await tx.$queryRaw<{ transactionId: string; method: string; counterparty: string; receivedDate: string; side: string }[]>`
+    SELECT l."transactionId"::text AS "transactionId", l.method::text AS method, l.counterparty,
+           to_char(l."receivedDate", 'YYYY-MM-DD') AS "receivedDate", t.side::text AS side
+      FROM "TrustLedgerEntry" l JOIN "Transaction" t ON t.id = l."transactionId" WHERE l.id = ${entryId}::uuid`;
+  if (!e || (e.method !== "CASH" && e.method !== "VIRTUAL_CURRENCY") || e.side === "LANDLORD" || e.side === "TENANT") return null;
+  // The 24-hour rule: everything of the same kind from the same payer that day or the day before, on
+  // purchases and sales only (FINTRAC's real estate obligations don't cover leasing)
   const window = await tx.$queryRaw<{ id: string; amount: string }[]>`
-    SELECT id::text, amount::text FROM "TrustLedgerEntry"
-     WHERE "entryType" = 'DEPOSIT_RECEIVED' AND method = ${e.method}::"PaymentMethod"
-       AND lower(btrim(counterparty)) = lower(btrim(${e.counterparty}))
-       AND "receivedDate" BETWEEN ${e.receivedDate}::date - 1 AND ${e.receivedDate}::date`;
+    SELECT l.id::text, l.amount::text FROM "TrustLedgerEntry" l JOIN "Transaction" t ON t.id = l."transactionId"
+     WHERE l."entryType" = 'DEPOSIT_RECEIVED' AND l.method = ${e.method}::"PaymentMethod"
+       AND t.side NOT IN ('LANDLORD', 'TENANT')
+       AND lower(btrim(l.counterparty)) = lower(btrim(${e.counterparty}))
+       AND l."receivedDate" BETWEEN ${e.receivedDate}::date - 1 AND ${e.receivedDate}::date`;
   const total = window.reduce((s, w) => s + numericToCents(w.amount), 0);
   if (total < LARGE_TRANSACTION_CENTS) return null;
   const kind = e.method === "CASH" ? "LARGE_CASH" : "LARGE_VIRTUAL_CURRENCY";

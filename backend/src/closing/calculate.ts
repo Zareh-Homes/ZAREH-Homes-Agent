@@ -26,18 +26,23 @@
  *       R = O − P    (co-op incl. HST + the brokerage's own earned share incl. HST)
  *       Brokerage's net earned share incl. HST = T − P
  *
- *  4. Deposit held in our trust account (listing / dual deals only), D
+ *  4. Deposit held in our trust account (listing / dual / landlord-side lease deals only), D
  *       Applied in this order: co-op (C + HC) → brokerage's own share (T − P) → agents (P)
- *       D ≥ O : Balance due TO lawyer   = D − O, no wires needed
- *       D < O : Balance due FROM lawyer = O − D
+ *       D ≥ O : Balance due TO lawyer   = D − O, no wires needed   (lease: the balance goes to the landlord)
+ *       D < O : Balance due FROM lawyer = O − D                     (lease: from the landlord)
  *
  *  5. Payment from the payer (lawyer, or the listing brokerage on buyer-side deals)
  *       One payment, to the brokerage only = O − min(D, O)
  *       The payer never pays agents or PRECs directly. The brokerage pays each
  *       agent Payoutᵢ itself, as a separate approved payout once the funds are in.
  *
+ *  Leases: the landlord pays the listing brokerage, usually out of the first and last month's rent it
+ *  holds in trust, and gets the balance at commencement (the "close date"). On a tenant-side lease the
+ *  listing brokerage pays us, as on a buyer-side sale.
+ *
  *  6. Safety audits (throw ClosingAuditError)
- *       • every FINTRAC record on the deal is Approved
+ *       • every FINTRAC record on the deal is Approved, and a sale has at least one (FINTRAC's real estate
+ *         record-keeping covers purchases and sales, not leases)
  *       • every dollar distributed from trust has cleared the bank (matched to a statement line)
  *       • trust ledger balance − Σ proposed trust distributions = $0.00
  */
@@ -105,6 +110,8 @@ export interface ClosingInput {
   taxName?: "HST" | "GST";
   agents: ClosingAgentInput[];
   closingLawyer: Contact | null;
+  /** Landlord-side leases: the landlord pays the commission and receives the deposit balance */
+  landlord?: Contact | null;
   trust: {
     accountId: string | null;
     balance: Cents;
@@ -146,7 +153,7 @@ export interface AgentClosingLine {
 }
 
 export interface TrustDistribution {
-  entryType: "DISBURSEMENT_TO_COOP" | "DISBURSEMENT_TO_GENERAL" | "DISBURSEMENT_TO_LAWYER";
+  entryType: "DISBURSEMENT_TO_COOP" | "DISBURSEMENT_TO_GENERAL" | "DISBURSEMENT_TO_LAWYER" | "DISBURSEMENT_TO_LANDLORD";
   payee: string;
   amount: Cents;
   purpose: string;
@@ -166,8 +173,9 @@ export interface ClosingComputation {
   hstRate: number;
   taxName: "HST" | "GST";
   deal: ClosingInput["deal"];
-  payer: { kind: "SELLER_LAWYER" | "COOPERATING_BROKERAGE"; name: string };
+  payer: { kind: "SELLER_LAWYER" | "LANDLORD" | "COOPERATING_BROKERAGE"; name: string };
   closingLawyer: Contact | null;
+  landlord?: Contact | null;
   incoming: {
     commission: Taxed; // T = B + H
     coop: Taxed; // C + HC
@@ -188,6 +196,7 @@ export interface ClosingComputation {
     held: Cents;
     deposits: ClosingInput["trust"]["deposits"];
     appliedToCommission: Cents;
+    /** Deposit balance returned to the payer's side: the seller's lawyer on a sale, the landlord on a lease */
     balanceDueToLawyer: Cents;
     balanceDueFromLawyer: Cents;
     distributions: TrustDistribution[];
@@ -211,7 +220,8 @@ const taxed = (base: Cents, rate: number): Taxed => {
   return { base, hst, total: base + hst };
 };
 
-const BROKERAGE_SIDES = new Set(["LISTING", "DUAL"]);
+const BROKERAGE_SIDES = new Set(["LISTING", "DUAL", "LANDLORD"]);
+const LEASE_SIDES = new Set(["LANDLORD", "TENANT"]);
 
 /** Splits the deal's base GCI across agents by share; any rounding cent goes to the first agent. */
 function allocate(total: Cents, agents: ClosingAgentInput[]): Cents[] {
@@ -231,7 +241,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   const warnings: string[] = [];
 
   // ── Safety audit 1: FINTRAC ─────────────────────────────────────────────
-  if (input.fintrac.total === 0) {
+  if (input.fintrac.total === 0 && !LEASE_SIDES.has(deal.side)) {
     throw new ClosingAuditError("FINTRAC_NOT_APPROVED", `Deal ${deal.dealNumber} has no FINTRAC records on file`);
   }
   if (input.fintrac.outstanding.length > 0) {
@@ -243,9 +253,6 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   }
 
   // ── Structural checks ───────────────────────────────────────────────────
-  if (deal.side === "LANDLORD" || deal.side === "TENANT") {
-    throw new ClosingAuditError("UNSUPPORTED_DEAL_SIDE", "CDAs are for purchase and sale deals");
-  }
   if (input.agents.length === 0) throw new ClosingAuditError("NO_AGENTS", "The deal has no agents");
   const shareTotal = input.agents.reduce((s, a) => s + a.gciShareBps, 0);
   if (shareTotal !== 10_000) {
@@ -258,15 +265,19 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     throw new ClosingAuditError("TRUST_SPLIT_ACROSS_ACCOUNTS", "The deposit sits in more than one trust account");
   }
 
-  const payer = BROKERAGE_SIDES.has(deal.side)
-    ? { kind: "SELLER_LAWYER" as const, name: input.closingLawyer?.name ?? "" }
-    : { kind: "COOPERATING_BROKERAGE" as const, name: input.coopBrokerage ?? "" };
+  const payer = deal.side === "LANDLORD"
+    ? { kind: "LANDLORD" as const, name: input.landlord?.name ?? "" }
+    : BROKERAGE_SIDES.has(deal.side)
+      ? { kind: "SELLER_LAWYER" as const, name: input.closingLawyer?.name ?? "" }
+      : { kind: "COOPERATING_BROKERAGE" as const, name: input.coopBrokerage ?? "" };
   if (!payer.name) {
     throw new ClosingAuditError(
-      payer.kind === "SELLER_LAWYER" ? "CLOSING_LAWYER_MISSING" : "COOP_BROKERAGE_MISSING",
-      payer.kind === "SELLER_LAWYER"
-        ? "Add the seller's lawyer to the deal before generating the CDA"
-        : "Add the listing (co-operating) brokerage to the deal before generating the CDA",
+      { SELLER_LAWYER: "CLOSING_LAWYER_MISSING", LANDLORD: "LANDLORD_MISSING", COOPERATING_BROKERAGE: "COOP_BROKERAGE_MISSING" }[payer.kind],
+      {
+        SELLER_LAWYER: "Add the seller's lawyer to the deal before generating the CDA",
+        LANDLORD: "Add the landlord to the deal before generating the CDA",
+        COOPERATING_BROKERAGE: "Add the listing (co-operating) brokerage to the deal before generating the CDA",
+      }[payer.kind],
     );
   }
   if (input.closingLawyer && !input.closingLawyer.email && !input.closingLawyer.phone) {
@@ -391,12 +402,9 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       });
     }
     if (toLawyer > 0) {
-      distributions.push({
-        entryType: "DISBURSEMENT_TO_LAWYER",
-        payee: input.closingLawyer!.name,
-        amount: toLawyer,
-        purpose: "Balance of deposit, in trust",
-      });
+      distributions.push(payer.kind === "LANDLORD"
+        ? { entryType: "DISBURSEMENT_TO_LANDLORD", payee: payer.name, amount: toLawyer, purpose: "Balance of rent deposit, to the landlord" }
+        : { entryType: "DISBURSEMENT_TO_LAWYER", payee: input.closingLawyer!.name, amount: toLawyer, purpose: "Balance of deposit, in trust" });
     }
   }
 
@@ -463,6 +471,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     deal,
     payer,
     closingLawyer: input.closingLawyer,
+    landlord: input.landlord ?? null,
     incoming: { commission, coop, totalPayable },
     agents,
     brokerage: {
@@ -478,7 +487,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       deposits: input.trust.deposits,
       appliedToCommission: applied,
       balanceDueToLawyer: toLawyer,
-      balanceDueFromLawyer: payer.kind === "SELLER_LAWYER" ? totalPayable - applied : 0,
+      balanceDueFromLawyer: payer.kind === "COOPERATING_BROKERAGE" ? 0 : totalPayable - applied,
       distributions,
       balanceAfter,
     },

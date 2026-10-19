@@ -96,6 +96,7 @@ enum TrustEntryType {
   DISBURSEMENT_TO_GENERAL // commission earned, moved to general account on close
   DISBURSEMENT_TO_COOP
   DISBURSEMENT_TO_LAWYER
+  DISBURSEMENT_TO_LANDLORD // lease: balance of the rent deposit at commencement
   REFUND_TO_PAYER
   REVERSAL // corrects a prior entry; entries are never edited or deleted
 }

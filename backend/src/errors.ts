@@ -91,8 +91,11 @@ export class ConflictError extends DomainError {
  */
 export function fromDatabaseError(err: unknown): DomainError | null {
   const meta = (err as { meta?: { code?: string; message?: string } })?.meta;
-  const sqlState = meta?.code;
-  const message = meta?.message ?? (err as Error)?.message ?? "";
+  // Some Prisma paths (e.g. model create) only carry the Postgres error inside the message text
+  const raw = (err as Error)?.message ?? "";
+  const embedded = /PostgresError \{ code: "([0-9A-Z]{5})", message: "((?:[^"\\]|\\.)*)"/.exec(raw);
+  const sqlState = meta?.code ?? embedded?.[1];
+  const message = meta?.message ?? embedded?.[2]?.replace(/\\"/g, '"') ?? raw;
   switch (sqlState) {
     case "ZT001":
       return new DomainError("INSUFFICIENT_TRUST_FUNDS", 409, message);

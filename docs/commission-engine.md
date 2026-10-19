@@ -3,7 +3,7 @@
 ## Deal types
 
 - **Listing, buyer and double-ended (`DUAL`)** deals go through the same calculation. On listing and dual deals the deposit we hold is applied to the commission. On buyer deals the listing brokerage pays us.
-- **Leases** (`LANDLORD`, `TENANT`) don't produce a CDA yet. The calculator refuses them.
+- **Leases.** Landlord-side leases work like listings: the rent deposit we hold is applied, and the balance goes to the landlord. Tenant-side leases work like buyer deals. See `docs/deal-lifecycle.md`.
 
 ## Commission plans (effective-dated)
 

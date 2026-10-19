@@ -46,6 +46,18 @@ If the deal is amended after the sheet was prepared, the sheet shows the differe
 
 **Unverified:** whether s.17 lists items beyond item 9. The "further items" slot holds them until the e-Laws text is checked.
 
-## Not yet supported
+## Leases
 
-- **CDAs for leases.** The lifecycle and trade record sheet work for leases. Commission settlement for a lease (the deposit held for the landlord, paid out on occupancy) needs the broker of record's procedure first, so the CDA calculator refuses lease deals.
+Leases (`LANDLORD`, `TENANT` sides) go through the same lifecycle, trade record sheet and CDA as sales:
+
+- **Landlord side (our listing).** We usually hold the first and last month's rent in trust. At commencement (the deal's close date), the CDA pays from that deposit:
+  1. the co-operating (tenant's) brokerage,
+  2. the brokerage's commission,
+  3. the balance to the landlord (`DISBURSEMENT_TO_LANDLORD`).
+  If the deposit is short, the landlord pays the rest to the brokerage. The deal's "sale price" field holds the rent.
+- **Tenant side.** The listing brokerage pays us, as on a buyer-side sale.
+- **We represent both landlord and tenant.** Open the deal on the landlord side and mark the tenant as our client. The TRESA rules then require multiple-representation consent, and there's no co-op commission.
+- **Paperwork.** The checklist asks for the listing agreement for lease (Form 272, landlord side), the agreement to lease (Form 400) and Form 320 (tenant side). The broker of record confirms these against the brokerage's current forms.
+- **FINTRAC.** Its real estate identification, record-keeping and large-cash reporting obligations apply to purchases and sales, so lease deals get no FINTRAC slots and don't open large-cash report tasks. TRESA obligations still apply.
+
+## Not yet supported
