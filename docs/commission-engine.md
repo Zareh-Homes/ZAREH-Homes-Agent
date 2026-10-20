@@ -67,9 +67,11 @@ Nothing is deducted automatically.
 
 ## Both sides at our brokerage
 
-- **Two commissions, one invoice.** On a both-sides deal the listing-side and buyer-side commissions are entered separately and add up to the deal's commission. The CDA bills the total once; there's no co-operating brokerage and no payable to ourselves.
+- **Two commissions, counted once.** On a both-sides deal the listing-side and buyer-side commissions are entered separately and add up to the deal's commission. There's no co-operating brokerage and no payable to ourselves.
+- **Who pays is recorded, not assumed.** The deal says how much of the buyer side the seller agreed to pay and where each obligation is written. The seller's lawyer is directed to pay only the seller's part (after any deposit we hold); the buyer's lawyer pays the rest. A deposit in our trust only ever pays the seller's part. One consolidated payment only when the seller agreed to pay both sides.
 - **Each agent is paid from their own side.** Every agent is marked as representing the seller, the buyer or both, with a share of that side (shares on each side add up to 100). An agent on both sides takes their share of both. Each agent then goes through their own plan once (split, cap, fees, HST).
-- **Example ($1,000,000, 2% each side, tested):** Morgan (seller, 70%) $14,000; Jamie (buyer, 75%) $15,000; brokerage share $11,000; commission $40,000 + HST $5,200.
+- **Example ($1,000,000, 2% each side, tested):** Morgan (seller, 70%) $14,000; Jamie (buyer, 75%) $15,000; brokerage share $11,000; commission $40,000 + HST $5,200. With the seller paying $10,000 of the buyer side: seller's lawyer $33,900, buyer's lawyer $11,300.
+- **HST on screen** is the HST collected on the commission; the net figure is an estimate for this deal. What's owed to CRA is worked out on the return.
 - **Amendments** change one side's commission; the deal's commission follows.
 - **Not supported:** mixing an agent on both sides with agents on a single side in one deal.
 

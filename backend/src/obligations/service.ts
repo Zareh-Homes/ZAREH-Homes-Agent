@@ -9,7 +9,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { loadActor, requireRole, type Actor, type ResolveUserId } from "../auth.ts";
-import { DomainError, fromDatabaseError, NotFoundError, RuleViolationError } from "../errors.ts";
+import { DomainError, ForbiddenError, fromDatabaseError, NotFoundError, RuleViolationError } from "../errors.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
@@ -17,7 +17,7 @@ import { validatePathUuid } from "../trust/validation.ts";
 import { CLIENT_ROLES } from "../compliance/rules.ts";
 import { ensureComplianceSlots } from "../compliance/service.ts";
 import type { FieldCipher } from "../security/crypto.ts";
-import { assertDealAccess } from "../deals/lifecycle.ts";
+import { assertDealAccess, oneSideOnly } from "../deals/lifecycle.ts";
 import { evaluateFintrac, evaluateProgram } from "./fintrac.ts";
 import { classifyRepresentation, evaluateTresa, type TresaFacts } from "./tresa.ts";
 import { summarize, type Finding, type PartyFacts, type Representation } from "./types.ts";
@@ -44,7 +44,7 @@ function timestamp(r: Reader, field: string, required = true): string | null {
 
 // ── Facts ────────────────────────────────────────────────────────────────────
 
-async function partyFacts(db: Db, dealId: string): Promise<{ side: string; offerDate: string; agentIds: string[]; agentSides: { userId: string; side: string | null }[]; parties: PartyFacts[] }> {
+async function partyFacts(db: Db, dealId: string): Promise<{ side: string; offerDate: string; agentIds: string[]; agentSides: { userId: string; side: string | null }[]; parties: PartyFacts[]; sellerRemunerationVaries: boolean }> {
   const deal = await db.transaction.findUnique({ where: { id: dealId }, include: { parties: true, agents: true } });
   if (!deal) throw new NotFoundError("Deal", dealId);
   const ours = CLIENT_ROLES[deal.side] as readonly string[];
@@ -56,7 +56,7 @@ async function partyFacts(db: Db, dealId: string): Promise<{ side: string; offer
     return { id: p.id, role: p.role, name: p.fullName, entityType: p.entityType, representation };
   });
   return { side: deal.side, offerDate: iso(deal.offerDate), agentIds: deal.agents.map((a) => a.userId),
-    agentSides: deal.agents.map((a) => ({ userId: a.userId, side: a.side })), parties };
+    agentSides: deal.agents.map((a) => ({ userId: a.userId, side: a.side })), parties, sellerRemunerationVaries: deal.sellerRemunerationVaries };
 }
 
 async function tresaFacts(db: Db, dealId: string, now: Date): Promise<TresaFacts> {
@@ -71,6 +71,7 @@ async function tresaFacts(db: Db, dealId: string, now: Date): Promise<TresaFacts
     disclosures: disclosures.map((d) => ({
       kind: d.kind, partyId: d.partyId, offerId: d.offerId, deliveredAt: d.deliveredAt.toISOString(), explainedAt: d.explainedAt?.toISOString() ?? null,
       acknowledgedAt: d.acknowledgedAt?.toISOString() ?? null, bestEffortsNote: d.bestEffortsNote, formVersion: d.formVersion, numberDisclosed: d.numberDisclosed,
+      situationAroseOn: d.situationAroseOn ? iso(d.situationAroseOn) : null,
     })),
     agreements: agreements.map((a) => ({
       partyId: a.partyId, type: a.type as "BROKERAGE" | "DESIGNATED", designatedRepresentativeIds: a.designatedRepresentativeIds,
@@ -82,6 +83,7 @@ async function tresaFacts(db: Db, dealId: string, now: Date): Promise<TresaFacts
       return {
         id: o.id, receivedAt: o.receivedAt.toISOString(), written: o.written, status: last?.status ?? "RECEIVED",
         acceptedAt: accepted?.eventAt.toISOString() ?? null, fromOurBrokerage: o.fromOurBrokerage,
+        buyerRepresentation: o.buyerRepresentation as "BROKERAGE" | "DESIGNATED" | null, buyerAgentIds: o.buyerAgentIds,
         label: `offer ${i + 1} (${o.offerorSelfRepresented ? "self-represented buyer" : o.offerorBrokerage ?? "buyer"})`,
       };
     }),
@@ -134,29 +136,90 @@ export async function requireNoBlockingFindings(db: Db, dealId: string, today: s
   }
 }
 
-/** Multiple representation must be disclosed and consented to before any step is taken for the clients. */
-const CONSENT_RULES = new Set(["MULTIPLE_REPRESENTATION", "COMPETING_BUYER_CLIENTS"]);
+/**
+ * Representation must be verified, multiple representation disclosed and consented to, and both agreements'
+ * remuneration terms disclosed to each client, before the app takes the clients further (going firm, accepting
+ * an offer). The broker of record's trade record signature waits on every BLOCKING item.
+ */
+const REPRESENTATION_GATE_RULES = new Set(["REPRESENTATION_UNVERIFIED", "MULTIPLE_REPRESENTATION", "REMUNERATION_DISCLOSURE",
+  "OFFER_REPRESENTATION_UNVERIFIED", "OFFER_MULTIPLE_REPRESENTATION"]);
+const GATE_SUMMARY: [string, string][] = [
+  ["REPRESENTATION_UNVERIFIED", "representation isn't verified (record both clients' representation agreements)"],
+  ["MULTIPLE_REPRESENTATION", "multiple representation needs each client's written disclosure and consent first"],
+  ["REMUNERATION_DISCLOSURE", "each client needs written disclosure of both agreements' remuneration terms first"],
+];
 
-/** Before a deal goes firm: written consent to multiple representation from every client it applies to. */
+/** Before a deal goes firm. */
 export async function requireRepresentationConsents(db: Db, dealId: string, today: string, action: string) {
   const r = await evaluateDeal(db, dealId, today);
-  const blocking = r.tresa.filter((f) => CONSENT_RULES.has(f.rule) && f.severity === "BLOCKING");
+  const blocking = r.tresa.filter((f) => REPRESENTATION_GATE_RULES.has(f.rule) && !f.offerId && f.severity === "BLOCKING");
   if (blocking.length) {
-    throw new RuleViolationError("CONSENT_OUTSTANDING", `${action}: multiple representation needs each client's written disclosure and consent first`, {
+    const why = GATE_SUMMARY.filter(([rule]) => blocking.some((f) => f.rule === rule)).map(([, text]) => text).join("; ");
+    throw new RuleViolationError("CONSENT_OUTSTANDING", `${action}: ${why}`, { outstanding: blocking.map((f) => f.message) });
+  }
+}
+
+/** Before an offer is accepted: every disclosure owed to the offerors (s.22.7, s.22.0.3, remuneration), and representation settled. */
+export async function requireOfferDisclosures(db: Db, dealId: string, offerId: string, today: string) {
+  const r = await evaluateDeal(db, dealId, today, new Date(), { acceptingOfferId: offerId });
+  const blocking = r.tresa.filter((f) => (f.offerId || REPRESENTATION_GATE_RULES.has(f.rule)) && f.severity === "BLOCKING");
+  if (blocking.length) {
+    throw new RuleViolationError("OFFER_DISCLOSURES_OUTSTANDING", "Disclosures or consents are owed before any offer is accepted", {
       outstanding: blocking.map((f) => f.message),
     });
   }
 }
 
-/** Before an offer is accepted: every disclosure owed to the other offerors (s.22.7, s.22.0.3), and the clients' consent to multiple representation. */
-export async function requireOfferDisclosures(db: Db, dealId: string, offerId: string, today: string) {
-  const r = await evaluateDeal(db, dealId, today, new Date(), { acceptingOfferId: offerId });
-  const blocking = r.tresa.filter((f) => (f.offerId || CONSENT_RULES.has(f.rule)) && f.severity === "BLOCKING");
-  if (blocking.length) {
-    throw new RuleViolationError("OFFER_DISCLOSURES_OUTSTANDING", "The other offerors are owed disclosures before any offer is accepted", {
-      outstanding: blocking.map((f) => f.message),
-    });
+/**
+ * Where the signed disclosures and consents go: the deal gets a "Representation disclosures and consents" slot as
+ * soon as a consent is needed (multiple representation on the deal, or on one of our buyers' offers).
+ */
+export async function syncConsentSlot(db: Db, dealId: string, today: string) {
+  const r = await evaluateDeal(db, dealId, today);
+  const needed = !["NONE", "SEPARATE_DESIGNATED", "UNDETERMINED"].includes(r.representation.mode)
+    || r.tresa.some((f) => f.rule === "OFFER_MULTIPLE_REPRESENTATION");
+  if (!needed) return;
+  await db.$executeRaw`
+    INSERT INTO "DocumentSlot" (id, "documentTypeId", "transactionId", "updatedAt")
+    SELECT gen_random_uuid(), t.id, ${dealId}::uuid, now() FROM "DocumentType" t WHERE t.code = 'REPRESENTATION_CONSENTS'
+    ON CONFLICT ("transactionId", "documentTypeId") WHERE "partyId" IS NULL AND "transactionId" IS NOT NULL DO NOTHING`;
+}
+
+/**
+ * Same-brokerage deals: an agent acting for one side works only on their own client's records, and sees only
+ * their own client's findings (and, for the buyer's agent, only their own buyer's offer).
+ */
+const SIDE_ROLES = { LISTING: ["SELLER", "SELLER_LAWYER"], BUYER: ["BUYER", "BUYER_LAWYER"] } as const;
+
+async function assertOwnSide(db: Db, actor: Actor, dealId: string, target: { partyId?: string | null; offerId?: string | null; sellerSide?: boolean }) {
+  const side = await oneSideOnly(db, actor, dealId);
+  if (!side) return;
+  if (target.sellerSide && side === "BUYER") throw new ForbiddenError("That's for the seller's representative; you act for the buyer");
+  if (target.partyId) {
+    const p = await db.transactionParty.findUnique({ where: { id: target.partyId }, select: { role: true } });
+    if (p && !(SIDE_ROLES[side] as readonly string[]).includes(p.role)) {
+      throw new ForbiddenError("That client is represented by the other side's agent; they handle their records");
+    }
   }
+  if (target.offerId && side === "BUYER") {
+    const o = await db.offer.findUnique({ where: { id: target.offerId }, select: { buyerAgentIds: true } });
+    if (!o?.buyerAgentIds.includes(actor.id)) throw new ForbiddenError("Offers on this listing are handled by the seller's representative");
+  }
+}
+
+export async function obligationsFor(db: Db, actor: Actor, dealId: string, today: string) {
+  await assertDealAccess(db, actor, dealId);
+  const result = await evaluateDeal(db, dealId, today);
+  const side = await oneSideOnly(db, actor, dealId);
+  if (!side) return result;
+  const mine = new Set(result.parties.filter((p) => (SIDE_ROLES[side] as readonly string[]).includes(p.role)).map((p) => p.id));
+  const ownOffers = side === "BUYER"
+    ? new Set((await db.offer.findMany({ where: { listingDealId: dealId, buyerAgentIds: { has: actor.id } }, select: { id: true } })).map((o) => o.id))
+    : null;
+  const visible = (f: Finding) => (!f.partyId || mine.has(f.partyId)) && (!f.offerId || !ownOffers || ownOffers.has(f.offerId));
+  const tresa = result.tresa.filter(visible);
+  const fintrac = result.fintrac.filter(visible);
+  return { ...result, tresa, fintrac, summary: { tresa: summarize(tresa), fintrac: summarize(fintrac) } };
 }
 
 // ── Large cash and virtual currency: opened automatically on receipt ─────────
@@ -198,21 +261,24 @@ export async function setRepresentation(prisma: PrismaClient, actor: Actor, deal
   const r = new Reader(body, ["representation"]);
   const representation = r.oneOf("representation", ["OUR_CLIENT", "REPRESENTED_ELSEWHERE", "SELF_REPRESENTED"] as const);
   r.done();
+  await assertOwnSide(prisma, actor, dealId, { partyId });
   await prisma.$transaction(async (tx) => {
     const n = await tx.transactionParty.updateMany({ where: { id: partyId, transactionId: dealId }, data: { representation } });
     if (n.count === 0) throw new NotFoundError("Party on this deal", partyId);
     await ensureComplianceSlots(tx, dealId); // an unrepresented party needs a FINTRAC record too
   });
-  return evaluateDeal(prisma, dealId, today);
+  await syncConsentSlot(prisma, dealId, today);
+  return obligationsFor(prisma, actor, dealId, today);
 }
 
 export async function recordDisclosure(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown, today: string) {
   await assertDealAccess(prisma, actor, dealId);
   const r = new Reader(body, ["kind", "partyId", "offerId", "deliveredAt", "method", "explainedAt", "acknowledgedAt", "bestEffortsNote",
-    "formVersion", "numberDisclosed", "content", "directionId", "documentFileId"]);
+    "formVersion", "numberDisclosed", "content", "directionId", "documentFileId", "situationAroseOn", "confirms"]);
   const input = {
     kind: r.oneOf("kind", ["INFORMATION_GUIDE", "SELF_REPRESENTED_PARTY_FORM", "MULTIPLE_REPRESENTATION_DISCLOSURE", "MULTIPLE_REPRESENTATION_CONSENT",
-      "COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "COMPETING_BUYERS_CONSENT"] as const),
+      "COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "COMPETING_BUYERS_CONSENT",
+      "REMUNERATION_DISCLOSURE", "VARIABLE_REMUNERATION_DISCLOSURE"] as const),
     partyId: r.optionalUuid("partyId"), offerId: r.optionalUuid("offerId"),
     deliveredAt: timestamp(r, "deliveredAt"), method: r.text("method", 200),
     explainedAt: timestamp(r, "explainedAt", false), acknowledgedAt: timestamp(r, "acknowledgedAt", false),
@@ -220,23 +286,30 @@ export async function recordDisclosure(prisma: PrismaClient, actor: Actor, dealI
     formVersion: r.has("formVersion") ? r.oneOf("formVersion", ["BROKERAGE_REPRESENTATION", "DESIGNATED_REPRESENTATION"] as const) : null,
     numberDisclosed: r.has("numberDisclosed") ? r.percent("numberDisclosed", 0, 1000) : null,
     content: r.optionalText("content", 4000), directionId: r.optionalUuid("directionId"), documentFileId: r.optionalUuid("documentFileId"),
+    // Consents: when the multiple representation arose. The written disclosure: what it explained.
+    situationAroseOn: r.has("situationAroseOn") ? r.pastDate("situationAroseOn", today) : null,
+    confirms: r.has("confirms") ? r.textList("confirms", 4, 20) : [],
   };
+  r.check(input.confirms.every((c) => ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE"].includes(c)), "confirms",
+    "each must be DUTIES, SERVICES, REMUNERATION or INDEPENDENT_ADVICE");
   r.done();
+  await assertOwnSide(prisma, actor, dealId, { partyId: input.partyId, offerId: input.offerId,
+    sellerSide: ["COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "VARIABLE_REMUNERATION_DISCLOSURE"].includes(input.kind) });
   try {
     await prisma.$executeRaw`
       INSERT INTO "TresaDisclosure" (id, "transactionId", kind, "partyId", "offerId", "deliveredAt", method, "explainedAt", "acknowledgedAt",
-        "bestEffortsNote", "formVersion", "numberDisclosed", content, "directionId", "documentFileId", "recordedById")
+        "bestEffortsNote", "formVersion", "numberDisclosed", content, "directionId", "documentFileId", "situationAroseOn", confirms, "recordedById")
       VALUES (gen_random_uuid(), ${dealId}::uuid, ${input.kind}::"DisclosureKind", ${input.partyId}::uuid, ${input.offerId}::uuid,
         ${input.deliveredAt}::timestamptz, ${input.method}, ${input.explainedAt}::timestamptz, ${input.acknowledgedAt}::timestamptz,
         ${input.bestEffortsNote}, ${input.formVersion}, ${input.numberDisclosed}, ${input.content}, ${input.directionId}::uuid,
-        ${input.documentFileId}::uuid, ${actor.id}::uuid)`;
+        ${input.documentFileId}::uuid, ${input.situationAroseOn}::date, ${input.confirms}::text[], ${actor.id}::uuid)`;
   } catch (err) {
     if ((err as { meta?: { code?: string } })?.meta?.code === "23514") {
-      throw new RuleViolationError("DISCLOSURE_INCOMPLETE", "That disclosure is missing what it needs (the party or offer, the count, the content and direction, the form version, or the written consent date and what was confirmed)");
+      throw new RuleViolationError("DISCLOSURE_INCOMPLETE", "That disclosure is missing what it needs: the party or offer, the count, the content (what was disclosed or confirmed), the direction or form version; for a written disclosure of multiple representation, that it explained the changes in duties, services and remuneration and advised independent advice; for a consent, the date signed, when the multiple representation arose and the signed copy");
     }
     rethrow(err);
   }
-  return evaluateDeal(prisma, dealId, today);
+  return obligationsFor(prisma, actor, dealId, today);
 }
 
 export async function recordAgreement(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown, today: string) {
@@ -252,6 +325,7 @@ export async function recordAgreement(prisma: PrismaClient, actor: Actor, dealId
   };
   r.check(input.type === "BROKERAGE" || input.designated.length > 0, "designatedRepresentativeIds", "a designated agreement names each designated representative");
   r.done();
+  await assertOwnSide(prisma, actor, dealId, { partyId: input.partyId });
   try {
     await prisma.$executeRaw`
       INSERT INTO "RepresentationAgreement" (id, "transactionId", "partyId", type, "designatedRepresentativeIds", "signedAt", "effectiveFrom", "expiresOn",
@@ -262,11 +336,13 @@ export async function recordAgreement(prisma: PrismaClient, actor: Actor, dealId
   } catch (err) {
     rethrow(err);
   }
-  return evaluateDeal(prisma, dealId, today);
+  await syncConsentSlot(prisma, dealId, today);
+  return obligationsFor(prisma, actor, dealId, today);
 }
 
 export async function recordOfferDirection(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown) {
   await assertDealAccess(prisma, actor, dealId);
+  await assertOwnSide(prisma, actor, dealId, { sellerSide: true });
   const r = new Reader(body, ["givenAt", "shareContent", "scope", "documentFileId"]);
   const input = { givenAt: timestamp(r, "givenAt"), shareContent: r.bool("shareContent"), scope: r.optionalText("scope", 2000), documentFileId: r.optionalUuid("documentFileId") };
   r.check(!input.shareContent || input.scope !== null, "scope", "say which content the seller has directed be shared");
@@ -286,6 +362,7 @@ export async function recordDetermination(prisma: PrismaClient, actor: Actor, pa
   const party = await prisma.transactionParty.findUnique({ where: { id: partyId }, select: { transactionId: true } });
   if (!party) throw new NotFoundError("Party", partyId);
   await assertDealAccess(prisma, actor, party.transactionId);
+  await assertOwnSide(prisma, actor, party.transactionId, { partyId });
   const r = new Reader(body, ["kind", "determinedAt", "result", "riskRating", "details"]);
   const input = {
     kind: r.oneOf("kind", ["PEP_HIO", "BUSINESS_RELATIONSHIP", "BENEFICIAL_OWNERSHIP_CONFIRMED", "ENTITY_EXISTENCE_CONFIRMED"] as const),
@@ -305,7 +382,7 @@ export async function recordDetermination(prisma: PrismaClient, actor: Actor, pa
     }
     rethrow(err);
   }
-  return evaluateDeal(prisma, party.transactionId, today);
+  return obligationsFor(prisma, actor, party.transactionId, today);
 }
 
 export async function recordReceiptOfFunds(prisma: PrismaClient, cipher: FieldCipher, actor: Actor, entryId: string, body: unknown, today: string) {
@@ -337,7 +414,7 @@ export async function recordReceiptOfFunds(prisma: PrismaClient, cipher: FieldCi
     if ((err as { meta?: { code?: string } })?.meta?.code === "23505") throw new RuleViolationError("ALREADY_RECORDED", "This deposit already has a receipt of funds record");
     rethrow(err);
   }
-  return evaluateDeal(prisma, entry.transactionId, today);
+  return obligationsFor(prisma, actor, entry.transactionId, today);
 }
 
 // ── Reports ──────────────────────────────────────────────────────────────────
@@ -438,10 +515,7 @@ export async function obligationRoutes(app: FastifyInstance, opts: { prisma: Pri
   const today = () => opts.today?.() ?? todayInToronto();
   type P = { Params: Record<string, string> };
   const id = (req: { params: Record<string, string> }, k: string) => validatePathUuid(req.params[k]!, k);
-  app.get<P>("/api/deals/:dealId/obligations", async (req) => {
-    await assertDealAccess(opts.prisma, await actorOf(req), id(req, "dealId"));
-    return evaluateDeal(opts.prisma, id(req, "dealId"), today());
-  });
+  app.get<P>("/api/deals/:dealId/obligations", async (req) => obligationsFor(opts.prisma, await actorOf(req), id(req, "dealId"), today()));
   app.post<P>("/api/deals/:dealId/parties/:partyId/representation", async (req) =>
     setRepresentation(opts.prisma, await actorOf(req), id(req, "dealId"), id(req, "partyId"), req.body, today()));
   app.post<P>("/api/deals/:dealId/disclosures", async (req, reply) => reply.code(201).send(await recordDisclosure(opts.prisma, await actorOf(req), id(req, "dealId"), req.body, today())));

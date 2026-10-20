@@ -19,9 +19,10 @@ interface Lifecycle {
 
 const HOLDER: Record<string, string> = { OUR_BROKERAGE: "Our brokerage (trust)", COOP_BROKERAGE: "Other brokerage", LAWYER: "Lawyer in trust", BUILDER: "Builder / trustee" };
 const CONDITION_KINDS = ["FINANCING", "INSPECTION", "STATUS_CERTIFICATE", "SALE_OF_BUYERS_PROPERTY", "LAWYER_REVIEW", "INSURANCE", "OTHER"];
-const MONEY_FIELDS = new Set(["SALE_PRICE", "DEPOSIT_AMOUNT", "TOTAL_GCI", "COOP_COMMISSION", "LISTING_SIDE_GCI", "BUYER_SIDE_GCI"]);
+const MONEY_FIELDS = new Set(["SALE_PRICE", "DEPOSIT_AMOUNT", "TOTAL_GCI", "COOP_COMMISSION", "LISTING_SIDE_GCI", "BUYER_SIDE_GCI", "BUYER_SIDE_SELLER_PAYS"]);
 const AGENT_SIDE = { LISTING: "represents the seller", BUYER: "represents the buyer", BOTH: "represents seller and buyer" } as const;
-const AMEND_LABEL: Record<string, string> = { TOTAL_GCI: "Our commission", LISTING_SIDE_GCI: "Listing-side commission", BUYER_SIDE_GCI: "Buyer-side commission" };
+const AMEND_LABEL: Record<string, string> = { TOTAL_GCI: "Our commission", LISTING_SIDE_GCI: "Listing-side commission", BUYER_SIDE_GCI: "Buyer-side commission",
+  BUYER_SIDE_SELLER_PAYS: "Part of the buyer side the seller pays" };
 
 export function OverviewTab({ deal, reloadDeal }: TabProps) {
   const { user } = useSession();
@@ -50,7 +51,11 @@ export function OverviewTab({ deal, reloadDeal }: TabProps) {
             ["Deposit held by", HOLDER[deal.trustDepositHolder] ?? deal.trustDepositHolder],
             ["Our commission (before tax)", moneyText(deal.totalGci)],
             ...(deal.listingSideGci !== null && deal.buyerSideGci !== null
-              ? [["Of which", `listing side ${moneyText(deal.listingSideGci)} · buyer side ${moneyText(deal.buyerSideGci)}`] as [string, string]] : []),
+              ? [["Of which", `listing side ${moneyText(deal.listingSideGci)} · buyer side ${moneyText(deal.buyerSideGci)}`] as [string, string],
+                 ...(deal.paidBySeller && deal.paidByBuyer
+                   ? [["Who pays", deal.paidByBuyer === "0.00" ? "The seller pays both sides"
+                       : `Seller ${moneyText(deal.paidBySeller)} · buyer ${moneyText(deal.paidByBuyer)} (each under their own agreement)`] as [string, string]]
+                   : [])] : []),
             ...(Number(deal.coopCommission) > 0 ? [["Co-op commission", `${moneyText(deal.coopCommission)} to ${deal.coopBrokerageName ?? "the other brokerage"}`] as [string, string]] : []),
             ...(deal.outsideReferralPayee ? [["Outside referral", `${deal.outsideReferralPct}% to ${deal.outsideReferralPayee}`] as [string, string]] : []),
             ["Trust balance", life.data ? moneyText(life.data.trustBalance) : "…"],
@@ -244,7 +249,7 @@ function Amend({ dealId, canCommission, sided, onDone }: { dealId: string; canCo
   const act = useAction();
   const [f, setF] = useState({ field: "CLOSE_DATE", newValue: "", reference: "", effectiveDate: "" });
   const fields = ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE",
-    ...(canCommission ? (sided ? ["LISTING_SIDE_GCI", "BUYER_SIDE_GCI"] : ["TOTAL_GCI", "COOP_COMMISSION"]) : []), "OTHER"];
+    ...(canCommission ? (sided ? ["LISTING_SIDE_GCI", "BUYER_SIDE_GCI", "BUYER_SIDE_SELLER_PAYS"] : ["TOTAL_GCI", "COOP_COMMISSION"]) : []), "OTHER"];
   const isDate = f.field === "CLOSE_DATE" || f.field === "DEPOSIT_DUE_DATE";
   return (
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {

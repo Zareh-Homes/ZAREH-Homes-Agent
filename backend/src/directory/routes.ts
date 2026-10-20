@@ -14,6 +14,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient, Prisma, UserRole } from "@prisma/client";
 import { loadActor, requireRole, TRUST_VIEWERS, type Actor, type ResolveUserId } from "../auth.ts";
 import { DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
+import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
 import { assertDealAccess } from "../deals/lifecycle.ts";
 import { getPayouts, type PayoutLine } from "../closing/payouts.ts";
@@ -138,6 +139,13 @@ export async function getDeal(prisma: PrismaClient, actor: Actor, dealId: string
       depositAmount: money(d.depositAmount), depositDueDate: iso(d.depositDueDate), trustDepositHolder: d.trustDepositHolder,
       depositStatus: d.depositStatus, totalGci: money(d.totalGci),
       listingSideGci: d.listingSideGci === null ? null : money(d.listingSideGci), buyerSideGci: d.buyerSideGci === null ? null : money(d.buyerSideGci),
+      buyerSideSellerPays: d.buyerSideSellerPays === null ? null : money(d.buyerSideSellerPays), remunerationSource: d.remunerationSource,
+      // Same-brokerage deals: what each client pays under their own agreement, before tax
+      paidBySeller: d.listingSideGci !== null && d.buyerSideSellerPays !== null
+        ? formatCents(numericToCents(d.listingSideGci.toFixed(2)) + numericToCents(d.buyerSideSellerPays.toFixed(2))) : null,
+      paidByBuyer: d.buyerSideGci !== null && d.buyerSideSellerPays !== null
+        ? formatCents(numericToCents(d.buyerSideGci.toFixed(2)) - numericToCents(d.buyerSideSellerPays.toFixed(2))) : null,
+      sellerRemunerationVaries: d.sellerRemunerationVaries,
       coopBrokerageName: d.coopBrokerageName, coopCommission: money(d.coopCommission),
       outsideReferralPayee: d.outsideReferralPayee, outsideReferralPct: d.outsideReferralPct?.toFixed(2) ?? null,
       agents: d.agents.map((a) => ({

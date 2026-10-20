@@ -29,8 +29,8 @@ const CODE_LABEL: Record<string, string> = {
 };
 /** Stored codes (COOP_BROKERAGE, INDIVIDUAL) in words; two-letter values such as the province stay as they are */
 const codeText = (s: string) => (/^[A-Z]{3,}(_[A-Z]+)*$/.test(s) ? CODE_LABEL[s] ?? labelOf(s) : s);
-/** The server's labels are already numbered ("1. Nature of the trade") */
-export const itemTitle = (label: string, n: number) => (/^\d+\./.test(label) ? label : `${n + 1}. ${label}`);
+/** The server numbers the s.17 items ("1. Nature of the trade"); anything else, such as the broker's notes, isn't numbered */
+export const itemTitle = (label: string, _n: number) => label;
 
 /** A record value as readable text: strings as-is, objects as "label: value" lines, lists as bullets. */
 export function TrsValue({ value }: { value: unknown }): ReactNode {

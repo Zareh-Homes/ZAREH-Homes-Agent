@@ -8,7 +8,7 @@ import { api } from "../app/api.ts";
 import { useAction, useApi } from "../app/useApi.ts";
 import { useSession } from "../app/session.tsx";
 import { navigate } from "../app/router.tsx";
-import { Button, Notice, Page, PageHeader, Section, SelectField, TextField } from "../ui/kit.tsx";
+import { Button, Checkbox, Notice, Page, PageHeader, Section, SelectField, TextField } from "../ui/kit.tsx";
 import { isLease, SIDE_LABEL } from "../ui/format.ts";
 
 interface Person { id: string; firstName: string; lastName: string; role: string }
@@ -40,6 +40,7 @@ export function NewDeal() {
   const [f, setF] = useState({
     streetAddress: "", unit: "", city: "", mlsNumber: "", salePrice: "", offerDate: "", conditionsDueDate: "", closeDate: "",
     depositAmount: "", depositDueDate: "", trustDepositHolder: "OUR_BROKERAGE", totalGci: "", listingSideGci: "", buyerSideGci: "", coopBrokerageName: "", coopCommission: "",
+    buyerSideSellerPays: "", remunerationSource: "", sellerRemunerationVaries: false,
     outsideReferralPayee: "", outsideReferralPct: "", status: "CONDITIONAL",
   });
   const [agents, setAgents] = useState<AgentRow[]>(() => [{ userId: user?.role === "AGENT" ? user.id : "", role: "PRIMARY", splitPct: "", side: "", gciSharePct: "" }]);
@@ -70,7 +71,9 @@ export function NewDeal() {
       side, status: f.status, streetAddress: f.streetAddress.trim(), unit: opt(f.unit), city: f.city.trim(), mlsNumber: opt(f.mlsNumber),
       salePrice: f.salePrice.trim(), offerDate: f.offerDate, conditionsDueDate: opt(f.conditionsDueDate), closeDate: f.closeDate,
       depositAmount: f.depositAmount.trim() || "0", depositDueDate: opt(f.depositDueDate), trustDepositHolder: f.trustDepositHolder,
-      ...(dual ? { listingSideGci: f.listingSideGci.trim(), buyerSideGci: f.buyerSideGci.trim() } : { totalGci: f.totalGci.trim() }),
+      ...(dual ? { listingSideGci: f.listingSideGci.trim(), buyerSideGci: f.buyerSideGci.trim(), buyerSideSellerPays: f.buyerSideSellerPays.trim(),
+        remunerationSource: opt(f.remunerationSource) } : { totalGci: f.totalGci.trim() }),
+      ...(side === "LISTING" || dual ? { sellerRemunerationVaries: f.sellerRemunerationVaries } : {}),
       coopBrokerageName: opt(f.coopBrokerageName), coopCommission: listingSide ? opt(f.coopCommission) : undefined,
       outsideReferralPayee: opt(f.outsideReferralPayee), outsideReferralPct: f.outsideReferralPct.trim() ? Number(f.outsideReferralPct) : undefined,
       agents: agents.map((a) => ({
@@ -126,7 +129,14 @@ export function NewDeal() {
                 <TextField label="Listing-side commission" required inputMode="decimal" value={f.listingSideGci} onChange={set("listingSideGci")}
                   error={err.listingSideGci} hint="From the seller's agreement" />
                 <TextField label="Buyer-side commission" required inputMode="decimal" value={f.buyerSideGci} onChange={set("buyerSideGci")}
-                  error={err.buyerSideGci ?? err.totalGci} hint="From the buyer's agreement. Billed once, together." />
+                  error={err.buyerSideGci ?? err.totalGci} hint="From the buyer's agreement. Counted once, together." />
+                {/* Who pays the buyer side is what the agreements say: never assumed */}
+                <TextField label="Of the buyer side, the seller pays" required inputMode="decimal" value={f.buyerSideSellerPays} onChange={set("buyerSideSellerPays")}
+                  error={err.buyerSideSellerPays} hint="The whole buyer side if the seller agreed to pay it; 0 if the buyer pays it all. The buyer pays the rest through their lawyer." />
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <TextField label="Where each payment obligation is written" required value={f.remunerationSource} onChange={set("remunerationSource")}
+                    error={err.remunerationSource} hint="e.g. Listing agreement s.3: seller pays 2% to each side; buyer's agreement: buyer pays any shortfall" />
+                </div>
               </>
             ) : (
               <TextField label="Our commission" required inputMode="decimal" value={f.totalGci} onChange={set("totalGci")} error={err.totalGci}
@@ -136,6 +146,13 @@ export function NewDeal() {
             {listingSide && (
               <TextField label={lease ? "Tenant's brokerage commission" : "Co-op commission"} inputMode="decimal" value={f.coopCommission}
                 onChange={set("coopCommission")} error={err.coopCommission} hint="Paid from what we collect" />
+            )}
+            {(side === "LISTING" || dual) && (
+              <div className="sm:col-span-2 lg:col-span-3">
+                <Checkbox label="The seller's commission changes depending on who represents the buyer" checked={f.sellerRemunerationVaries}
+                  hint="e.g. a lower commission if this brokerage also represents the buyer. Every buyer making a written offer is told."
+                  onChange={(e) => setF((x) => ({ ...x, sellerRemunerationVaries: e.target.checked }))} />
+              </div>
             )}
             <TextField label="Outside referral to" value={f.outsideReferralPayee} onChange={set("outsideReferralPayee")} error={err.outsideReferralPayee} />
             <TextField label="Referral %" inputMode="decimal" value={f.outsideReferralPct} onChange={set("outsideReferralPct")} error={err.outsideReferralPct} />

@@ -19,12 +19,13 @@ type Cents = number;
 interface Taxed { base: Cents; hst: Cents; total: Cents }
 interface Computation {
   cdaNumber: string; hstRate: number; taxName: string; payer: { kind: string; name: string };
-  incoming: { commission: Taxed; coop: Taxed; totalPayable: Cents; sides?: { listing: Cents; buyer: Cents } | null };
+  incoming: { commission: Taxed; coop: Taxed; totalPayable: Cents; sides?: { listing: Cents; buyer: Cents } | null;
+    payers?: { seller: Taxed & { name: string }; buyer: Taxed & { name: string } } | null };
   agents: { userId: string; name: string; payeeName: string; side?: "LISTING" | "BUYER" | "BOTH" | null; fromSides?: { listing: Cents; buyer: Cents } | null; split: Taxed; feesTotal: Taxed; payout: Cents; owes: Cents; effectiveSplitBps: number; capReachedOnThisDeal: boolean;
     adjustments: { id: string; kind: string; description: string; signedTotal: Cents }[] }[];
   brokerage: { netEarnedShare: Taxed; referral: (Taxed & { payee: string }) | null; netHstEstimate: Cents; agentPayablesTotal: Cents };
   trust: { held: Cents; appliedToCommission: Cents; balanceDueToLawyer: Cents; balanceDueFromLawyer: Cents; distributions: { entryType: string; payee: string; amount: Cents; purpose: string }[] };
-  wires: { payeeName: string; owed: Taxed; lessFromTrust: Cents; amount: Cents }[]; wiresTotal: Cents; warnings: string[];
+  wires: { payeeName: string; from?: string; owed: Taxed; lessFromTrust: Cents; amount: Cents }[]; wiresTotal: Cents; warnings: string[];
 }
 interface ClosingView { finalized: boolean; finalizedAt: string | null; revision: number | null; computation: Computation }
 interface PayoutLine {
@@ -134,16 +135,20 @@ export function ClosingTab({ deal, reloadDeal }: TabProps) {
       <div className="grid gap-5 lg:grid-cols-2">
         <Section title="Commission">
           <Facts items={[
-            ["Payable by", `${c.payer.name} (${labelOf(c.payer.kind).toLowerCase()})`],
+            ...(c.incoming.payers
+              // Same-brokerage deal: each client pays what their own agreement says, through their own lawyer
+              ? [["Payable by the seller", `${centsText(c.incoming.payers.seller.total)} through ${c.incoming.payers.seller.name}`],
+                 ["Payable by the buyer", `${centsText(c.incoming.payers.buyer.total)} through ${c.incoming.payers.buyer.name}`]] as [string, string][]
+              : [["Payable by", `${c.payer.name} (${labelOf(c.payer.kind).toLowerCase()})`] as [string, string]]),
             ["Commission", `${centsText(c.incoming.commission.base)} + ${c.taxName} ${centsText(c.incoming.commission.hst)} = ${centsText(c.incoming.commission.total)}`],
             ...(c.incoming.coop.total ? [["Co-operating brokerage", centsText(c.incoming.coop.total)] as [string, string]] : []),
             ...(c.brokerage.referral ? [[`Referral to ${c.brokerage.referral.payee}`, centsText(c.brokerage.referral.total)] as [string, string]] : []),
             ...(c.incoming.sides ? [["Of which", `listing side ${centsText(c.incoming.sides.listing)} · buyer side ${centsText(c.incoming.sides.buyer)} (billed once)`] as [string, string]] : []),
-            // HST is collected for remittance, not earned: shown apart from the brokerage's share. It's the HST
-            // collected on the whole commission less HST paid to agents, not tax on the brokerage's share alone.
+            // HST is collected for remittance, not earned: shown apart from the brokerage's share. What's actually owed
+            // to CRA is worked out on the return, after input tax credits and the period's other adjustments.
             ["Brokerage share (before expenses)", centsText(c.brokerage.netEarnedShare.base)],
-            [`${c.taxName} to remit (collected on the commission, less ${c.taxName} paid to agents)`, centsText(c.brokerage.netEarnedShare.hst)],
-            [`Net ${c.taxName} (this deal, estimate)`, centsText(c.brokerage.netHstEstimate)],
+            [`${c.taxName} collected on the commission`, centsText(c.incoming.commission.hst)],
+            [`Net ${c.taxName} from this deal (estimate: the return also depends on input tax credits)`, centsText(c.brokerage.netHstEstimate)],
           ]} />
         </Section>
         <Section title="Trust">

@@ -104,8 +104,9 @@ export interface ClosingInput {
     buyers: string[];
   };
   baseGci: Cents;
-  /** Same-brokerage (DUAL) deals: each side's commission under its own agreement; they add up to baseGci */
-  sides?: { listing: Cents; buyer: Cents } | null;
+  /** Same-brokerage (DUAL) deals: each side's commission under its own agreement (they add up to baseGci), and how
+   *  much of the buyer side the seller agreed to pay; the buyer pays the rest, through their own lawyer */
+  sides?: { listing: Cents; buyer: Cents; buyerSidePaidBySeller?: Cents | null } | null;
   coopCommission: Cents;
   coopBrokerage: string | null;
   referral: { payee: string; rateBps: number } | null;
@@ -114,6 +115,8 @@ export interface ClosingInput {
   taxName?: "HST" | "GST";
   agents: ClosingAgentInput[];
   closingLawyer: Contact | null;
+  /** Same-brokerage deals where the buyer pays part of the buyer side: the buyer's lawyer, who pays it */
+  buyerLawyer?: Contact | null;
   /** Landlord-side leases: the landlord pays the commission and receives the deposit balance */
   landlord?: Contact | null;
   trust: {
@@ -169,6 +172,8 @@ export interface TrustDistribution {
 export interface Wire {
   to: "BROKERAGE";
   payeeName: string;
+  /** Who sends it: the seller's lawyer (or the listing brokerage), or on a same-brokerage deal the buyer's lawyer */
+  from: string;
   /** The full commission payable, before anything applied from trust */
   owed: Taxed;
   lessFromTrust: Cents;
@@ -189,6 +194,9 @@ export interface ClosingComputation {
     totalPayable: Cents; // O
     /** Same-brokerage deals: each side's commission before tax (they add up to commission.base; billed once) */
     sides: { listing: Cents; buyer: Cents } | null;
+    /** Same-brokerage deals: what each client owes under their own agreement (seller: the listing side plus the part
+     *  of the buyer side they agreed to pay; buyer: the rest). Null when one payer owes it all. */
+    payers: { seller: Taxed & { name: string }; buyer: Taxed & { name: string } } | null;
   };
   agents: AgentClosingLine[];
   brokerage: {
@@ -287,6 +295,12 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       throw new ClosingAuditError("SIDES_MISMATCH", "The listing-side and buyer-side commissions don't add up to the deal's commission");
     }
     const missing = input.agents.filter((a) => !a.side).map((a) => a.name);
+    if (sides.buyerSidePaidBySeller === undefined || sides.buyerSidePaidBySeller === null) {
+      throw new ClosingAuditError("PAYER_SPLIT_MISSING", "Record how much of the buyer-side commission the seller agreed to pay (the buyer pays the rest) before generating the CDA");
+    }
+    if (sides.buyerSidePaidBySeller < 0 || sides.buyerSidePaidBySeller > sides.buyer) {
+      throw new ClosingAuditError("PAYER_SPLIT_INVALID", "The part of the buyer side the seller pays must be between $0 and the buyer-side commission");
+    }
     if (missing.length) throw new ClosingAuditError("AGENT_SIDE_MISSING", `Say which side ${missing.join(" and ")} represent${missing.length === 1 ? "s" : ""}`);
     for (const side of ["LISTING", "BUYER"] as const) {
       const group = input.agents.filter((a) => onSide(a, side));
@@ -331,6 +345,22 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   const commission = taxed(input.baseGci, rate);
   const coop = taxed(input.coopCommission, rate);
   const totalPayable = commission.total + coop.total;
+  // Same-brokerage deal where the buyer owes part of the buyer side under their own agreement: they pay it
+  // through their own lawyer. The seller's lawyer is directed to pay only what the seller owes.
+  const buyerDirect = sides ? sides.buyer - (sides.buyerSidePaidBySeller ?? sides.buyer) : 0;
+  let payers: ClosingComputation["incoming"]["payers"] = null;
+  if (buyerDirect > 0) {
+    if (!input.buyerLawyer?.name) {
+      throw new ClosingAuditError("BUYER_LAWYER_MISSING",
+        "The buyer pays part of the buyer-side commission under their agreement: add the buyer's lawyer to the deal before generating the CDA");
+    }
+    const buyerOwes = taxed(buyerDirect, rate);
+    payers = {
+      seller: { name: input.closingLawyer?.name ?? "", base: commission.base - buyerOwes.base, hst: commission.hst - buyerOwes.hst, total: commission.total - buyerOwes.total },
+      buyer: { name: input.buyerLawyer.name, ...buyerOwes },
+    };
+  }
+  const sellerOwesTotal = totalPayable - (payers?.buyer.total ?? 0);
 
   // ── 2. Agents, through the commission engine ─────────────────────────────
   const bySide = sides ? allocateBySide(sides, input.agents) : null;
@@ -418,14 +448,14 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
   let fromTrustForAgents = 0;
   let toLawyer = 0;
   if (appliesDeposit) {
-    let remaining = held;
+    // The deposit can only pay what the seller owes; the buyer's own share comes from the buyer
+    let remaining = Math.min(held, sellerOwesTotal);
     fromTrustToCoop = Math.min(remaining, coop.total);
     remaining -= fromTrustToCoop;
     fromTrustToBrokerage = Math.min(remaining, earnedTotal);
     remaining -= fromTrustToBrokerage;
     fromTrustForAgents = Math.min(remaining, agentPayouts);
-    remaining -= fromTrustForAgents;
-    toLawyer = remaining;
+    toLawyer = held - fromTrustToCoop - fromTrustToBrokerage - fromTrustForAgents;
 
     if (fromTrustToCoop > 0) {
       distributions.push({
@@ -492,14 +522,20 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
 
   const applied = held - toLawyer;
   const wires: Wire[] = [];
-  if (totalPayable > applied) {
+  if (sellerOwesTotal > applied) {
+    const owed = payers ? payers.seller : { base: commission.base + coop.base, hst: commission.hst + coop.hst, total: totalPayable };
     wires.push({
       to: "BROKERAGE",
       payeeName: brokerageName,
-      owed: { base: commission.base + coop.base, hst: commission.hst + coop.hst, total: totalPayable },
+      from: payer.name,
+      owed: { base: owed.base, hst: owed.hst, total: owed.total },
       lessFromTrust: applied,
-      amount: totalPayable - applied,
+      amount: sellerOwesTotal - applied,
     });
+  }
+  if (payers) {
+    wires.push({ to: "BROKERAGE", payeeName: brokerageName, from: payers.buyer.name,
+      owed: { base: payers.buyer.base, hst: payers.buyer.hst, total: payers.buyer.total }, lessFromTrust: 0, amount: payers.buyer.total });
   }
   const wiresTotal = wires.reduce((s, w) => s + w.amount, 0);
 
@@ -518,7 +554,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
     payer,
     closingLawyer: input.closingLawyer,
     landlord: input.landlord ?? null,
-    incoming: { commission, coop, totalPayable, sides },
+    incoming: { commission, coop, totalPayable, sides: sides ? { listing: sides.listing, buyer: sides.buyer } : null, payers },
     agents,
     brokerage: {
       netEarnedShare,
@@ -533,7 +569,7 @@ export function computeClosing(input: ClosingInput, brokerageName: string): Clos
       deposits: input.trust.deposits,
       appliedToCommission: applied,
       balanceDueToLawyer: toLawyer,
-      balanceDueFromLawyer: payer.kind === "COOPERATING_BROKERAGE" ? 0 : totalPayable - applied,
+      balanceDueFromLawyer: payer.kind === "COOPERATING_BROKERAGE" ? 0 : sellerOwesTotal - applied,
       distributions,
       balanceAfter,
     },

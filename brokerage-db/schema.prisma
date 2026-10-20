@@ -321,6 +321,9 @@ model Transaction {
   totalGci             Decimal         @db.Decimal(12, 2) // gross commission to our brokerage, pre-split, excl. HST
   listingSideGci       Decimal?        @db.Decimal(12, 2) // DUAL: listing side's share of totalGci (migration 021)
   buyerSideGci         Decimal?        @db.Decimal(12, 2) // DUAL: buyer side's share of totalGci
+  buyerSideSellerPays  Decimal?        @db.Decimal(12, 2) // DUAL: part of the buyer side the seller agreed to pay (migration 022)
+  remunerationSource   String? // DUAL: where each payment obligation is written
+  sellerRemunerationVaries Boolean     @default(false) // the seller's commission changes with who represents the buyer
   hstOnGci             Decimal?        @default(0) @db.Decimal(12, 2) // 13% Ontario HST collected on totalGci; NULL only when hstSource is MISSING
   hstSource            TaxAmountSource @default(CALCULATED) // migration 007
   commissionRatePct    Decimal?        @db.Decimal(5, 3)
@@ -1550,6 +1553,8 @@ model Offer {
   recordedBy       User              @relation("OfferRecordedBy", fields: [recordedById], references: [id])
   events           OfferEvent[]
   fromOurBrokerage Boolean           @default(false) // migration 016: a buyer our brokerage also represents
+  buyerRepresentation String? // migration 022: BROKERAGE or DESIGNATED, for a buyer of ours
+  buyerAgentIds    String[]          @default([]) @db.Uuid
   disclosures      TresaDisclosure[]
 
   @@index([listingDealId])
@@ -1616,6 +1621,8 @@ enum DisclosureKind {
   COMPETING_OFFERS_CONTENT
   SAME_BROKERAGE_REPRESENTATION
   COMPETING_BUYERS_CONSENT // migration 021
+  REMUNERATION_DISCLOSURE // migration 022
+  VARIABLE_REMUNERATION_DISCLOSURE
 }
 
 // TRESA / O. Reg. 567/05 disclosures to a party or an offeror (migration 016). Append-only.
@@ -1637,6 +1644,8 @@ model TresaDisclosure {
   documentFileId  String?        @db.Uuid
   recordedById    String         @db.Uuid
   createdAt       DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  situationAroseOn DateTime?     @db.Date // migration 022: when the multiple representation arose
+  confirms        String[]       @default([]) // what the written disclosure explained
 
   transaction  Transaction           @relation(fields: [transactionId], references: [id])
   party        TransactionParty?     @relation(fields: [partyId], references: [id], onDelete: Restrict)

@@ -32,8 +32,8 @@ Lost a link or want to start over: `ops/local-trial.sh demo` again (it erases th
 - **41 Ridge Rd, Stoney Creek**: Morgan's lease, $6,000 deposit in trust. CDA and payments out of trust refused: lease settlement stays off until counsel signs off.
 - **1204 – 88 Charlton Ave W, Hamilton**: Jamie's condo listing, $529,000, conditional, $25,000 deposit expected; listing agreement waiting for review.
 - **15 Ontario St, Grimsby**: Jamie's buyer deal, $1,045,000, conditional, deposit held by the other brokerage.
-- **1 Escarpment Cres, Hamilton**: both sides ours, $1,000,000, closed. Morgan for the seller (separate designated representative), Jamie for the buyer. $20,000 commission on each side; CDA issued with a separate statement for each agent (Morgan $14,000, Jamie $15,000).
-- **9 Ridge Rd, Grimsby**: Morgan for both seller and buyer under brokerage representation, $1,000,000. Each client's written consent recorded by compliance, so it's firm.
+- **1 Escarpment Cres, Hamilton**: both sides ours, $1,000,000, closed and fully compliant. Morgan for the seller, Jamie for the buyer (separate designated representatives). $20,000 commission on each side; the seller pays $30,000, the buyer $10,000, each through their own lawyer. CDA issued with a separate statement for each agent (Morgan $14,000, Jamie $15,000); trade record signed by Morgan and the broker of record.
+- **9 Ridge Rd, Grimsby**: Morgan for both seller and buyer under brokerage representation, $1,000,000. Signed consents uploaded and recorded by compliance, with when the multiple representation arose, so it's firm.
 - Trust and operating accounts, a verified bank file, a signed trust reconciliation, Morgan's 70% and Jamie's 75% plans in force.
 
 ## The 10 steps

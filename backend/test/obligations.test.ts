@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateTresa, type TresaFacts } from "../src/obligations/tresa.ts";
+import { classifyRepresentation, evaluateTresa, type TresaFacts } from "../src/obligations/tresa.ts";
 import { evaluateFintrac, evaluateProgram, type FintracFacts } from "../src/obligations/fintrac.ts";
 
 const seller = { id: "s", role: "SELLER", name: "Ann Lee", entityType: "INDIVIDUAL" as const, representation: "OUR_CLIENT" as const };
@@ -22,15 +22,60 @@ test("TRESA: a client needs the Information Guide explained before services, and
   assert.deepEqual(ok, []);
 });
 
-test("TRESA: multiple representation needs written consent from each client before the offer", () => {
+test("TRESA: multiple representation needs each client's signed consent; a consent signed after it arose is for review, not an automatic breach", () => {
   const dual: TresaFacts = { ...base, side: "DUAL", parties: [seller, buyer], agreements: [agreement("s"), agreement("b")],
-    disclosures: [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z"), disclosure("INFORMATION_GUIDE", "b", "2026-09-01T10:00:00.000Z")] };
+    disclosures: [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z"), disclosure("INFORMATION_GUIDE", "b", "2026-09-01T10:00:00.000Z"),
+      disclosure("REMUNERATION_DISCLOSURE", "s", "2026-09-01T10:00:00.000Z"), disclosure("REMUNERATION_DISCLOSURE", "b", "2026-09-01T10:00:00.000Z")] };
   assert.deepEqual(rules(evaluateTresa(dual)), ["MULTIPLE_REPRESENTATION:BLOCKING", "MULTIPLE_REPRESENTATION:BLOCKING"]);
-  const consentAt = (at: string) => ["s", "b"].flatMap((p) => [
-    disclosure("MULTIPLE_REPRESENTATION_DISCLOSURE", p, at, { acknowledgedAt: at }), disclosure("MULTIPLE_REPRESENTATION_CONSENT", p, at, { acknowledgedAt: at })]);
-  assert.deepEqual(rules(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-10-12T10:00:00.000Z")] })),
-    ["MULTIPLE_REPRESENTATION_LATE:BREACH", "MULTIPLE_REPRESENTATION_LATE:BREACH"]);
-  assert.deepEqual(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-09-20T10:00:00.000Z")] }), []);
+  const consentAt = (at: string, arose: string) => ["s", "b"].flatMap((p) => [
+    disclosure("MULTIPLE_REPRESENTATION_DISCLOSURE", p, at, { acknowledgedAt: at }),
+    disclosure("MULTIPLE_REPRESENTATION_CONSENT", p, at, { acknowledgedAt: at, situationAroseOn: arose })]);
+  // Signed a month after the multiple representation arose: the broker of record reviews what happened in between
+  assert.deepEqual(rules(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-10-12T10:00:00.000Z", "2026-09-15")] })),
+    ["MULTIPLE_REPRESENTATION_REVIEW:WARNING", "MULTIPLE_REPRESENTATION_REVIEW:WARNING"]);
+  // Signed after the offer date but the day it arose: nothing to review (the offer date alone decides nothing)
+  assert.deepEqual(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-10-12T10:00:00.000Z", "2026-10-12")] }), []);
+  assert.deepEqual(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-09-20T10:00:00.000Z", "2026-09-20")] }), []);
+});
+
+test("TRESA: representation is unverified (not called multiple representation) until both agreements are recorded; co-designated agents count", () => {
+  const guides = [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z"), disclosure("INFORMATION_GUIDE", "b", "2026-09-01T10:00:00.000Z"),
+    disclosure("REMUNERATION_DISCLOSURE", "s", "2026-09-01T10:00:00.000Z"), disclosure("REMUNERATION_DISCLOSURE", "b", "2026-09-01T10:00:00.000Z")];
+  const designated = (partyId: string, ids: string[]) => ({ ...agreement(partyId), type: "DESIGNATED" as const, designatedRepresentativeIds: ids });
+  const dual: TresaFacts = { ...base, side: "DUAL", agentIds: ["a1", "a2"], agentSides: [{ userId: "a1", side: "LISTING" }, { userId: "a2", side: "BUYER" }],
+    parties: [seller, buyer], agreements: [designated("s", ["a1"])], disclosures: guides };
+  assert.equal(classifyRepresentation(dual).mode, "UNDETERMINED");
+  assert.deepEqual(rules(evaluateTresa(dual)), ["REPRESENTATION_AGREEMENT:BLOCKING", "REPRESENTATION_UNVERIFIED:BLOCKING"]);
+  assert.ok(!rules(evaluateTresa(dual)).some((r) => r.startsWith("MULTIPLE_REPRESENTATION")));
+  assert.equal(classifyRepresentation({ ...dual, agreements: [designated("s", ["a1"]), designated("b", ["a2"])] }).mode, "SEPARATE_DESIGNATED");
+  // Jamie (a2) is named on the seller's agreement too, as a co-designated representative: the same representative acts for both
+  assert.equal(classifyRepresentation({ ...dual, agreements: [designated("s", ["a1", "a2"]), designated("b", ["a2"])] }).mode, "DESIGNATED_SAME");
+  // The agreement in force on the offer date decides, not a later one
+  const later = { ...designated("b", ["a1"]), signedAt: "2026-10-20T10:00:00.000Z", effectiveFrom: "2026-10-20" };
+  assert.equal(classifyRepresentation({ ...dual, agreements: [designated("s", ["a1"]), designated("b", ["a2"]), later] }).mode, "SEPARATE_DESIGNATED");
+});
+
+test("TRESA: our buyers' offers — separate designated representatives need no consent; a shared agent, brokerage representation or our seller's agent does", () => {
+  const offer = (id: string, extra: object = {}) =>
+    ({ id, receivedAt: "2026-10-09T19:00:00.000Z", written: true, status: "RECEIVED", acceptedAt: null, fromOurBrokerage: true, label: `offer ${id}`, ...extra });
+  const designated = { ...agreement("s"), type: "DESIGNATED" as const, designatedRepresentativeIds: ["a1"] };
+  const told = (ids: string[]) => ids.map((id) => ({ ...disclosure("COMPETING_OFFERS_NUMBER", null, "2026-10-09T20:00:00.000Z"), offerId: id, numberDisclosed: 2 }));
+  const facts: TresaFacts = { ...base, agreements: [designated], disclosures: [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z"), ...told(["1", "2"])],
+    offers: [offer("1", { buyerRepresentation: "DESIGNATED", buyerAgentIds: ["a2"] }), offer("2", { buyerRepresentation: "DESIGNATED", buyerAgentIds: ["a3"] })] };
+  assert.deepEqual(rules(evaluateTresa(facts)), []); // two buyers, two different designated agents, neither the seller's
+  const notRecorded = { ...facts, offers: [facts.offers[0]!, offer("2")] };
+  assert.deepEqual(rules(evaluateTresa(notRecorded)), ["OFFER_REPRESENTATION_UNVERIFIED:BLOCKING"]);
+  const sameAgent = { ...facts, offers: [facts.offers[0]!, offer("2", { buyerRepresentation: "DESIGNATED", buyerAgentIds: ["a2"] })] };
+  assert.deepEqual(rules(evaluateTresa(sameAgent)), ["OFFER_MULTIPLE_REPRESENTATION:BLOCKING", "OFFER_MULTIPLE_REPRESENTATION:BLOCKING"]);
+  const brokerage = { ...facts, offers: [facts.offers[0]!, offer("2", { buyerRepresentation: "BROKERAGE" })] };
+  assert.equal(rules(evaluateTresa(brokerage)).filter((r) => r === "OFFER_MULTIPLE_REPRESENTATION:BLOCKING").length, 2);
+  const sellersAgent = { ...facts, offers: [offer("1", { buyerRepresentation: "DESIGNATED", buyerAgentIds: ["a1"] }), facts.offers[1]!] };
+  const f = evaluateTresa(sellersAgent);
+  assert.deepEqual(rules(f), ["OFFER_MULTIPLE_REPRESENTATION:BLOCKING"]);
+  assert.match(f[0]!.message, /with the seller/);
+  // The signed consent, recorded against the offer, clears it
+  const consent = { ...disclosure("COMPETING_BUYERS_CONSENT", null, "2026-10-09T20:00:00.000Z", { acknowledgedAt: "2026-10-09T20:00:00.000Z", situationAroseOn: "2026-10-09" }), offerId: "1" };
+  assert.deepEqual(rules(evaluateTresa({ ...sellersAgent, disclosures: [...sellersAgent.disclosures, consent] })), []);
 });
 
 test("TRESA: a self-represented buyer gets the guide and the right SRP form before we assist", () => {
@@ -46,8 +91,11 @@ test("TRESA: a self-represented buyer gets the guide and the right SRP form befo
 test("TRESA: competing offers — the number to every written offeror, content to all or none, our own buyer disclosed", () => {
   const offer = (id: string, receivedAt: string, extra: object = {}) =>
     ({ id, receivedAt, written: true, status: "RECEIVED", acceptedAt: null, fromOurBrokerage: false, label: `offer ${id}`, ...extra });
-  const facts: TresaFacts = { ...base, agreements: [agreement("s")], disclosures: [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z")],
-    offers: [offer("1", "2026-10-09T19:00:00.000Z"), offer("2", "2026-10-09T19:30:00.000Z", { fromOurBrokerage: true }), offer("3", "2026-10-09T19:45:00.000Z", { written: false })] };
+  // The seller's designated agent (a1) isn't the buyer's (a9): no multiple representation, just the s.22.0.3 disclosure
+  const facts: TresaFacts = { ...base, agreements: [{ ...agreement("s"), type: "DESIGNATED" as const, designatedRepresentativeIds: ["a1"] }],
+    disclosures: [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z")],
+    offers: [offer("1", "2026-10-09T19:00:00.000Z"), offer("2", "2026-10-09T19:30:00.000Z", { fromOurBrokerage: true, buyerRepresentation: "DESIGNATED", buyerAgentIds: ["a9"] }),
+      offer("3", "2026-10-09T19:45:00.000Z", { written: false })] };
   assert.deepEqual(rules(evaluateTresa(facts)), ["COMPETING_OFFERS_NUMBER:BLOCKING", "COMPETING_OFFERS_NUMBER:BLOCKING", "SAME_BROKERAGE_REPRESENTATION:BLOCKING"]);
   const number = (id: string, at: string, n: number) => ({ ...disclosure("COMPETING_OFFERS_NUMBER", null, at), offerId: id, numberDisclosed: n });
   const told = { ...facts, disclosures: [...facts.disclosures, number("1", "2026-10-09T20:00:00.000Z", 3), number("2", "2026-10-09T20:00:00.000Z", 2),

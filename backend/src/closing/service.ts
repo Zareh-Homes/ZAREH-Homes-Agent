@@ -171,7 +171,8 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
     },
     baseGci: cents(deal.totalGci),
     sides: deal.listingSideGci !== null && deal.buyerSideGci !== null
-      ? { listing: cents(deal.listingSideGci), buyer: cents(deal.buyerSideGci) } : null,
+      ? { listing: cents(deal.listingSideGci), buyer: cents(deal.buyerSideGci),
+          buyerSidePaidBySeller: deal.buyerSideSellerPays === null ? null : cents(deal.buyerSideSellerPays) } : null,
     ...(tax ? { hstRate: tax.rateBps, taxName: tax.taxName } : {}),
     coopCommission: cents(deal.coopCommission),
     coopBrokerage: byRole("COOP_BROKERAGE")[0]?.fullName ?? deal.coopBrokerageName,
@@ -180,6 +181,8 @@ export async function gatherClosingInput(db: Db, dealId: string): Promise<Closin
       : null,
     agents,
     closingLawyer: lawyer ? { name: lawyer.fullName, email: lawyer.email, phone: lawyer.phone } : null,
+    buyerLawyer: deal.side === "DUAL" && byRole("BUYER_LAWYER")[0]
+      ? { name: byRole("BUYER_LAWYER")[0]!.fullName, email: byRole("BUYER_LAWYER")[0]!.email, phone: byRole("BUYER_LAWYER")[0]!.phone } : null,
     landlord: byRole("LANDLORD")[0] ? { name: byRole("LANDLORD").map((p) => p.fullName).join(" and "), email: byRole("LANDLORD")[0]!.email, phone: byRole("LANDLORD")[0]!.phone } : null,
     trust: {
       accountId: withFunds[0]?.trustAccountId ?? null,

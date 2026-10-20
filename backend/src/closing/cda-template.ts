@@ -107,7 +107,11 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
   const who = toLandlord ? "landlord" : "lawyer";
   const appliesDeposit = c.trust.distributions.length > 0 || (toLawyer && d.trustDepositHolder === "OUR_BROKERAGE");
   const dueLabel = c.trust.balanceDueToLawyer > 0 ? `Balance due TO ${who}` : toLawyer ? `Balance due FROM ${who}` : "Amount due from listing brokerage";
-  const dueAmount = c.trust.balanceDueToLawyer > 0 ? c.trust.balanceDueToLawyer : c.wiresTotal;
+  const dueAmount = c.trust.balanceDueToLawyer > 0 ? c.trust.balanceDueToLawyer : toLawyer ? c.trust.balanceDueFromLawyer : c.wiresTotal;
+  // Same-brokerage deal where the buyer owes part of the buyer side under their own agreement: two payers, each
+  // directed to pay only what their own client owes
+  const split = c.incoming.payers ?? null;
+  const payerNames = split ? `${split.seller.name} and ${split.buyer.name}` : c.payer.name;
   const holderLabel: Record<string, string> = {
     OUR_BROKERAGE: b.legalName, COOP_BROKERAGE: "the co-operating brokerage", LAWYER: "a lawyer in trust", BUILDER: "the builder / trustee",
   };
@@ -127,7 +131,7 @@ export function renderCda(c: ClosingComputation, b: BrokerageProfile, opts: CdaR
     <tr>
       <td>${i + 1}</td>
       <td><strong>${esc(w.payeeName)}</strong>
-        <div class="note">Total commission incl. HST · HST Reg. ${esc(b.hstNumber)}</div></td>
+        <div class="note">${split ? `From ${esc(w.from)} · ` : ""}Commission incl. HST · HST Reg. ${esc(b.hstNumber)}</div></td>
       <td class="num">${money(w.owed.base)}</td>
       <td class="num">${money(w.owed.hst)}</td>
       <td class="num">${w.lessFromTrust ? `−${money(w.lessFromTrust)}` : "—"}</td>
@@ -224,6 +228,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
     <div class="box">
       <h4>${toLandlord ? "To: Landlord" : toLawyer ? "To: Closing lawyer (Seller's solicitor)" : "To: Listing brokerage (commission payer)"}</h4>
       ${toLawyer ? contact : `<strong>${esc(c.payer.name)}</strong>${c.closingLawyer ? `<div class="note">Closing lawyer: ${esc(c.closingLawyer.name)}</div>` : ""}`}
+      ${split ? `<h4>And: Buyer's lawyer</h4><strong>${esc(split.buyer.name)}</strong>` : ""}
     </div>
     <div class="box">
       <h4>Re: Transaction</h4>
@@ -247,6 +252,8 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
         ${taxedRow(`Commission – ${b.legalName}`, c.incoming.commission)}
         ${c.incoming.sides ? `<tr><td class="indent">of which listing side (seller's agreement)</td><td class="num">${money(c.incoming.sides.listing)}</td><td></td><td></td></tr>
         <tr><td class="indent">of which buyer side (buyer's agreement)</td><td class="num">${money(c.incoming.sides.buyer)}</td><td></td><td></td></tr>` : ""}
+        ${split ? `${taxedRow(`Payable by the seller, through ${split.seller.name}`, split.seller, "The listing side, and the part of the buyer side the seller agreed to pay")}
+        ${taxedRow(`Payable by the buyer, through ${split.buyer.name}`, split.buyer, "The rest of the buyer side, under the buyer's own agreement")}` : ""}
         ${c.incoming.coop.total > 0 ? taxedRow("Co-operating brokerage commission", c.incoming.coop, "Payable to the co-operating brokerage through the listing brokerage") : ""}
         <tr class="total"><td>Total commission payable</td>
           <td class="num">${money(c.incoming.commission.base + c.incoming.coop.base)}</td>
@@ -290,7 +297,7 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
       <thead><tr><th>#</th><th>Pay to</th><th class="num">Base</th><th class="num">HST</th><th class="num">Less from trust</th><th class="num">Wire amount</th></tr></thead>
       <tbody>
         ${wireRows}
-        <tr class="total"><td></td><td colspan="4">Total to be paid by ${esc(c.payer.name)}</td><td class="num">${money(c.wiresTotal)}</td></tr>
+        <tr class="total"><td></td><td colspan="4">Total to be paid by ${esc(payerNames)}</td><td class="num">${money(c.wiresTotal)}</td></tr>
       </tbody>
     </table>
     <p>Pay the amount shown in this section to ${esc(b.legalName)} only. It is the commission payable to ${esc(b.legalName)} under this
@@ -302,12 +309,15 @@ ${opts.status === "DRAFT" ? `<div class="watermark" aria-hidden="true">DRAFT</di
 
   <section>
     <h2>Authorization</h2>
-    <p>${esc(b.legalName)} authorizes and directs ${esc(c.payer.name)} to pay the commission set out above on closing,
+    <p>${esc(b.legalName)} authorizes and directs ${split
+      ? `${esc(split.seller.name)} to pay ${money(c.trust.balanceDueFromLawyer)} (what the seller owes, after the deposit) and ${esc(split.buyer.name)} to pay ${money(split.buyer.total)} (what the buyer owes under their own agreement)`
+      : esc(c.payer.name)} to pay the commission set out above on closing,
       as shown in section 4${c.trust.balanceDueToLawyer > 0 ? `, and will remit ${money(c.trust.balanceDueToLawyer)} from its trust account as shown in section 3` : ""}.
       Amounts include ${tax} at ${pct(c.hstRate)}. This authorization replaces any earlier version for this transaction.</p>
     <div class="sign">
       <div>${esc(b.brokerOfRecord)}, Broker of Record – signature and date</div>
       <div>${toLawyer ? `${toLandlord ? "Landlord" : "Seller(s)"} acknowledgment – ${esc(d.sellers.join(", ") || "signature")}` : `Received by ${esc(c.payer.name)}`}</div>
+      ${split ? `<div>Buyer(s) acknowledgment – ${esc(d.buyers.join(", ") || "signature")}</div>` : ""}
     </div>
   </section>
   ${internal}

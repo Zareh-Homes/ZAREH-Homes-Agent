@@ -102,21 +102,30 @@ const REP_TITLE: Record<string, string> = {
   BROKERAGE: "Multiple representation (brokerage representation)",
   DESIGNATED_SAME: "Multiple representation (same designated representative)",
   MIXED: "Multiple representation (brokerage and designated)",
-  UNDETERMINED: "Possible multiple representation: record both representation agreements",
+  UNDETERMINED: "Representation not verified: further activity requires review",
 };
 
 /** Kinds given to an offeror (picked by offer) rather than to a party on the deal */
-const OFFER_KINDS = new Set(["COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "COMPETING_BUYERS_CONSENT"]);
+const OFFER_KINDS = new Set(["COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "COMPETING_BUYERS_CONSENT",
+  "VARIABLE_REMUNERATION_DISCLOSURE"]);
 /** Written consent is confirmed by a managing broker or compliance admin who has seen the signed form */
 const CONSENT_KINDS = new Set(["MULTIPLE_REPRESENTATION_CONSENT", "COMPETING_BUYERS_CONSENT"]);
 const DISCLOSURES = ["INFORMATION_GUIDE", "SELF_REPRESENTED_PARTY_FORM", "MULTIPLE_REPRESENTATION_DISCLOSURE", "MULTIPLE_REPRESENTATION_CONSENT",
-  "COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "COMPETING_BUYERS_CONSENT"];
+  "REMUNERATION_DISCLOSURE", "COMPETING_OFFERS_NUMBER", "COMPETING_OFFERS_CONTENT", "SAME_BROKERAGE_REPRESENTATION", "COMPETING_BUYERS_CONSENT",
+  "VARIABLE_REMUNERATION_DISCLOSURE"];
 const KIND_LABEL: Record<string, string> = {
   SAME_BROKERAGE_REPRESENTATION: "Disclosure to another buyer: we act for seller and a buyer",
-  COMPETING_BUYERS_CONSENT: "Competing buyers we represent: buyer's written consent",
-  MULTIPLE_REPRESENTATION_CONSENT: "Multiple representation: client's written consent",
+  COMPETING_BUYERS_CONSENT: "Multiple representation on an offer: signed consent",
+  MULTIPLE_REPRESENTATION_CONSENT: "Multiple representation: client's signed consent",
   MULTIPLE_REPRESENTATION_DISCLOSURE: "Multiple representation: written disclosure",
+  REMUNERATION_DISCLOSURE: "Both agreements' remuneration terms, in writing (we act for seller and buyer)",
+  VARIABLE_REMUNERATION_DISCLOSURE: "To an offeror: the seller's commission changes with who represents the buyer",
 };
+/** What the written disclosure of multiple representation has to explain */
+const EXPLAINS: [string, string][] = [
+  ["DUTIES", "How our duties to each client change"], ["SERVICES", "How the services change"],
+  ["REMUNERATION", "How the remuneration changes"], ["INDEPENDENT_ADVICE", "Advised to get independent professional advice"],
+];
 
 function Disclosure({ dealId, parties, listing, onDone, onCancel }: { dealId: string; parties: Obligations["parties"]; listing: boolean; onDone: () => void; onCancel: () => void }) {
   const act = useAction();
@@ -125,9 +134,16 @@ function Disclosure({ dealId, parties, listing, onDone, onCancel }: { dealId: st
   const offers = useApi<{ offers: { id: string; receivedAt: string; offerorBrokerage: string | null; offerorSelfRepresented: boolean; fromOurBrokerage: boolean }[] }>(
     listing ? `/api/deals/${dealId}/offers` : null);
   const kinds = DISCLOSURES.filter((k) => (reviewer || !CONSENT_KINDS.has(k)) && (listing || !OFFER_KINDS.has(k)));
-  const [f, setF] = useState({ kind: "INFORMATION_GUIDE", partyId: "", offerId: "", deliveredAt: "", method: "", explainedAt: "", acknowledgedAt: "", formVersion: "", numberDisclosed: "", content: "" });
+  const [f, setF] = useState({ kind: "INFORMATION_GUIDE", partyId: "", offerId: "", deliveredAt: "", method: "", explainedAt: "", acknowledgedAt: "", formVersion: "",
+    numberDisclosed: "", content: "", situationAroseOn: "" });
+  const [explains, setExplains] = useState<string[]>([]);
   const opt = (v: string) => (v ? v : undefined);
   const toOffer = OFFER_KINDS.has(f.kind);
+  const consent = CONSENT_KINDS.has(f.kind);
+  // The signed copy: the latest upload to the deal's "signed disclosures and consents" slot
+  const docs = useApi<{ slots: { code: string; latestFile: { id: string; fileName: string; version: number; uploadedAt: string } | null }[] }>(
+    consent ? `/api/deals/${dealId}/documents` : null);
+  const signed = docs.data?.slots.find((x) => x.code === "REPRESENTATION_CONSENTS")?.latestFile ?? null;
   return (
     <form className="space-y-3" onSubmit={async (e) => {
       e.preventDefault();
@@ -135,6 +151,8 @@ function Disclosure({ dealId, parties, listing, onDone, onCancel }: { dealId: st
         kind: f.kind, ...(toOffer ? { offerId: opt(f.offerId) } : { partyId: opt(f.partyId) }), deliveredAt: iso(f.deliveredAt), method: f.method,
         explainedAt: f.explainedAt ? iso(f.explainedAt) : undefined, acknowledgedAt: f.acknowledgedAt ? iso(f.acknowledgedAt) : undefined,
         formVersion: opt(f.formVersion), numberDisclosed: f.numberDisclosed ? Number(f.numberDisclosed) : undefined, content: opt(f.content),
+        ...(f.kind === "MULTIPLE_REPRESENTATION_DISCLOSURE" ? { confirms: explains } : {}),
+        ...(consent ? { situationAroseOn: opt(f.situationAroseOn), documentFileId: signed?.id } : {}),
       }));
       if (ok) onDone();
     }}>
@@ -150,13 +168,32 @@ function Disclosure({ dealId, parties, listing, onDone, onCancel }: { dealId: st
       <TextField label="Explained" type="datetime-local" value={f.explainedAt} onChange={(e) => setF({ ...f, explainedAt: e.target.value })} />
       <TextField label={CONSENT_KINDS.has(f.kind) ? "Consent signed" : "Acknowledged / consented"} type="datetime-local" required={CONSENT_KINDS.has(f.kind)}
         value={f.acknowledgedAt} onChange={(e) => setF({ ...f, acknowledgedAt: e.target.value })} error={act.fields.acknowledgedAt} />
-      {f.kind === "INFORMATION_GUIDE" || f.kind === "SAME_BROKERAGE_REPRESENTATION" ? (
+      {f.kind === "SELF_REPRESENTED_PARTY_FORM" ? (
         <SelectField label="Form version" value={f.formVersion} placeholder="—" onChange={(e) => setF({ ...f, formVersion: e.target.value })}
           options={[{ value: "BROKERAGE_REPRESENTATION", label: "Brokerage representation" }, { value: "DESIGNATED_REPRESENTATION", label: "Designated representation" }]} />
       ) : null}
       {f.kind === "COMPETING_OFFERS_NUMBER" && <TextField label="Number of offers disclosed" inputMode="numeric" value={f.numberDisclosed} onChange={(e) => setF({ ...f, numberDisclosed: e.target.value })} />}
       {f.kind === "COMPETING_OFFERS_CONTENT" && <TextArea label="What was disclosed" value={f.content} onChange={(e) => setF({ ...f, content: e.target.value })} />}
-      {f.kind === "COMPETING_BUYERS_CONSENT" && <TextArea label="What you confirmed" required hint="e.g. signed consent to multiple representation, or separate designated representatives"
+      {f.kind === "MULTIPLE_REPRESENTATION_DISCLOSURE" && (
+        <fieldset className="space-y-1"><legend className="text-sm font-medium">The written disclosure explained</legend>
+          {EXPLAINS.map(([k, label]) => <Checkbox key={k} label={label} checked={explains.includes(k)}
+            onChange={(e) => setExplains(e.target.checked ? [...explains, k] : explains.filter((x) => x !== k))} />)}
+        </fieldset>
+      )}
+      {(f.kind === "REMUNERATION_DISCLOSURE" || f.kind === "VARIABLE_REMUNERATION_DISCLOSURE") && <TextArea label="What was disclosed" required
+        hint={f.kind === "REMUNERATION_DISCLOSURE" ? "The remuneration terms of the seller's and the buyer's agreements" : "How the seller's commission changes"}
+        value={f.content} onChange={(e) => setF({ ...f, content: e.target.value })} />}
+      {consent && (
+        <>
+          <TextField label="When the multiple representation arose" type="date" required value={f.situationAroseOn}
+            hint="When both clients were in this same trade (e.g. our buyer became interested in our listing)"
+            onChange={(e) => setF({ ...f, situationAroseOn: e.target.value })} error={act.fields.situationAroseOn} />
+          {signed
+            ? <p className="text-sm text-ink-2">Signed copy: {signed.fileName} (version {signed.version}, uploaded {dateText(signed.uploadedAt)})</p>
+            : <Notice kind="warning">Upload the signed disclosure and consent on the Documents tab first ("Multiple representation: signed disclosures and consents").</Notice>}
+        </>
+      )}
+      {f.kind === "COMPETING_BUYERS_CONSENT" && <TextArea label="What you confirmed" required hint="Who consented in writing, e.g. the seller and this buyer, to the same designated representative"
         value={f.content} onChange={(e) => setF({ ...f, content: e.target.value })} />}
       <div className="flex gap-2"><Button type="submit" variant="primary" busy={act.busy}>Record</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
     </form>

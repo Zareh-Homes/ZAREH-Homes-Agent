@@ -347,15 +347,17 @@ test("leases: no landlord on the deal, no CDA; and FINTRAC records that do exist
 // Each side's commission comes from its own agreement and is split among that side's agents only; the
 // commission is billed once ($40,000 + 13% HST = $45,200) and the brokerage's share is counted once.
 
-const sameBrokerage = (sides: { listing: number; buyer: number }, agents: ClosingInput["agents"]): ClosingInput => ({
+// sellerPays: how much of the buyer side the seller agreed to pay (default: all of it, the usual Ontario listing)
+const sameBrokerage = (sides: { listing: number; buyer: number; sellerPays?: number }, agents: ClosingInput["agents"]): ClosingInput => ({
   deal: {
     id: "deal-dual", dealNumber: "2026-0100", side: "DUAL", status: "CLOSED", closeDate: "2026-11-30",
     streetAddress: "1 Escarpment Cres", unit: null, city: "Hamilton", mlsNumber: null,
     salePrice: $(1_000_000), expectedDeposit: $(50_000), trustDepositHolder: "OUR_BROKERAGE", sellers: ["Ana Seller"], buyers: ["Ben Buyer"],
   },
-  baseGci: $(sides.listing + sides.buyer), sides: { listing: $(sides.listing), buyer: $(sides.buyer) },
+  baseGci: $(sides.listing + sides.buyer), sides: { listing: $(sides.listing), buyer: $(sides.buyer), buyerSidePaidBySeller: $(sides.sellerPays ?? sides.buyer) },
   hstRate: 1300, taxName: "HST", coopCommission: 0, coopBrokerage: null, referral: null, agents,
   closingLawyer: { name: "Seller Law LLP", email: "closings@sellerlaw.test", phone: null },
+  buyerLawyer: { name: "Buyer Law LLP", email: "closings@buyerlaw.test", phone: null },
   trust: { accountId: "acct-1", balance: $(50_000), cleared: $(50_000), accountsWithFunds: 1, activeHold: false,
     deposits: [{ receiptNumber: 2001, amount: $(50_000), date: "2026-10-20", payor: "Ben Buyer" }] },
   fintrac: { total: 2, outstanding: [] },
@@ -371,6 +373,7 @@ test("same brokerage, two agents (one per side): each paid from their own side, 
   assert.deepEqual([c.incoming.commission.base, c.incoming.commission.hst, c.incoming.commission.total], [$(40_000), $(5_200), $(45_200)]);
   assert.equal(c.incoming.coop.total, 0); // our own agent is never a co-operating brokerage
   assert.deepEqual(c.incoming.sides, { listing: $(20_000), buyer: $(20_000) });
+  assert.equal(c.incoming.payers, null); // the seller agreed to pay both sides: one payer, the seller's lawyer
   const a = byName(c);
   assert.deepEqual(a["Agent A"]!.fromSides, { listing: $(20_000), buyer: 0 });
   assert.deepEqual([a["Agent A"]!.split.base, a["Agent A"]!.split.hst, a["Agent A"]!.payout], [$(16_000), $(2_080), $(18_080)]); // registered: HST on split
@@ -416,6 +419,36 @@ test("same brokerage: sides missing, not adding up, an agent without a side, or 
   assert.equal(auditCode(() => computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [two[0]!, { ...two[1]!, side: null }]), BROKERAGE)), "AGENT_SIDE_MISSING");
   assert.equal(auditCode(() => computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [two[0]!]), BROKERAGE)), "SIDE_WITHOUT_AGENT");
   assert.equal(auditCode(() => computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000 }, [two[0]!, { ...two[1]!, gciShareBps: 5_000 }]), BROKERAGE)), "GCI_SHARES_INVALID");
+  // Who pays the buyer side is never assumed
+  const noSplit = sameBrokerage({ listing: 20_000, buyer: 20_000 }, two);
+  assert.equal(auditCode(() => computeClosing({ ...noSplit, sides: { listing: $(20_000), buyer: $(20_000) } }, BROKERAGE)), "PAYER_SPLIT_MISSING");
+  assert.equal(auditCode(() => computeClosing({ ...noSplit, sides: { listing: $(20_000), buyer: $(20_000), buyerSidePaidBySeller: $(20_001) } }, BROKERAGE)), "PAYER_SPLIT_INVALID");
+  assert.equal(auditCode(() => computeClosing({ ...sameBrokerage({ listing: 20_000, buyer: 20_000, sellerPays: 0 }, two), buyerLawyer: null }, BROKERAGE)), "BUYER_LAWYER_MISSING");
+});
+
+test("same brokerage, the buyer pays the buyer side under their own agreement: the seller's lawyer is directed to pay only the seller's share", () => {
+  const c = computeClosing(sameBrokerage({ listing: 20_000, buyer: 20_000, sellerPays: 0 }, [
+    agentOn("a", "Agent A", "LISTING", 10_000), agentOn("b", "Agent B", "BUYER", 10_000)]), BROKERAGE);
+  // Same commission and the same agent statements: only who pays changes
+  assert.deepEqual([c.incoming.commission.total, byName(c)["Agent A"]!.payout, byName(c)["Agent B"]!.payout], [$(45_200), $(16_000), $(16_000)]);
+  assert.deepEqual(c.incoming.payers, {
+    seller: { name: "Seller Law LLP", base: $(20_000), hst: $(2_600), total: $(22_600) },
+    buyer: { name: "Buyer Law LLP", base: $(20_000), hst: $(2_600), total: $(22_600) },
+  });
+  // The $50,000 deposit pays only what the seller owes ($22,600); the other $27,400 goes back to the seller's lawyer
+  assert.deepEqual([c.trust.appliedToCommission, c.trust.balanceDueToLawyer, c.trust.balanceDueFromLawyer], [$(22_600), $(27_400), 0]);
+  // The buyer's share is wired by the buyer's lawyer, never taken from the deposit
+  assert.deepEqual(c.wires.map((w) => [w.from, w.amount]), [["Buyer Law LLP", $(22_600)]]);
+  assert.equal(c.trust.appliedToCommission + c.wiresTotal, $(45_200)); // still billed and counted once
+});
+
+test("same brokerage, the seller pays part of the buyer side: each lawyer pays their own client's part", () => {
+  const input = sameBrokerage({ listing: 20_000, buyer: 20_000, sellerPays: 10_000 }, [
+    agentOn("a", "Agent A", "LISTING", 10_000), agentOn("b", "Agent B", "BUYER", 10_000)]);
+  const c = computeClosing({ ...input, deal: { ...input.deal, trustDepositHolder: "LAWYER" }, trust: { ...input.trust, balance: 0, cleared: 0, deposits: [] } }, BROKERAGE);
+  assert.deepEqual([c.incoming.payers!.seller.total, c.incoming.payers!.buyer.total], [$(33_900), $(11_300)]);
+  assert.deepEqual(c.wires.map((w) => [w.from, w.amount]), [["Seller Law LLP", $(33_900)], ["Buyer Law LLP", $(11_300)]]);
+  assert.equal(c.wiresTotal, $(45_200));
 });
 
 test("the earlier HST figure: $2,437.50 is 13% of the whole $18,750 commission, kept by the brokerage only because the agent isn't HST-registered", () => {

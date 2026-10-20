@@ -21,6 +21,19 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
 - Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
 
+## 0.18.5 (2026-10-20): Review of same-brokerage deals
+
+- **Migration 022.** Consents to multiple representation need the signed copy (uploaded to a slot that appears when consent is needed) and the date the multiple representation arose. The written disclosure records that it explained duties, services, remuneration and independent advice.
+- Representation without both agreements is "not verified", not "multiple representation". Agreements are compared as in force on the offer date, every co-designated agent included. A consent signed after the multiple representation arose is flagged for the broker's review, not declared a breach.
+- Our buyers' offers record how each buyer is represented. Two of our buyers with different designated agents need no consent. A shared agent, brokerage representation, or our seller's own agent does, recorded against the offer before acceptance.
+- New disclosures: both agreements' remuneration terms to each client (RECO Bulletin 3.3), required before firm; a seller commission that varies with who represents the buyer, to every written offeror.
+- Who pays: a both-sides deal records how much of the buyer side the seller pays and where it's written. The CDA directs each lawyer to pay only their own client's part; a deposit only pays the seller's part. Calculations otherwise unchanged.
+- Confidentiality: a one-side agent reaches only their own client's records, findings and offer (API-enforced, tested by direct requests); the office admin can't open client files.
+- Trade record item 10: scheduled and amended completion date. The deal's next steps show the trade record until both signatures are on it.
+- HST shown as "HST collected on the commission"; the net figure is labelled an estimate.
+- Fix: the self-represented party form's version couldn't be chosen in the disclosure form.
+- Tests: backend 197 → 202, browser 41 (same-brokerage walkthrough expanded).
+
 ## 0.18.4 (2026-10-19): Same-brokerage deals and multiple representation
 
 - **Migration 021:** each side's commission on a both-sides deal (`listingSideGci`, `buyerSideGci`, adding up to the deal's commission); each agent's side (seller, buyer or both); a competing-buyers consent; only a managing broker or compliance admin may record a written consent (enforced by the database).

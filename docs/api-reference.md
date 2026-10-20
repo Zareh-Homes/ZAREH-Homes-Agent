@@ -873,7 +873,7 @@ Source: `deals/trade-record.ts`; DB rules in migration 015.
   agentSignedBy|null, agentSignedAt|null, brokerSignedBy|null, brokerSignedAt|null, retainUntil|null (date) }
 ```
 Items (`TRS_ITEMS`): `natureOfTrade`, `property`, `consideration`, `parties`, `lawyers`, `registrants`,
-`deposit`, `brokerageRemuneration`, `otherBrokerageRemuneration`, `additionalItems`.
+`deposit`, `brokerageRemuneration`, `otherBrokerageRemuneration`, `completionDate` (item 10: `scheduled`, `amendedDate`), `additionalItems` (broker's notes).
 
 #### 49. `GET /api/deals/:dealId/trade-record`
 - **Who**: DEAL. **Response 200**: `TradeRecordView`. **Errors**: `404` (no sheet yet).

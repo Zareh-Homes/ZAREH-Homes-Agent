@@ -14,6 +14,7 @@ import type { TabProps } from "./DealWorkspace.tsx";
 
 interface Offer {
   id: string; receivedAt: string; written: boolean; offerorBrokerage: string | null; offerorSelfRepresented: boolean; fromOurBrokerage: boolean; price: string | null;
+  buyerRepresentation?: "BROKERAGE" | "DESIGNATED" | null;
   status: string; documentFileId: string | null; keepUntil: string; history: { status: string; eventAt: string; note: string | null }[];
 }
 
@@ -34,7 +35,8 @@ export function OffersTab({ deal }: TabProps) {
           {offers.map((o) => (
             <tr key={o.id} className="align-top">
               <td className="px-3 py-2 whitespace-nowrap">{dateTimeText(o.receivedAt)}{!o.written && <span className="block text-xs text-ink-3">Verbal</span>}</td>
-              <td className="px-3 py-2">{o.offerorSelfRepresented ? "Self-represented buyer" : o.offerorBrokerage}{o.fromOurBrokerage && <span className="block text-xs text-ink-3">Buyer is our client</span>}</td>
+              <td className="px-3 py-2">{o.offerorSelfRepresented ? "Self-represented buyer" : o.offerorBrokerage}{o.fromOurBrokerage && <span className="block text-xs text-ink-3">Buyer is our client · {
+                o.buyerRepresentation === "BROKERAGE" ? "brokerage representation" : o.buyerRepresentation === "DESIGNATED" ? "designated representation" : "representation not recorded"}</span>}</td>
               <td className="px-3 py-2 whitespace-nowrap">{o.price ? moneyText(o.price) : "—"}</td>
               <td className="px-3 py-2">
                 <StatusBadge tone={OFFER_TONE[o.status] ?? "neutral"}>{labelOf(o.status)}</StatusBadge>
@@ -58,13 +60,18 @@ export function OffersTab({ deal }: TabProps) {
 
 function NewOffer({ dealId, lease, onDone, onCancel }: { dealId: string; lease: boolean; onDone: () => void; onCancel: () => void }) {
   const act = useAction();
-  const [f, setF] = useState({ receivedAt: "", written: true, selfRep: false, ours: false, brokerage: "", price: "" });
+  const [f, setF] = useState({ receivedAt: "", written: true, selfRep: false, ours: false, brokerage: "", price: "", representation: "" });
+  const [reps, setReps] = useState<string[]>([]);
+  const people = useApi<{ users: { id: string; firstName: string; lastName: string; role: string }[] }>(f.ours ? "/api/users" : null);
+  const ours = !f.selfRep && f.ours;
   return (
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {
       e.preventDefault();
       const ok = await act.run(() => api("POST", `/api/deals/${dealId}/offers`, {
         receivedAt: f.receivedAt ? new Date(f.receivedAt).toISOString() : "", written: f.written,
-        offerorSelfRepresented: f.selfRep, fromOurBrokerage: !f.selfRep && f.ours, ...(f.selfRep ? {} : { offerorBrokerage: f.brokerage }), ...(f.price.trim() ? { price: f.price.trim() } : {}),
+        offerorSelfRepresented: f.selfRep, fromOurBrokerage: ours, ...(f.selfRep ? {} : { offerorBrokerage: f.brokerage }), ...(f.price.trim() ? { price: f.price.trim() } : {}),
+        // How our buyer is represented decides whether this is multiple representation (with the seller or another of our buyers)
+        ...(ours && f.representation ? { buyerRepresentation: f.representation, ...(f.representation === "DESIGNATED" ? { buyerAgentIds: reps } : {}) } : {}),
       }));
       if (ok) onDone();
     }}>
@@ -75,6 +82,20 @@ function NewOffer({ dealId, lease, onDone, onCancel }: { dealId: string; lease: 
       <Checkbox label={lease ? "Tenant is self-represented" : "Buyer is self-represented"} checked={f.selfRep} onChange={(e) => setF({ ...f, selfRep: e.target.checked })} />
       {!f.selfRep && <Checkbox label={lease ? "Tenant is also our client (this brokerage represents them)" : "Buyer is also our client (this brokerage represents them)"}
         checked={f.ours} onChange={(e) => setF({ ...f, ours: e.target.checked })} />}
+      {ours && (
+        <div className="space-y-2 sm:col-span-2">
+          <SelectField label={lease ? "How the tenant is represented" : "How the buyer is represented"} value={f.representation} placeholder="Not recorded yet"
+            hint="From their representation agreement with us" onChange={(e) => setF({ ...f, representation: e.target.value })} error={act.fields.buyerRepresentation}
+            options={[{ value: "DESIGNATED", label: "Designated representation" }, { value: "BROKERAGE", label: "Brokerage representation" }]} />
+          {f.representation === "DESIGNATED" && (
+            <fieldset className="space-y-1"><legend className="text-sm font-medium">Designated representatives named in their agreement</legend>
+              {(people.data?.users ?? []).map((p) => <Checkbox key={p.id} label={`${p.firstName} ${p.lastName}`} checked={reps.includes(p.id)}
+                onChange={(e) => setReps(e.target.checked ? [...reps, p.id] : reps.filter((x) => x !== p.id))} />)}
+              {act.fields.buyerAgentIds && <p className="text-sm text-critical">{act.fields.buyerAgentIds}</p>}
+            </fieldset>
+          )}
+        </div>
+      )}
       {!f.selfRep && <TextField label="Offeror's brokerage" required value={f.brokerage} onChange={(e) => setF({ ...f, brokerage: e.target.value })} error={act.fields.offerorBrokerage} />}
       <div className="flex gap-2 sm:col-span-2"><Button type="submit" variant="primary" busy={act.busy}>Record offer</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
     </form>

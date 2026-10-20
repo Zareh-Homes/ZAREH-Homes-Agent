@@ -1,10 +1,11 @@
 /**
  * Trade record sheet (O. Reg. 579/05 s.17), migration 015.
  *
- *   Prepared   items 1–9 generated from the deal: nature of the trade, property, true
+ *   Prepared   items 1–10 generated from the deal: nature of the trade, property, true
  *              consideration, parties, lawyers, registrants, deposit, our remuneration and who
- *              pays it, remuneration to another brokerage and its name. Anything the deal doesn't
- *              have is listed as missing; nothing is guessed.
+ *              pays it, remuneration to another brokerage and its name, and the scheduled
+ *              completion date with any amended one (from the recorded amendments). Anything the
+ *              deal doesn't have is listed as missing; nothing is guessed.
  *   Corrected  each correction is appended with a reason and the initials of whoever made it;
  *              the original entry stays legible (s.17(4)).
  *   Signed     by the agent representing the client once no conditions remain (s.17(3)), then
@@ -15,6 +16,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { loadActor, requireRole, type Actor, type ResolveUserId } from "../auth.ts";
 import { ConflictError, DomainError, fromDatabaseError, NotFoundError, RuleViolationError } from "../errors.ts";
+import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
 import { validatePathUuid } from "../trust/validation.ts";
 import { assertDealAccess } from "./lifecycle.ts";
@@ -23,7 +25,7 @@ import { todayInToronto } from "../lib/dates.ts";
 
 export const TRS_ITEMS = [
   "natureOfTrade", "property", "consideration", "parties", "lawyers", "registrants", "deposit", "brokerageRemuneration",
-  "otherBrokerageRemuneration", "additionalItems",
+  "otherBrokerageRemuneration", "completionDate", "additionalItems",
 ] as const;
 export type TrsItem = (typeof TRS_ITEMS)[number];
 type Items = Record<TrsItem, unknown>;
@@ -32,7 +34,8 @@ const LABEL: Record<TrsItem, string> = {
   natureOfTrade: "1. Nature of the trade", property: "2. Property", consideration: "3. True consideration", parties: "4. Parties",
   lawyers: "5. Lawyers acting for the parties", registrants: "6. Registrants representing the parties", deposit: "7. Deposit",
   brokerageRemuneration: "8. Our remuneration and who pays it", otherBrokerageRemuneration: "9. Remuneration to another brokerage",
-  additionalItems: "Further items (s.17 list beyond item 9 not yet verified)",
+  completionDate: "10. Completion date (scheduled, and amended if any)",
+  additionalItems: "Notes (broker of record's review)",
 };
 
 /** A record value as text with object keys sorted, so two values compare equal whatever their key order */
@@ -71,18 +74,26 @@ function rethrow(err: unknown): never {
   throw fromDatabaseError(err) ?? err;
 }
 
-/** Items 1–9 from the deal as it stands; missing items are reported, never filled in. */
+/** Items 1–10 from the deal as it stands; missing items are reported, never filled in. */
 export async function generateItems(prisma: PrismaClient, dealId: string): Promise<Items> {
   const deal = await prisma.transaction.findUnique({
     where: { id: dealId },
-    include: { parties: true, agents: { include: { user: true } } },
+    include: { parties: true, agents: { include: { user: true } }, amendments: { where: { field: "CLOSE_DATE" }, orderBy: { createdAt: "asc" } } },
   });
   if (!deal) throw new NotFoundError("Deal", dealId);
+  const closeDate = deal.closeDate.toISOString().slice(0, 10);
+  // Same-brokerage deals: each client pays what their own agreement says
+  const sellerPays = deal.listingSideGci !== null && deal.buyerSideSellerPays !== null
+    ? numericToCents(deal.listingSideGci.toFixed(2)) + numericToCents(deal.buyerSideSellerPays.toFixed(2)) : null;
+  const buyerPays = deal.buyerSideGci !== null && deal.buyerSideSellerPays !== null
+    ? numericToCents(deal.buyerSideGci.toFixed(2)) - numericToCents(deal.buyerSideSellerPays.toFixed(2)) : null;
   const byRole = (...roles: string[]) => deal.parties.filter((p) => roles.includes(p.role));
   const principals = deal.side === "LANDLORD" || deal.side === "TENANT" ? ["LANDLORD", "TENANT"] : ["SELLER", "BUYER"];
   const coop = byRole("COOP_BROKERAGE")[0]?.fullName ?? deal.coopBrokerageName ?? null;
   const listingSide = ["LISTING", "DUAL", "LANDLORD"].includes(deal.side);
-  const payers = listingSide ? byRole(principals[0]!).map((p) => p.fullName) : coop ? [coop] : [];
+  const payers = buyerPays !== null && buyerPays > 0
+    ? [...byRole("SELLER").map((p) => p.fullName), ...byRole("BUYER").map((p) => p.fullName)]
+    : listingSide ? byRole(principals[0]!).map((p) => p.fullName) : coop ? [coop] : [];
   return {
     natureOfTrade: NATURE[deal.side] ?? deal.side,
     property: { address: deal.streetAddress, unit: deal.unit, city: deal.city, province: deal.province, mlsNumber: deal.mlsNumber },
@@ -104,10 +115,17 @@ export async function generateItems(prisma: PrismaClient, dealId: string): Promi
       // Same-brokerage deals: what each side's agreement provides (part of the amount above, not in addition)
       ...(deal.listingSideGci !== null && deal.buyerSideGci !== null
         ? { listingSide: deal.listingSideGci.toFixed(2), buyerSide: deal.buyerSideGci.toFixed(2) } : {}),
+      ...(sellerPays !== null && buyerPays !== null ? { paidBySeller: formatCents(sellerPays), paidByBuyer: formatCents(buyerPays) } : {}),
     },
     otherBrokerageRemuneration: listingSide && deal.side !== "DUAL" && coop
       ? { amount: deal.coopCommission.toFixed(2), brokerage: coop }
       : { amount: "0.00", brokerage: null },
+    // O. Reg. 579/05 s.17(1) item 10: the scheduled completion date and any amended completion date (the amendment
+    // history stays in the deal's amendments)
+    completionDate: {
+      scheduled: deal.amendments[0]?.oldValue ?? closeDate,
+      amendedDate: deal.amendments.length ? closeDate : null,
+    },
     additionalItems: null,
   };
 }
@@ -152,7 +170,7 @@ export async function tradeRecordView(prisma: PrismaClient, dealId: string) {
   const current = await generateItems(prisma, dealId);
   // The deal changed after the sheet was prepared (an amendment): flag it, don't rewrite the record.
   // Compared without key order: the stored copy is jsonb, which re-sorts an object's keys.
-  const drift = (["consideration", "deposit", "otherBrokerageRemuneration", "brokerageRemuneration"] as const)
+  const drift = (["consideration", "deposit", "otherBrokerageRemuneration", "brokerageRemuneration", "completionDate"] as const)
     .filter((k) => canonical(items[k]) !== canonical(current[k]))
     .map((k) => `${LABEL[k]}: the deal now shows ${describe(current[k])}`);
   const name = (u: { firstName: string; lastName: string } | null) => (u ? `${u.firstName} ${u.lastName}` : null);

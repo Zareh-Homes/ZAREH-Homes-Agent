@@ -22,7 +22,7 @@ Three separate gates. Pass each one before starting the next.
 - [ ] Legal brokerage entity, broker of record, bank accounts and RECO registration confirmed to match (CDA settings, BoR designation in Admin, account bank/last four)
 - [ ] Sales-only scope agreed for the pilot (partial payouts unsupported)
 - [ ] Professional decisions recorded (see `FINAL-REPORT.md` §C); policies set to match
-- [ ] Counsel confirms the multiple-representation rules and citations (`compliance-obligations.md`, same-brokerage deals) and the consent and disclosure wording
+- [ ] Counsel confirms the multiple-representation rules and citations (`compliance-obligations.md`, same-brokerage deals), the consent, remuneration and variable-commission disclosure wording, and trade record item 10 against e-Laws
 - [ ] Accountant's chart-of-accounts map in `ACCOUNTING_ACCOUNT_MAP`
 - [ ] Commission plans entered and approved for all 10 agents; caps and YTD carried over
 - [ ] UAT A–L run by the broker of record, admin and one agent with real (redacted) documents

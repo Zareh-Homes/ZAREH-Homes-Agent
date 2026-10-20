@@ -30,14 +30,16 @@ Citations and the points still unverified are in `regulatory-references.md` §5 
 |---|---|
 | Information Guide (s.13) | Delivered **and explained** to each client before services began (the earlier of the agreement and the offer date) |
 | Representation agreement (s.13.4) | On file with dates, remuneration, services and termination terms; in force on the offer date; designated agreements name the agents |
-| Multiple representation (s.22–22.0.2) | Decided from the representation agreements (see below). Written disclosure and each client's **written consent**, before the offer; acknowledgement or best efforts. Consent dated after the offer is a breach |
-| Competing buyers we represent (s.22.0.1–22.0.2, Bulletin 3.2) | Two or more written offers from buyers who are our clients: written consent recorded against each offer before acceptance |
+| Multiple representation (s.22–22.0.2) | Decided from the representation agreements in force on the offer date (see below). Written disclosure that explains the changes in duties, services and remuneration and advises independent advice; acknowledgement or best efforts; each client's **signed written consent**, uploaded, with the date the multiple representation arose. A consent signed after that date is flagged for the broker of record's review (not declared a breach) |
+| Our buyers' offers (s.22–22.0.2, Bulletin 3.2) | Each offer from a buyer we represent records how they're represented. Multiple representation only where they share a designated agent with another of our buyers or with our seller, or either is under brokerage representation: then a signed consent against that offer before acceptance. Not recorded: "representation not verified", acceptance waits |
+| Remuneration under both agreements (Bulletin 3.3) | When we act for seller and buyer (any mode), each client gets the remuneration terms of both agreements in writing before the deal goes firm |
+| Variable commission (counsel to confirm the section) | If the seller's commission changes with who represents the buyer, every written offeror is told before acceptance |
 | Self-represented party (s.13, Code s.10) | Guide and the RECO SRP form (the right version) before assisting; acknowledgement or best efforts |
 | Competing offers: number (s.22.7) | With two or more **written** offers, each offeror is told the number, after their offer and before acceptance |
 | Competing offers: content (s.22.7) | Only under the seller's written direction in force at the time (enforced by the database), and then to every offeror |
 | Same brokerage (s.22.0.3) | If the brokerage also represents an offering buyer, every other written offeror is told before acceptance |
 
-**Accepting an offer is refused** while any offer disclosure or competing-buyer consent is owed. **Marking a deal firm is refused** while multiple-representation consent is owed.
+**Accepting an offer is refused** while any offer disclosure or consent is owed, or a buyer's representation isn't recorded. **Marking a deal firm is refused** while representation is unverified, multiple-representation consent is owed, or the remuneration disclosure is owed. The broker of record can't sign the trade record while anything is blocking. What the software can't stop is an agent acting outside the app before consent: that stays a matter of policy and supervision.
 
 ## Same-brokerage deals (both sides ours)
 
@@ -45,16 +47,16 @@ A deal where we act for seller and buyer is classified from the latest represent
 
 | Agreements | Result | Consent needed |
 |---|---|---|
-| Each client designates a different agent | Separate designated representatives: **not** multiple representation (s.22.0.1) | No; each agent keeps their client's information from the other side |
+| Each client designates different agents (every co-designated agent compared) | Separate designated representatives: **not** multiple representation (s.22.0.1) | No; each agent keeps their client's information from the other side |
 | Brokerage representation for both | Multiple representation, brokerage (s.22) | Yes |
 | The same agent designated for both | Multiple representation, designated (s.22.0.1) | Yes |
 | One brokerage, one designated | Mixed (s.22.0.2) | Yes |
-| An agreement not recorded yet | Undetermined: treated as multiple representation | Until both are recorded |
+| An agreement not recorded yet | Representation not verified: further activity requires review (not called multiple representation) | Record both agreements first |
 
-- **Who records consent:** only an active managing broker or compliance admin, after seeing the signed consent. An agent's attempt is refused by the database (migration 021), not just the screen.
+- **Who records consent:** only an active managing broker or compliance admin, with the signed copy uploaded to the deal's "Multiple representation: signed disclosures and consents" slot (it appears when consent is needed). The database refuses an agent, a missing file, a file from another deal, or a missing "arose on" date (migrations 021, 022).
 - **Other buyers (s.22.0.3):** told before acceptance whenever we act for the seller and also represent an offering buyer, including separate designated representatives.
-- **Confidential information:** on a same-brokerage deal, an agent on one side can't see or upload the other client's documents or identification records. Staff, and an agent acting for both, see everything.
-- **Commission:** each side's commission is entered separately (`listingSideGci`, `buyerSideGci`), billed once, and counted once (their total is the deal's commission). See `commission-engine.md`. Disclosures are recorded with `POST /api/deals/:id/disclosures`, agreements with `…/representation-agreements`, and directions with `…/offer-directions`.
+- **Confidential information:** on a same-brokerage deal, an agent acting for one side reaches only their own client's documents, FINTRAC records, findings, disclosures and agreements. The buyer's agent sees only their own buyer's offer, never competing offers, and can't record offers, outcomes or the seller's direction. Compliance and the broker of record see everything (supervision). The office admin can't open client files or full FINTRAC details. All of this is enforced in the API and tested by direct requests. The app stores no negotiating instructions, motivations or price limits; if notes are ever added they must follow the same side rules.
+- **Commission:** each side's commission is entered separately (`listingSideGci`, `buyerSideGci`), counted once, and who pays the buyer side is recorded, never assumed (`buyerSideSellerPays`, `remunerationSource`). See `commission-engine.md`. Disclosures are recorded with `POST /api/deals/:id/disclosures`, agreements with `…/representation-agreements`, and directions with `…/offer-directions`.
 
 ## FINTRAC rules
 
@@ -84,7 +86,7 @@ Each is recorded with `POST /api/fintrac/program`, by the compliance officer or 
 ## Needs sign-off
 
 - Counsel: the reading of O. Reg. 567/05 s.22–22.0.5 and the subsection citations shown on screen. The e-Laws text and RECO Bulletins couldn't be fetched from the build environment, so they come from the earlier research notes (`regulatory-references.md`).
-- Counsel: that separate designated representatives at one brokerage need no consent, and that a consent dated after the offer is a breach rather than a warning.
+- Counsel: that separate designated representatives at one brokerage need no consent; that a late consent is for review rather than an automatic breach; the RECO Bulletin 3.3 remuneration disclosure; and the section for the variable-commission disclosure to offerors (the reviewer cited s.23(4); not verified here).
 - Broker of record: the wording of the competing-buyer consent and of the written disclosure to other buyers.
 - Counsel: the PEP/HIO trigger and timing; using the offer date as "the time of the transaction".
 - Counsel: the exact fields of the unrepresented-party record.

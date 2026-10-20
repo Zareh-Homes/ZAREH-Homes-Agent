@@ -133,7 +133,7 @@ The web and PDF versions differ, so include both.
 7. The deposit: the amount if money, or a description sufficient to identify it if not money. Who holds it is UNVERIFIED.
 8. The amount of the brokerage's remuneration and the name of the party paying it.
 9. The amount of any remuneration payable to another brokerage and the name of that brokerage.
-10. Any further items: **UNVERIFIED**. The excerpt ended at item 9, so the list may not be complete.
+10. The scheduled completion date and any amended completion date. Reported by the 2026-10-20 review as checked against O. Reg. 579/05 s.17(1); still to be confirmed on e-Laws here (blocked from the build environment), including whether the list ends at item 10.
 
 **Who and when**
 - s.17(2): the broker or salesperson representing the client enters the information.
@@ -152,7 +152,7 @@ All of this is PARTIAL numbering.
 - https://www.reco.on.ca/news/ask-the-registrar-how-long-do-i-have-to-keep-old-files-to-be-compliant-do-we-require-written-permi
 
 **Implementation**
-- The trade record sheet entity has fields for items 1 to 9, plus an "additional items" slot until item 10 onwards is verified.
+- The trade record sheet has items 1 to 10 (item 10 from the deal's close date and its CLOSE_DATE amendments), plus a notes slot for the broker of record's review.
 - Workflow: agent completes, then waits for `conditions_cleared_at`, then the agent signs (with an audit trail of corrections and initials), then the broker of record signs.
 - Corrections are append-only, never overwritten.
 - Retention: `retain_until` = completion + 6 years. Unaccepted offers on seller-side deals: received + 1 year minimum, with deletion locked before that date.
@@ -422,7 +422,7 @@ The contents of the report and of the individual notice are in the Regulations, 
 
 ## Open items to verify on e-Laws before production
 
-1. The O. Reg. 579/05 s.17(1) item list after item 9, and s.13(2) and (3) wording, including whether the 30-day sign-off is in the regulation.
+1. O. Reg. 579/05 s.17(1) item 10 (as reported) and that the list ends there, and s.13(2) and (3) wording, including whether the 30-day sign-off is in the regulation.
 2. Whether the Legislation Act s.87 list includes the Civic Holiday.
 3. The regulation basis for commission trust accounts.
 4. The real-estate-specific FINTRAC PEP/HIO trigger and timing, and the timing for verifying identity for information records.

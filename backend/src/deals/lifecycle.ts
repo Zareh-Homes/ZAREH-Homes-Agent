@@ -14,7 +14,7 @@ import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
 import { validatePathUuid } from "../trust/validation.ts";
-import { requireOfferDisclosures, requireRepresentationConsents } from "../obligations/service.ts";
+import { requireOfferDisclosures, requireRepresentationConsents, syncConsentSlot } from "../obligations/service.ts";
 
 const STAFF = new Set(["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"]);
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -24,6 +24,25 @@ export async function assertDealAccess(db: Db, actor: Actor, dealId: string): Pr
   if (STAFF.has(actor.role)) return;
   const onDeal = await db.transactionAgent.findFirst({ where: { transactionId: dealId, userId: actor.id } });
   if (!onDeal) throw new ForbiddenError("You can only work on your own deals");
+}
+
+/**
+ * Same-brokerage deals: the side an agent acts for when it's one side only (LISTING or BUYER). Null for staff,
+ * an agent on both sides, or any other deal. A one-side agent sees and handles only their own client's records.
+ */
+export async function oneSideOnly(db: Db, actor: Actor, dealId: string): Promise<"LISTING" | "BUYER" | null> {
+  if (STAFF.has(actor.role)) return null;
+  const [row] = await db.$queryRaw<{ dealSide: string; agentSide: string | null }[]>`
+    SELECT t.side::text AS "dealSide", a.side::text AS "agentSide" FROM "Transaction" t
+      JOIN "TransactionAgent" a ON a."transactionId" = t.id AND a."userId" = ${actor.id}::uuid WHERE t.id = ${dealId}::uuid`;
+  return row?.dealSide === "DUAL" && (row.agentSide === "LISTING" || row.agentSide === "BUYER") ? row.agentSide : null;
+}
+
+/** The seller's representative handles the listing's offers; a buyer-side agent only sees their own buyer's */
+async function assertSellerSide(db: Db, actor: Actor, dealId: string) {
+  if ((await oneSideOnly(db, actor, dealId)) === "BUYER") {
+    throw new ForbiddenError("Offers on this listing are handled by the seller's representative; you act for the buyer");
+  }
 }
 
 function rethrow(err: unknown): never {
@@ -85,6 +104,13 @@ export async function lifecycleView(db: Db, dealId: string, now = new Date()): P
     else if (open.length === 0) nextSteps.push("All conditions are resolved: mark the deal firm");
   } else if (deal.status === "FIRM") {
     nextSteps.push(`Close on ${iso(deal.closeDate)}, then mark the deal closed`);
+  }
+  // The trade record stays on the list until both the agent and the broker of record have signed it (s.17(3), (5))
+  if (deal.status === "FIRM" || deal.status === "CLOSED") {
+    const sheet = await db.tradeRecordSheet.findUnique({ where: { transactionId: dealId }, select: { agentSignedAt: true, brokerSignedAt: true } });
+    if (!sheet) nextSteps.push("Trade record sheet: not prepared yet");
+    else if (!sheet.agentSignedAt) nextSteps.push("Trade record sheet: waiting for the agent's review and signature, then the broker of record's");
+    else if (!sheet.brokerSignedAt) nextSteps.push("Trade record sheet: signed by the agent, waiting for the broker of record's review and signature");
   } else if (deal.status === "COLLAPSED" && held > 0) {
     nextSteps.push(`$${formatCents(held)} is still in trust: release it only under a signed mutual release or a court order; ` +
       "if entitlement is disputed, put the funds on hold");
@@ -178,16 +204,17 @@ export async function markClosed(prisma: PrismaClient, actor: Actor, dealId: str
 const AMENDABLE = {
   SALE_PRICE: "salePrice", CLOSE_DATE: "closeDate", DEPOSIT_AMOUNT: "depositAmount", DEPOSIT_DUE_DATE: "depositDueDate",
   TOTAL_GCI: "totalGci", COOP_COMMISSION: "coopCommission", LISTING_SIDE_GCI: "listingSideGci", BUYER_SIDE_GCI: "buyerSideGci",
+  BUYER_SIDE_SELLER_PAYS: "buyerSideSellerPays",
 } as const;
 /** Commission figures feed the CDA: only a managing broker or admin changes them after the deal is opened */
-const COMMISSION_FIELDS = new Set(["TOTAL_GCI", "COOP_COMMISSION", "LISTING_SIDE_GCI", "BUYER_SIDE_GCI"]);
+const COMMISSION_FIELDS = new Set(["TOTAL_GCI", "COOP_COMMISSION", "LISTING_SIDE_GCI", "BUYER_SIDE_GCI", "BUYER_SIDE_SELLER_PAYS"]);
 
 /** Records the amendment and applies it to the deal, in one step. */
 export async function amendDeal(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown, today: string) {
   await assertDealAccess(prisma, actor, dealId);
   const r = new Reader(body, ["field", "newValue", "effectiveDate", "reference", "documentFileId", "description"]);
   const field = r.oneOf("field", ["SALE_PRICE", "CLOSE_DATE", "DEPOSIT_AMOUNT", "DEPOSIT_DUE_DATE", "TOTAL_GCI", "COOP_COMMISSION",
-    "LISTING_SIDE_GCI", "BUYER_SIDE_GCI", "OTHER"] as const);
+    "LISTING_SIDE_GCI", "BUYER_SIDE_GCI", "BUYER_SIDE_SELLER_PAYS", "OTHER"] as const);
   const isDate = field === "CLOSE_DATE" || field === "DEPOSIT_DUE_DATE";
   const isMoney = field === "SALE_PRICE" || field === "DEPOSIT_AMOUNT" || COMMISSION_FIELDS.has(field);
   if (COMMISSION_FIELDS.has(field)) requireRole(actor, ["MANAGING_BROKER", "ADMIN"], "Changing a deal's commission figures");
@@ -202,13 +229,18 @@ export async function amendDeal(prisma: PrismaClient, actor: Actor, dealId: stri
   // Same-brokerage deals: each side is amended under its own agreement, and the deal's commission follows
   const sided = deal.listingSideGci !== null && deal.buyerSideGci !== null;
   if (sided && field === "TOTAL_GCI") throw new RuleViolationError("AMEND_A_SIDE", "This deal's commission is the two sides' total: amend the listing side or the buyer side");
-  if (!sided && (field === "LISTING_SIDE_GCI" || field === "BUYER_SIDE_GCI")) {
+  if (!sided && (field === "LISTING_SIDE_GCI" || field === "BUYER_SIDE_GCI" || field === "BUYER_SIDE_SELLER_PAYS")) {
     throw new RuleViolationError("NOT_SIDED", "Only deals where our brokerage acts for both sides have a commission per side");
   }
   const column = field === "OTHER" ? null : AMENDABLE[field];
   const current = column ? deal[column] : null;
   const oldValue = current === null ? null : current instanceof Date ? iso(current) : (current as { toFixed(n: number): string }).toFixed(2);
   if (oldValue === newValue) throw new RuleViolationError("NO_CHANGE", "That's already the value on the deal");
+  const sellerPays = field === "BUYER_SIDE_SELLER_PAYS" ? newValue : deal.buyerSideSellerPays?.toFixed(2) ?? null;
+  const buyerSide = field === "BUYER_SIDE_GCI" ? newValue : deal.buyerSideGci?.toFixed(2) ?? null;
+  if (sellerPays !== null && buyerSide !== null && numericToCents(sellerPays) > numericToCents(buyerSide)) {
+    throw new RuleViolationError("SELLER_PAYS_MORE_THAN_BUYER_SIDE", "The part of the buyer side the seller pays can't be more than the buyer side's commission");
+  }
   try {
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
@@ -260,13 +292,19 @@ export async function terminateDeal(prisma: PrismaClient, actor: Actor, dealId: 
 
 export async function listOffers(prisma: PrismaClient, actor: Actor, dealId: string) {
   await assertDealAccess(prisma, actor, dealId);
-  const offers = await prisma.offer.findMany({ where: { listingDealId: dealId }, orderBy: { receivedAt: "asc" }, include: { events: { orderBy: { createdAt: "asc" } } } });
+  // A buyer-side agent on a same-brokerage deal sees only their own buyer's offer, never the competing ones
+  const buyerSideOnly = (await oneSideOnly(prisma, actor, dealId)) === "BUYER";
+  const offers = await prisma.offer.findMany({
+    where: { listingDealId: dealId, ...(buyerSideOnly ? { buyerAgentIds: { has: actor.id } } : {}) },
+    orderBy: { receivedAt: "asc" }, include: { events: { orderBy: { createdAt: "asc" } } },
+  });
   return offers.map((o) => {
     const status = o.events.at(-1)?.status ?? "RECEIVED";
     const keepUntil = new Date(o.receivedAt.getTime());
     keepUntil.setUTCFullYear(keepUntil.getUTCFullYear() + (status === "ACCEPTED" ? 6 : 1));
     return {
       id: o.id, receivedAt: o.receivedAt.toISOString(), written: o.written, offerorBrokerage: o.offerorBrokerage, fromOurBrokerage: o.fromOurBrokerage,
+      buyerRepresentation: o.buyerRepresentation, buyerAgentIds: o.buyerAgentIds,
       offerorSelfRepresented: o.offerorSelfRepresented, price: o.price?.toFixed(2) ?? null, status,
       documentFileId: o.documentFileId, keepUntil: iso(keepUntil),
       history: o.events.map((e) => ({ status: e.status, eventAt: e.eventAt.toISOString(), note: e.note })),
@@ -276,24 +314,39 @@ export async function listOffers(prisma: PrismaClient, actor: Actor, dealId: str
 
 export async function recordOffer(prisma: PrismaClient, actor: Actor, dealId: string, body: unknown) {
   await assertDealAccess(prisma, actor, dealId);
-  const r = new Reader(body, ["receivedAt", "written", "offerorBrokerage", "offerorSelfRepresented", "fromOurBrokerage", "price", "documentFileId"]);
+  await assertSellerSide(prisma, actor, dealId);
+  const r = new Reader(body, ["receivedAt", "written", "offerorBrokerage", "offerorSelfRepresented", "fromOurBrokerage", "buyerRepresentation",
+    "buyerAgentIds", "price", "documentFileId"]);
   const input = {
-    // The buyer is also our client (s.22.0.3: the other offerors are told; two of ours competing need consent)
+    // The buyer is also our client (s.22.0.3: the other offerors are told), and how they're represented: multiple
+    // representation with the seller or another of our buyers is decided from that
     fromOurBrokerage: r.has("fromOurBrokerage") ? r.bool("fromOurBrokerage") : false,
+    buyerRepresentation: r.has("buyerRepresentation") ? r.oneOf("buyerRepresentation", ["BROKERAGE", "DESIGNATED"] as const) : null,
+    buyerAgentIds: r.has("buyerAgentIds") ? r.textList("buyerAgentIds", 10, 36) : [],
     receivedAt: timestamp(r, "receivedAt"), written: r.bool("written"), offerorBrokerage: r.optionalText("offerorBrokerage", 200),
     offerorSelfRepresented: r.has("offerorSelfRepresented") ? r.bool("offerorSelfRepresented") : false,
     price: r.has("price") ? r.amount("price") : null, documentFileId: r.optionalUuid("documentFileId"),
   };
   r.check(input.offerorSelfRepresented || input.offerorBrokerage !== null, "offerorBrokerage", "name the buyer's brokerage, or mark the buyer self-represented");
+  r.check(input.fromOurBrokerage || (input.buyerRepresentation === null && input.buyerAgentIds.length === 0), "buyerRepresentation",
+    "only for a buyer this brokerage represents");
+  r.check(input.buyerRepresentation !== "DESIGNATED" || input.buyerAgentIds.length > 0, "buyerAgentIds", "name the buyer's designated representatives");
   r.done();
+  if (input.buyerAgentIds.length) {
+    const found = await prisma.user.count({ where: { id: { in: input.buyerAgentIds }, isActive: true } });
+    if (found !== new Set(input.buyerAgentIds).size) throw new RuleViolationError("UNKNOWN_AGENT", "Every designated representative must be an active person in this brokerage");
+  }
   try {
     await prisma.$executeRaw`
-      INSERT INTO "Offer" (id, "listingDealId", "receivedAt", written, "offerorBrokerage", "offerorSelfRepresented", "fromOurBrokerage", price, "documentFileId", "recordedById")
+      INSERT INTO "Offer" (id, "listingDealId", "receivedAt", written, "offerorBrokerage", "offerorSelfRepresented", "fromOurBrokerage",
+        "buyerRepresentation", "buyerAgentIds", price, "documentFileId", "recordedById")
       VALUES (gen_random_uuid(), ${dealId}::uuid, ${input.receivedAt}::timestamptz, ${input.written}, ${input.offerorBrokerage},
-              ${input.offerorSelfRepresented}, ${input.fromOurBrokerage}, ${input.price === null ? null : formatCents(input.price)}::numeric, ${input.documentFileId}::uuid, ${actor.id}::uuid)`;
+              ${input.offerorSelfRepresented}, ${input.fromOurBrokerage}, ${input.buyerRepresentation}, ${input.buyerAgentIds}::uuid[],
+              ${input.price === null ? null : formatCents(input.price)}::numeric, ${input.documentFileId}::uuid, ${actor.id}::uuid)`;
   } catch (err) {
     rethrow(err);
   }
+  await syncConsentSlot(prisma, dealId, todayInToronto());
   return listOffers(prisma, actor, dealId);
 }
 
@@ -301,6 +354,7 @@ export async function offerEvent(prisma: PrismaClient, actor: Actor, offerId: st
   const offer = await prisma.offer.findUnique({ where: { id: offerId }, select: { listingDealId: true } });
   if (!offer) throw new NotFoundError("Offer", offerId);
   await assertDealAccess(prisma, actor, offer.listingDealId);
+  await assertSellerSide(prisma, actor, offer.listingDealId);
   const r = new Reader(body, ["status", "eventAt", "note"]);
   const input = {
     status: r.oneOf("status", ["SIGNED_BACK", "ACCEPTED", "REJECTED", "EXPIRED", "WITHDRAWN"] as const),

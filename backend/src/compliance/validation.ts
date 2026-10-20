@@ -54,6 +54,12 @@ export interface CreateDealInput {
   /** Same-brokerage deals: each side's commission under its own agreement (they add up to totalGci) */
   listingSideGci: Cents | null;
   buyerSideGci: Cents | null;
+  /** Same-brokerage deals: the part of the buyer side the seller agreed to pay (the buyer pays the rest), and where
+   *  each obligation is written. Never assumed: both are required. */
+  buyerSideSellerPays: Cents | null;
+  remunerationSource: string | null;
+  /** Listing side: the seller's commission changes with who represents the buyer (every offeror is told) */
+  sellerRemunerationVaries: boolean;
   coopBrokerageName: string | null;
   /** Listing side: the co-operating brokerage's commission, before tax */
   coopCommission: Cents;
@@ -88,7 +94,7 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
   const r = new Reader(body, [
     "side", "status", "streetAddress", "unit", "city", "mlsNumber", "listingId", "salePrice", "offerDate",
     "conditionsDueDate", "closeDate", "depositAmount", "depositDueDate", "trustDepositHolder", "totalGci", "listingSideGci", "buyerSideGci",
-    "coopBrokerageName", "coopCommission", "outsideReferralPayee", "outsideReferralPct", "agents", "parties",
+    "buyerSideSellerPays", "remunerationSource", "sellerRemunerationVaries", "coopBrokerageName", "coopCommission", "outsideReferralPayee", "outsideReferralPct", "agents", "parties",
   ]);
   const agentReaders = r.objects("agents", ["userId", "role", "splitPct", "gciSharePct", "side"], { min: 1, max: 4 });
   const partyReaders = r.objects("parties", ["role", "entityType", "fullName", "email", "phone", "representation"], { min: 1, max: 20 });
@@ -112,6 +118,9 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
     listingSideGci: r.has("listingSideGci") ? r.amount("listingSideGci") : null,
     buyerSideGci: r.has("buyerSideGci") ? r.amount("buyerSideGci") : null,
     totalGci: r.has("totalGci") || !(r.has("listingSideGci") && r.has("buyerSideGci")) ? r.amount("totalGci") : 0,
+    buyerSideSellerPays: r.has("buyerSideSellerPays") ? r.amount("buyerSideSellerPays") : null,
+    remunerationSource: r.optionalText("remunerationSource", 1000),
+    sellerRemunerationVaries: r.has("sellerRemunerationVaries") ? r.bool("sellerRemunerationVaries") : false,
     coopBrokerageName: r.optionalText("coopBrokerageName", 200),
     coopCommission: r.has("coopCommission") ? r.amount("coopCommission") : 0,
     outsideReferralPayee: r.optionalText("outsideReferralPayee", 200),
@@ -150,8 +159,20 @@ export function validateCreateDeal(body: unknown): CreateDealInput {
       if (r.has("totalGci")) r.check(input.totalGci === sum, "totalGci", "must equal the listing-side plus buyer-side commission");
       input.totalGci = sum;
     }
+    // Who pays the buyer side is what the agreements say, not an assumption
+    r.check(input.buyerSideSellerPays !== null, "buyerSideSellerPays",
+      "say how much of the buyer-side commission the seller agreed to pay (0 if the buyer pays it all)");
+    if (input.buyerSideSellerPays !== null && input.buyerSideGci !== null) {
+      r.check(input.buyerSideSellerPays <= input.buyerSideGci, "buyerSideSellerPays", "can't be more than the buyer-side commission");
+    }
+    r.check(input.remunerationSource !== null, "remunerationSource",
+      "say where each payment obligation is written (e.g. the listing agreement for the seller's share, the buyer's agreement for the rest)");
   } else {
     r.check(input.listingSideGci === null && input.buyerSideGci === null, "listingSideGci", "is only for deals where our brokerage acts for both sides");
+    r.check(input.buyerSideSellerPays === null && input.remunerationSource === null, "buyerSideSellerPays", "is only for deals where our brokerage acts for both sides");
+  }
+  if (input.side && input.sellerRemunerationVaries) {
+    r.check(input.side === "LISTING" || input.side === "DUAL", "sellerRemunerationVaries", "is only for deals where we act for the seller");
   }
   if (agentReaders.length > 0 && input.side) {
     const dual = input.side === "DUAL";

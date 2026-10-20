@@ -20,6 +20,8 @@ export interface DisclosureFacts {
   bestEffortsNote: string | null;
   formVersion: string | null;
   numberDisclosed: number | null;
+  /** Consents: when the multiple representation arose */
+  situationAroseOn?: string | null;
 }
 
 export interface AgreementFacts {
@@ -38,6 +40,9 @@ export interface OfferFacts {
   status: string;
   acceptedAt: string | null;
   fromOurBrokerage: boolean;
+  /** A buyer of ours: brokerage representation, or the designated agents named in their agreement (null: not recorded) */
+  buyerRepresentation?: "BROKERAGE" | "DESIGNATED" | null;
+  buyerAgentIds?: string[];
   label: string;
 }
 
@@ -51,6 +56,8 @@ export interface TresaFacts {
   disclosures: DisclosureFacts[];
   agreements: AgreementFacts[];
   offers: OfferFacts[];
+  /** The seller's commission changes with who represents the buyer (e.g. less if this brokerage does) */
+  sellerRemunerationVaries?: boolean;
   now: string; // ISO timestamp
 }
 
@@ -68,23 +75,33 @@ const BUYER_ROLES = ["BUYER", "TENANT"];
  *   BROKERAGE            both brokerage representation: the brokerage represents both (s.22)
  *   DESIGNATED_SAME      both designated, a representative in common acts for both (s.22.0.1)
  *   MIXED                one brokerage, one designated agreement (s.22.0.2)
- *   UNDETERMINED         an agreement isn't recorded yet: treated as multiple representation until it is
+ *   UNDETERMINED         an agreement isn't recorded yet: representation not verified, and further activity waits
+ *                        for review (it isn't called multiple representation without the facts)
  *   NONE                 we don't act for both a seller and a buyer here
- * Two agents of this brokerage on opposite sides is not by itself multiple representation.
+ * Two agents of this brokerage on opposite sides is not by itself multiple representation. Every designated
+ * representative named in each agreement is compared (co-designated agents included), using the agreement in
+ * force on the offer date (the latest one if none was).
  */
 export type RepresentationMode = "NONE" | "SEPARATE_DESIGNATED" | "BROKERAGE" | "DESIGNATED_SAME" | "MIXED" | "UNDETERMINED";
 
-export function classifyRepresentation(f: Pick<TresaFacts, "parties" | "agreements">): { mode: RepresentationMode; citation: string; explanation: string } {
+/** The client's agreement in force on the date (the latest signed if none was) */
+export function agreementOn(agreements: AgreementFacts[], partyId: string, date: string | undefined): AgreementFacts | undefined {
+  const mine = agreements.filter((a) => a.partyId === partyId).sort((a, b) => b.signedAt.localeCompare(a.signedAt));
+  return (date ? mine.find((a) => a.effectiveFrom <= date && date <= a.expiresOn) : undefined) ?? mine[0];
+}
+
+const overlaps = (a: string[], b: string[]) => a.some((id) => b.includes(id));
+
+export function classifyRepresentation(f: Pick<TresaFacts, "parties" | "agreements"> & { offerDate?: string }): { mode: RepresentationMode; citation: string; explanation: string } {
   const clients = f.parties.filter((p) => p.representation === "OUR_CLIENT");
   const sellers = clients.filter((p) => SELLER_ROLES.includes(p.role));
   const buyers = clients.filter((p) => BUYER_ROLES.includes(p.role));
   if (!sellers.length || !buyers.length) return { mode: "NONE", citation: "", explanation: "This brokerage acts for one side only." };
-  const latest = (partyId: string) => f.agreements.filter((a) => a.partyId === partyId).sort((a, b) => b.signedAt.localeCompare(a.signedAt))[0];
-  const sa = sellers.map((p) => latest(p.id));
-  const ba = buyers.map((p) => latest(p.id));
+  const sa = sellers.map((p) => agreementOn(f.agreements, p.id, f.offerDate));
+  const ba = buyers.map((p) => agreementOn(f.agreements, p.id, f.offerDate));
   if ([...sa, ...ba].some((a) => !a)) {
-    return { mode: "UNDETERMINED", citation: "O. Reg. 567/05 s.22; RECO Bulletin 3.2",
-      explanation: "Both clients are ours and not every representation agreement is recorded: treated as multiple representation until they are." };
+    return { mode: "UNDETERMINED", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletins 2.2 and 3.2",
+      explanation: "Representation not verified: both clients are ours and not every representation agreement is recorded. Further activity requires review." };
   }
   const agreements = [...sa, ...ba] as AgreementFacts[];
   if (agreements.every((a) => a.type === "BROKERAGE")) {
@@ -93,7 +110,7 @@ export function classifyRepresentation(f: Pick<TresaFacts, "parties" | "agreemen
   }
   if (agreements.every((a) => a.type === "DESIGNATED")) {
     const sellerReps = new Set((sa as AgreementFacts[]).flatMap((a) => a.designatedRepresentativeIds));
-    const shared = (ba as AgreementFacts[]).flatMap((a) => a.designatedRepresentativeIds).filter((id) => sellerReps.has(id));
+    const shared = (ba as AgreementFacts[]).flatMap((a) => a.designatedRepresentativeIds).filter((id) => sellerReps.has(id)); // co-designated agents too
     return shared.length
       ? { mode: "DESIGNATED_SAME", citation: "O. Reg. 567/05 s.22.0.1; RECO Bulletin 3.2",
           explanation: "The same designated representative acts for both seller and buyer: multiple representation." }
@@ -156,24 +173,40 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
   // representation. Consent is recorded by a managing broker or compliance admin (database rule, migration 021).
   const clients = principals.filter((x) => x.representation === "OUR_CLIENT");
   const mode = classifyRepresentation(f);
-  const multiple = !["NONE", "SEPARATE_DESIGNATED"].includes(mode.mode);
+  const multiple = !["NONE", "SEPARATE_DESIGNATED", "UNDETERMINED"].includes(mode.mode);
+  if (mode.mode === "UNDETERMINED") {
+    out.push({ rule: "REPRESENTATION_UNVERIFIED", citation: mode.citation, severity: "BLOCKING",
+      message: "Representation not verified: record both clients' representation agreements. Further activity (going firm, accepting an offer) waits until it is" });
+  }
   if (multiple) {
-    const kind = { BROKERAGE: "brokerage", DESIGNATED_SAME: "designated", MIXED: "mixed brokerage and designated", UNDETERMINED: "possible" }[mode.mode as "BROKERAGE"];
+    const kind = { BROKERAGE: "brokerage", DESIGNATED_SAME: "designated", MIXED: "mixed brokerage and designated" }[mode.mode as "BROKERAGE"];
     for (const p of clients) {
       const disclosed = of(p.id, "MULTIPLE_REPRESENTATION_DISCLOSURE")[0];
       const consent = of(p.id, "MULTIPLE_REPRESENTATION_CONSENT")[0];
       if (!disclosed || !consent) {
         out.push({ rule: "MULTIPLE_REPRESENTATION", citation: mode.citation, severity: "BLOCKING", partyId: p.id,
-          message: `Multiple representation (${kind}): give ${p.name} the written disclosure and get their written consent before any further step` });
+          message: `Multiple representation (${kind}): give ${p.name} the written disclosure and get their signed written consent before any further step for either client` });
         continue;
       }
-      if (consent.acknowledgedAt! > endOfDay(f.offerDate)) {
-        out.push({ rule: "MULTIPLE_REPRESENTATION_LATE", citation: mode.citation, severity: "BREACH", partyId: p.id,
-          message: `${p.name}'s consent to multiple representation is dated after the offer; RECO considers consent at offer time almost always too late` });
+      // Measured from when the multiple representation arose, not the offer date; whether anything was done for either
+      // client in between is the broker of record's call, not the software's
+      if (consent.situationAroseOn && consent.acknowledgedAt! > endOfDay(consent.situationAroseOn)) {
+        out.push({ rule: "MULTIPLE_REPRESENTATION_REVIEW", citation: `${mode.citation}; RECO Bulletin 3.2`, severity: "WARNING", partyId: p.id,
+          message: `${p.name}'s consent was signed ${consent.acknowledgedAt!.slice(0, 10)}, after the multiple representation arose on ${consent.situationAroseOn}: broker of record to review whether anything was done for either client in between` });
       }
       if (!disclosed.acknowledgedAt && !disclosed.bestEffortsNote) {
         out.push({ rule: "MULTIPLE_REPRESENTATION_ACKNOWLEDGEMENT", citation: `${mode.citation}; s.22(5)`, severity: "WARNING", partyId: p.id,
           message: `Record ${p.name}'s written acknowledgement of the disclosure, or the best efforts made to get it` });
+      }
+    }
+  }
+  // Remuneration under agreements with both seller and buyer in the same trade: each client is told, in writing, the
+  // remuneration terms of both agreements (whatever the representation mode)
+  if (mode.mode !== "NONE") {
+    for (const p of clients.filter((c) => SELLER_ROLES.includes(c.role) || BUYER_ROLES.includes(c.role))) {
+      if (of(p.id, "REMUNERATION_DISCLOSURE").length === 0) {
+        out.push({ rule: "REMUNERATION_DISCLOSURE", citation: "RECO Bulletin 3.3", severity: "BLOCKING", partyId: p.id,
+          message: `Give ${p.name} written disclosure of the remuneration terms in both representation agreements (the seller's and the buyer's)` });
       }
     }
   }
@@ -249,19 +282,44 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
           "that this brokerage represents both the seller and a buyer making an offer");
       }
     }
-    // Two buyers this brokerage represents competing for the property: each buyer's consent to that multiple
-    // representation (or confirmation that they have separate designated representatives), recorded against
-    // their offer by a managing broker or compliance admin before any offer is accepted
+    // The seller's commission changes with who represents the buyer: every buyer making a written offer is told
+    if (f.sellerRemunerationVaries) {
+      for (const o of written) {
+        check(o, "VARIABLE_REMUNERATION_DISCLOSURE", "VARIABLE_REMUNERATION", "O. Reg. 567/05 (remuneration that could affect acceptance); RECO Bulletin 3.3",
+          "the seller's commission terms that change depending on who represents the buyer");
+      }
+    }
+    // Buyers this brokerage represents: multiple representation is decided from who represents whom. Two buyers with
+    // different designated representatives aren't multiple representation; the same designated agent, or brokerage
+    // representation, is (with another of our buyers, or with our seller on a listing). Their consent, signed and
+    // recorded against the offer by a managing broker or compliance admin, comes before any offer is accepted.
     const ours = written.filter((o) => o.fromOurBrokerage);
-    if (ours.length >= 2) {
-      for (const o of ours) {
-        const consent = offerOf(o, "COMPETING_BUYERS_CONSENT");
-        if (consent.length === 0) {
-          out.push({ rule: "COMPETING_BUYER_CLIENTS", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletin 3.2", severity: accepted ? "BREACH" : "BLOCKING", offerId: o.id,
-            message: accepted
-              ? `${o.label} was one of ${ours.length} competing buyers this brokerage represents; their consent wasn't recorded before acceptance`
-              : `${ours.length} buyers this brokerage represents are competing: record ${o.label}'s written consent to multiple representation (or that they have separate designated representatives) before any offer is accepted` });
-        }
+    const sellerClient = f.side === "LISTING" ? clients.find((c) => SELLER_ROLES.includes(c.role)) : undefined;
+    const sellerAgreement = sellerClient ? agreementOn(f.agreements, sellerClient.id, f.offerDate) : undefined;
+    const conflict = (a: OfferFacts, b: { buyerRepresentation?: string | null; buyerAgentIds?: string[]; type?: string; designatedRepresentativeIds?: string[] }) => {
+      const bBrokerage = b.buyerRepresentation === "BROKERAGE" || b.type === "BROKERAGE";
+      return a.buyerRepresentation === "BROKERAGE" || bBrokerage || overlaps(a.buyerAgentIds ?? [], b.buyerAgentIds ?? b.designatedRepresentativeIds ?? []);
+    };
+    for (const o of ours) {
+      if (!o.buyerRepresentation) {
+        out.push({ rule: "OFFER_REPRESENTATION_UNVERIFIED", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletin 3.2", severity: accepted ? "WARNING" : "BLOCKING", offerId: o.id,
+          message: `Representation not verified: record how the buyer behind ${o.label} is represented (brokerage, or which designated agents)` });
+        continue;
+      }
+      const withWhom = [
+        ...(sellerAgreement && conflict(o, sellerAgreement) ? ["the seller"] : []),
+        ...ours.filter((x) => x.id !== o.id && x.buyerRepresentation && conflict(o, x)).map((x) => x.label),
+      ];
+      if (withWhom.length === 0) continue;
+      const consent = offerOf(o, "COMPETING_BUYERS_CONSENT")[0];
+      if (!consent) {
+        out.push({ rule: "OFFER_MULTIPLE_REPRESENTATION", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletin 3.2", severity: accepted ? "BREACH" : "BLOCKING", offerId: o.id,
+          message: accepted
+            ? `${o.label} involved multiple representation with ${withWhom.join(" and ")} and no signed consent was recorded before acceptance: broker of record to review`
+            : `${o.label}: multiple representation with ${withWhom.join(" and ")}. Record the signed written consent of the clients affected before any offer is accepted` });
+      } else if (consent.situationAroseOn && consent.acknowledgedAt && consent.acknowledgedAt > endOfDay(consent.situationAroseOn)) {
+        out.push({ rule: "MULTIPLE_REPRESENTATION_REVIEW", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletin 3.2", severity: "WARNING", offerId: o.id,
+          message: `The consent for ${o.label} was signed ${consent.acknowledgedAt.slice(0, 10)}, after the multiple representation arose on ${consent.situationAroseOn}: broker of record to review` });
       }
     }
   }

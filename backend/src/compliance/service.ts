@@ -305,6 +305,9 @@ export async function createDeal(deps: ComplianceDeps, actor: Actor, input: Crea
           totalGci: formatCents(input.totalGci),
           listingSideGci: input.listingSideGci === null ? null : formatCents(input.listingSideGci),
           buyerSideGci: input.buyerSideGci === null ? null : formatCents(input.buyerSideGci),
+          buyerSideSellerPays: input.buyerSideSellerPays === null ? null : formatCents(input.buyerSideSellerPays),
+          remunerationSource: input.remunerationSource,
+          sellerRemunerationVaries: input.sellerRemunerationVaries,
           coopBrokerageName: input.coopBrokerageName,
           coopCommission: formatCents(input.coopCommission),
           outsideReferralPayee: input.outsideReferralPayee,
@@ -589,6 +592,9 @@ export async function getFile(
     include: { slot: { select: { transactionId: true, party: { select: { role: true } } } } },
   });
   if (!file || !file.slot.transactionId) throw new NotFoundError("File", fileId);
+  // Client documents are for the agents acting for that client, compliance and the broker of record (supervision);
+  // the office admin works with the money and the deal's status, not the clients' files
+  if (actor.role === "ADMIN") throw new ForbiddenError("Client documents are open to the client's agents, compliance and the broker of record");
   await assertDealAccess(deps.prisma, actor, file.slot.transactionId);
   if ((await otherSideFilter(deps.prisma, actor, file.slot.transactionId))(file.slot.party?.role ?? null)) {
     throw new ForbiddenError("That record belongs to the other side's client; their representative handles it");
@@ -606,8 +612,8 @@ export async function getFile(
       uploadedById: file.uploadedById,
       uploadedAt: file.uploadedAt.toISOString(),
       metadataSummary: summarize(metadata),
-      // Full FINTRAC record (whole ID number) only for staff; agents see the masked summary
-      metadata: STAFF.includes(actor.role) ? openFintrac(metadata as unknown as Record<string, unknown> | null, deps.fieldCipher) : null,
+      // Full FINTRAC record (whole ID number) only for compliance and the broker of record; agents see the masked summary
+      metadata: actor.role === "MANAGING_BROKER" || actor.role === "COMPLIANCE_ADMIN" ? openFintrac(metadata as unknown as Record<string, unknown> | null, deps.fieldCipher) : null,
     },
     bytes: () => deps.store.get(file.storageKey),
   };
