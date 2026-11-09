@@ -280,9 +280,10 @@ export async function createDeal(deps: ComplianceDeps, actor: Actor, input: Crea
   if (agentUsers.length !== input.agents.length) {
     throw new ValidationError([{ field: "agents", message: "every agent must be an active agent or broker" }]);
   }
-  // Trading needs a current RECO registration (TRESA s.4): no deal for an agent whose registration had expired by the offer date
+  // Trading needs a current RECO registration (TRESA s.4): no deal for an agent whose registration had expired by the offer
+  // date (the expiry date itself counts as expired, as everywhere else in the app)
   const lapsed = await deps.prisma.agentProfile.findMany({
-    where: { userId: { in: input.agents.map((a) => a.userId) }, recoExpiryDate: { lt: new Date(`${input.offerDate}T00:00:00Z`) } },
+    where: { userId: { in: input.agents.map((a) => a.userId) }, recoExpiryDate: { lte: new Date(`${input.offerDate}T00:00:00Z`) } },
     select: { recoExpiryDate: true, user: { select: { firstName: true, lastName: true } } },
   });
   if (lapsed.length) {

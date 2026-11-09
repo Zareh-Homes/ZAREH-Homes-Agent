@@ -7,7 +7,7 @@ COPY frontend/ ./
 ENV VITE_ENABLE_DEMO=false
 RUN npm run build
 
-FROM nginx:1.30.5-alpine
+FROM nginx:1.30.6-alpine
 RUN apk upgrade --no-cache
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY ops/nginx.conf /etc/nginx/conf.d/default.conf

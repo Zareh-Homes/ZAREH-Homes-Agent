@@ -138,6 +138,7 @@ describe("agent profiles, standard plans and renewal reminders", { skip }, () =>
     const refused = await deal("2026-10-15");
     assert.equal(refused.json().error.code, "REGISTRATION_EXPIRED", refused.body);
     assert.match(refused.json().error.message, /expired 2026-10-01: they can't trade/);
+    assert.equal((await deal("2026-10-01")).json().error.code, "REGISTRATION_EXPIRED"); // the expiry date itself counts as expired
     assert.equal((await deal("2026-09-20")).statusCode, 201); // recording a trade made while registered is fine
   });
 });

@@ -25,11 +25,12 @@ const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 
 export interface PayoutBanking { accountHolder: string; institutionNumber: string; transitNumber: string; accountNumber: string }
 
-/** Where a registration stands today: ok, expiring within 30 days, or expired (can't trade) */
+/** Where a registration stands today: ok, expiring within 30 days, or expired (can't trade, from the expiry date on) */
 export function registrationStatus(expiry: string | null, today: string): { status: "MISSING" | "OK" | "EXPIRING" | "EXPIRED"; daysLeft: number | null } {
   if (!expiry) return { status: "MISSING", daysLeft: null };
   const daysLeft = Math.round((Date.parse(`${expiry}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
-  return { status: daysLeft < 0 ? "EXPIRED" : daysLeft <= 30 ? "EXPIRING" : "OK", daysLeft };
+  // On the expiry date itself the registration is treated as expired (the stricter reading; the expiry email goes that day)
+  return { status: daysLeft <= 0 ? "EXPIRED" : daysLeft <= 30 ? "EXPIRING" : "OK", daysLeft };
 }
 
 export async function getAgentProfile(prisma: PrismaClient, cipher: FieldCipher, actor: Actor, userId: string, today: string) {
