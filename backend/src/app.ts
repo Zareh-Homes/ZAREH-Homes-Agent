@@ -11,6 +11,9 @@ import type { BrokerageProfile } from "./closing/cda-template.ts";
 import { dashboardRoutes } from "./dashboard/routes.ts";
 import { pipelineRoutes } from "./pipeline/routes.ts";
 import { directoryRoutes } from "./directory/routes.ts";
+import { profileRoutes } from "./people/profile.ts";
+import { reminderRoutes } from "./people/reminders.ts";
+import type { EmailSender } from "./notify/email.ts";
 import { bankRoutes } from "./bank/routes.ts";
 import { privacyRoutes } from "./security/privacy.ts";
 import { unclaimedRoutes } from "./bank/unclaimed.ts";
@@ -41,6 +44,8 @@ export interface AppOptions {
   rateLimits?: Partial<{ loginPerMinutePerIp: number; loginPerMinutePerEmail: number; apiPerMinute: number }>;
   fileStore: FileStore;
   brokerage: BrokerageProfile;
+  /** Outgoing email (SMTP_URL + EMAIL_FROM); without it emails wait in the outbox */
+  mail?: { sender: EmailSender; from: string } | null;
   notificationHub?: NotificationHub;
   /** Read-only accounting connection (QuickBooks Online or Xero), for the operating account's obligations */
   accounting?: AccountingAdapter | null;
@@ -96,6 +101,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.register(dashboardRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(pipelineRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(directoryRoutes, { prisma: opts.prisma, resolveUserId });
+  app.register(profileRoutes, { prisma: opts.prisma, resolveUserId, fieldCipher, today: opts.today });
+  app.register(reminderRoutes, { prisma: opts.prisma, resolveUserId, brokerage: opts.brokerage.legalName, mail: opts.mail ?? null, today: opts.today });
   app.register(bankRoutes, { prisma: opts.prisma, hub, resolveUserId, today: opts.today });
   app.register(privacyRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(unclaimedRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });

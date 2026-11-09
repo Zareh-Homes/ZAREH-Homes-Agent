@@ -13,6 +13,7 @@ import { reconciliationStatus } from "../bank/service.ts";
 import { fundsAvailability } from "../accounting/funds.ts";
 import { evaluateDeal } from "../obligations/service.ts";
 import { filingPackage } from "../reco/filing.ts";
+import { registrationOverview } from "../people/profile.ts";
 import { todayInToronto } from "../lib/dates.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
 import { RuleViolationError } from "../errors.ts";
@@ -103,6 +104,21 @@ async function complianceSection(prisma: PrismaClient, today: string, now: strin
   };
 }
 
+/** Agents and brokers whose RECO registration has expired, expires within 30 days, or isn't on file */
+function registrationMetric(rows: Awaited<ReturnType<typeof registrationOverview>>, now: string): Metric {
+  const expired = rows.filter((r) => r.status === "EXPIRED");
+  const soon = rows.filter((r) => r.status === "EXPIRING");
+  const missing = rows.filter((r) => r.status === "MISSING");
+  return {
+    key: "reco.registrations", label: "RECO registrations needing attention", value: expired.length + soon.length + missing.length, unit: "count", asOf: now,
+    items: [...expired.map((r) => `${r.name}: expired ${r.recoExpiryDate}, can't trade`), ...soon.map((r) => `${r.name}: expires ${r.recoExpiryDate} (${r.daysLeft} days)`),
+      ...missing.map((r) => `${r.name}: no profile or expiry date on file`)],
+    status: expired.length ? "critical" : soon.length || missing.length ? "attention" : "ok",
+    definition: "Active agents and brokers whose registration has expired, expires within 30 days, or has no expiry date on file. Reminders go out 30 and 14 days before and on expiry",
+    source: "Agent profiles",
+  };
+}
+
 async function brokerView(prisma: PrismaClient, today: string, now: string): Promise<OversightView> {
   const year = await prisma.recoFilingYear.findFirst({ where: { submission: null }, orderBy: { fiscalYearEnd: "asc" } });
   let reco: Metric;
@@ -137,6 +153,7 @@ async function brokerView(prisma: PrismaClient, today: string, now: string): Pro
       await complianceSection(prisma, today, now),
       { title: "Broker of record", metrics: [
         reco,
+        registrationMetric(await registrationOverview(prisma, today), now),
         { key: "trs.awaitingBroker", label: "Trade record sheets to sign", value: awaiting!.trs, unit: "count", asOf: now, status: awaiting!.trs ? "attention" : "ok",
           definition: "Signed by the agent, awaiting the broker of record's review and signature (O. Reg. 579/05 s.17(5))", source: "Trade record sheets" },
         { key: "trs.notSignedByAgent", label: "Firm or closed deals without an agent-signed trade record", value: unsigned.length, unit: "count", asOf: now,

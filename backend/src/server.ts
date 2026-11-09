@@ -5,6 +5,8 @@ import { devHeaderResolver } from "./auth.ts";
 import { EncryptedStore, LocalDiskStore } from "./compliance/storage.ts";
 import type { BrokerageProfile } from "./closing/cda-template.ts";
 import { AuthService } from "./security/auth-service.ts";
+import { senderFromEnv } from "./notify/email.ts";
+import { startReminderSchedule } from "./people/reminders.ts";
 import { InsecureConfigurationError, loadSecurityConfig } from "./security/config.ts";
 
 // Printed on every CDA. No defaults: a CDA must never carry made-up brokerage details.
@@ -75,7 +77,11 @@ if (process.env.ACCOUNTING_PROVIDER) {
     "obligations must come from the manual procedure.");
 }
 
+const mail = senderFromEnv();
+if (!mail) console.warn("SMTP_URL / EMAIL_FROM not set: emails (renewal reminders) wait in the outbox until an email service is configured.");
+
 const app = buildApp({
+  mail,
   accountMap: accountMap(),
   prisma,
   ...(security.mode === "session" ? { auth: new AuthService(prisma, security) } : { resolveUserId: devHeaderResolver, fieldCipher: security.fieldCipher }),
@@ -87,9 +93,11 @@ const app = buildApp({
 
 const port = Number(process.env.PORT ?? 3000);
 await app.listen({ port, host: process.env.HOST ?? "127.0.0.1" });
+const stopReminders = startReminderSchedule(prisma, brokerageProfile().legalName, mail, (msg, err) => (err ? app.log.error({ err }, msg) : app.log.info(msg)));
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
+    stopReminders();
     await app.close();
     await prisma.$disconnect();
     process.exit(0);

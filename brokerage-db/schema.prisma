@@ -209,6 +209,11 @@ model User {
   planVersions            CommissionPlanVersion[]      @relation("PlanVersionAgent")
   planVersionsCreated     CommissionPlanVersion[]      @relation("PlanVersionCreatedBy")
   planVersionsApproved    CommissionPlanVersion[]      @relation("PlanVersionApprovedBy")
+  agentProfile            AgentProfile?                @relation("AgentProfileOf")
+  agentProfilesUpdated    AgentProfile[]               @relation("AgentProfileUpdatedBy")
+  planTemplatesCreated    CommissionPlanTemplate[]
+  emailsAbout             EmailOutbox[]
+  registrationReminders   RegistrationReminder[]
   recoveries              AgentRecovery[]              @relation("RecoveryAgent")
   recoveriesCreated       AgentRecovery[]              @relation("RecoveryCreatedBy")
   recoveryRepayments      AgentRecoveryRepayment[]     @relation("RecoveryRepaymentActor")
@@ -1349,8 +1354,10 @@ model CommissionPlanVersion {
   approvedAt           DateTime? @db.Timestamptz(6)
   segregationException Boolean   @default(false)
   exceptionReason      String?
+  templateId           String?   @db.Uuid // migration 023: the standard plan it started from
 
   user       User  @relation("PlanVersionAgent", fields: [userId], references: [id])
+  template   CommissionPlanTemplate? @relation(fields: [templateId], references: [id], onDelete: Restrict)
   createdBy  User? @relation("PlanVersionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   approvedBy User? @relation("PlanVersionApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
 
@@ -1873,4 +1880,85 @@ model RecoFilingSubmission {
 
   year        RecoFilingYear @relation(fields: [fiscalYearEnd], references: [fiscalYearEnd])
   submittedBy User           @relation("RecoSubmittedBy", fields: [submittedById], references: [id])
+}
+
+// ─────────────────────────────────────────────
+// Agent profiles, standard plans, renewal reminders (migration 023)
+// ─────────────────────────────────────────────
+
+// One per person who trades. Address, date of birth and payout banking are encrypted by the app (FieldCipher).
+model AgentProfile {
+  userId                String    @id @db.Uuid
+  startDate             DateTime  @db.Date
+  recoExpiryDate        DateTime  @db.Date
+  addressEnc            String
+  dateOfBirthEnc        String
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  eoInsurer             String?
+  eoPolicyNumber        String?
+  eoExpiryDate          DateTime? @db.Date
+  payoutBankingEnc      String?
+  billingMethod         String?
+  billingNote           String?
+  notes                 String?
+  updatedById           String    @db.Uuid
+  updatedAt             DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  user      User @relation("AgentProfileOf", fields: [userId], references: [id], onDelete: Restrict)
+  updatedBy User @relation("AgentProfileUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@index([recoExpiryDate])
+}
+
+// The brokerage's standard plans, picked from a list when an agent's plan is proposed
+model CommissionPlanTemplate {
+  id                String   @id @db.Uuid
+  name              String
+  splitBps          Int
+  annualCap         Decimal? @db.Decimal(12, 2)
+  capYearStartMonth Int      @default(1)
+  capYearStartDay   Int      @default(1)
+  fees              Json     @default("[]")
+  isActive          Boolean  @default(true)
+  createdById       String   @db.Uuid
+  createdAt         DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  createdBy User                    @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  versions  CommissionPlanVersion[]
+}
+
+// Every email the system sends; queued until an email service is configured
+model EmailOutbox {
+  id            String    @id @db.Uuid
+  kind          String
+  toAddresses   String[]
+  ccAddresses   String[]  @default([])
+  subject       String
+  bodyText      String
+  relatedUserId String?   @db.Uuid
+  status        String    @default("QUEUED")
+  attempts      Int       @default(0)
+  lastError     String?
+  createdAt     DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  sentAt        DateTime? @db.Timestamptz(6)
+
+  relatedUser User?                  @relation(fields: [relatedUserId], references: [id], onDelete: Restrict)
+  reminders   RegistrationReminder[]
+
+  @@index([status, createdAt])
+}
+
+// One per reminder sent for a registration expiry date (DAYS_30, DAYS_14, EXPIRED): never sent twice
+model RegistrationReminder {
+  userId     String   @db.Uuid
+  expiryDate DateTime @db.Date
+  kind       String
+  emailId    String   @db.Uuid
+  createdAt  DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  user  User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  email EmailOutbox @relation(fields: [emailId], references: [id], onDelete: Restrict)
+
+  @@id([userId, expiryDate, kind])
 }

@@ -16,6 +16,8 @@ import { loadActor, requireRole, TRUST_VIEWERS, type Actor, type ResolveUserId }
 import { DomainError, fromDatabaseError, NotFoundError } from "../errors.ts";
 import { formatCents, numericToCents } from "../lib/money.ts";
 import { Reader } from "../lib/reader.ts";
+import { todayInToronto } from "../lib/dates.ts";
+import { registrationStatus } from "../people/profile.ts";
 import { assertDealAccess } from "../deals/lifecycle.ts";
 import { getPayouts, type PayoutLine } from "../closing/payouts.ts";
 import { validatePathUuid } from "../trust/validation.ts";
@@ -46,7 +48,7 @@ export async function listUsers(prisma: PrismaClient, actor: Actor, query: { rol
   }
   const users = await prisma.user.findMany({
     where: { ...(role ? { role } : {}), ...(query.includeInactive === "true" ? {} : { isActive: true }) },
-    include: { credential: { select: { mfaEnabledAt: true, lockedUntil: true } } },
+    include: { credential: { select: { mfaEnabledAt: true, lockedUntil: true } }, agentProfile: { select: { recoExpiryDate: true } } },
     orderBy: [{ isActive: "desc" }, { lastName: "asc" }, { firstName: "asc" }],
   });
   const now = new Date();
@@ -56,6 +58,11 @@ export async function listUsers(prisma: PrismaClient, actor: Actor, query: { rol
       recoRegistrationNo: u.recoRegistrationNo, isPrec: u.isPrec, precLegalName: u.precLegalName, hstNumber: u.hstNumber,
       passwordSet: u.credential !== null, mfaEnabled: !!u.credential?.mfaEnabledAt,
       locked: !!(u.credential?.lockedUntil && u.credential.lockedUntil > now), createdAt: u.createdAt,
+      // People who trade: whether their profile is filled in, and where their RECO registration stands
+      registration: u.role === "AGENT" || u.role === "MANAGING_BROKER"
+        ? { profileComplete: u.agentProfile !== null, recoExpiryDate: iso(u.agentProfile?.recoExpiryDate),
+            ...registrationStatus(iso(u.agentProfile?.recoExpiryDate), todayInToronto(now)) }
+        : null,
     })),
   };
 }

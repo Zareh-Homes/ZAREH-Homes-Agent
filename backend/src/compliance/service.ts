@@ -280,6 +280,14 @@ export async function createDeal(deps: ComplianceDeps, actor: Actor, input: Crea
   if (agentUsers.length !== input.agents.length) {
     throw new ValidationError([{ field: "agents", message: "every agent must be an active agent or broker" }]);
   }
+  // Trading needs a current RECO registration (TRESA s.4): no deal for an agent whose registration had expired by the offer date
+  const lapsed = await deps.prisma.agentProfile.findMany({
+    where: { userId: { in: input.agents.map((a) => a.userId) }, recoExpiryDate: { lt: new Date(`${input.offerDate}T00:00:00Z`) } },
+    select: { recoExpiryDate: true, user: { select: { firstName: true, lastName: true } } },
+  });
+  if (lapsed.length) {
+    throw new RuleViolationError("REGISTRATION_EXPIRED", `${lapsed.map((p) => `${p.user.firstName} ${p.user.lastName}'s RECO registration expired ${p.recoExpiryDate.toISOString().slice(0, 10)}`).join("; ")}: they can't trade until it's renewed or reinstated (TRESA s.4)`);
+  }
 
   let dealId = "";
   try {

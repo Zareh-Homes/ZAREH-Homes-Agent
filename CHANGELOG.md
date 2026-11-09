@@ -21,6 +21,19 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
 - Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
 
+## 0.19.0 (2026-11-09): Agent profiles, standard plans, renewal reminders
+
+- **Migration 023.** Agent profile for everyone who trades:
+  - Required: start date, RECO registration expiry, home address, date of birth.
+  - Optional: emergency contact, E&O insurance, payout banking, how the brokerage bills them, notes.
+  - Address, date of birth and banking are encrypted. Admins and managing brokers see and edit them; agents see their own; compliance sees the dates.
+- **Standard plans.** Set up once (split, cap, fees), picked from a list when an agent's plan is proposed, overridable, still approved by a second broker. Each plan version shows which standard plan it came from.
+- **RECO renewal reminders.** Checked every hour. Emails to the agent, copied to the managing brokers, 30 days and 14 days before expiry and on expiry, once each, with the TRESA s.4 / s.40 penalties. Also an in-app notification and a line on the broker's oversight page.
+  - Emails wait in Admin → Emails & reminders until `SMTP_URL` and `EMAIL_FROM` are set.
+- New deals refuse an agent whose registration had expired by the offer date.
+- Security patches: fastify 5.12.8, fast-uri, vite 7.3.7, vitest 4.1.12 (all audits clean). New dependency: nodemailer 10.2.1.
+- Tests: backend 202 → 206, browser 41 → 44.
+
 ## 0.18.5 (2026-10-20): Review of same-brokerage deals
 
 - **Migration 022.** Consents to multiple representation need the signed copy (uploaded to a slot that appears when consent is needed) and the date the multiple representation arose. The written disclosure records that it explained duties, services, remuneration and independent advice.

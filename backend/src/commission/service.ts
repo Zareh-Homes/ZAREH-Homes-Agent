@@ -10,6 +10,7 @@
  *                 repaid with a bank reference. Nothing is deducted automatically.
  */
 
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { loadActor, requireRole, TRUST_VIEWERS, type Actor, type ResolveUserId } from "../auth.ts";
@@ -24,7 +25,7 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 function rethrow(err: unknown, duplicate = "Already exists"): never {
   if (err instanceof DomainError) throw err;
-  if ((err as { meta?: { code?: string } })?.meta?.code === "23505") throw new ConflictError("DUPLICATE", duplicate);
+  if ((err as { meta?: { code?: string } })?.meta?.code === "23505" || (err as { code?: string })?.code === "P2002") throw new ConflictError("DUPLICATE", duplicate);
   throw fromDatabaseError(err) ?? err;
 }
 
@@ -34,7 +35,8 @@ export async function listPlans(prisma: PrismaClient, actor: Actor, userId: stri
   if (actor.id !== userId) requireRole(actor, TRUST_VIEWERS, "Viewing another agent's commission plan");
   const versions = await prisma.commissionPlanVersion.findMany({
     where: { userId }, orderBy: { effectiveFrom: "asc" },
-    include: { createdBy: { select: { firstName: true, lastName: true } }, approvedBy: { select: { firstName: true, lastName: true } } },
+    include: { createdBy: { select: { firstName: true, lastName: true } }, approvedBy: { select: { firstName: true, lastName: true } },
+      template: { select: { name: true } } },
   });
   const [current] = await prisma.$queryRaw<{ id: string }[]>`
     SELECT (p).id::text AS id FROM (SELECT plan_in_force(${userId}::uuid, ${today}::date) AS p) x WHERE (p).id IS NOT NULL`;
@@ -45,6 +47,7 @@ export async function listPlans(prisma: PrismaClient, actor: Actor, userId: stri
     versions: versions.map((v) => ({
       id: v.id, effectiveFrom: iso(v.effectiveFrom), splitBps: v.splitBps, annualCap: v.annualCap?.toFixed(2) ?? null,
       capYearStart: { month: v.capYearStartMonth, day: v.capYearStartDay }, fees: v.fees, reason: v.reason, source: v.source,
+      standardPlan: v.template?.name ?? null,
       status: v.source === "LEGACY_PLAN" ? "CARRIED_OVER" : v.approvedAt ? "APPROVED" : "PROPOSED",
       proposedBy: name(v.createdBy), approvedBy: name(v.approvedBy), approvedAt: v.approvedAt?.toISOString() ?? null,
     })),
@@ -53,14 +56,20 @@ export async function listPlans(prisma: PrismaClient, actor: Actor, userId: stri
 
 export async function proposePlan(prisma: PrismaClient, actor: Actor, userId: string, body: unknown, today: string) {
   requireRole(actor, STAFF, "Proposing a commission plan");
-  const r = new Reader(body, ["effectiveFrom", "splitPct", "annualCap", "capYearStartMonth", "capYearStartDay", "fees", "reason"]);
+  const r = new Reader(body, ["effectiveFrom", "templateId", "splitPct", "annualCap", "capYearStartMonth", "capYearStartDay", "fees", "reason"]);
+  // Starting from a standard plan: its terms apply unless this agent's are given (still approved by a second broker)
+  const templateId = r.optionalUuid("templateId");
+  const t = templateId ? await prisma.commissionPlanTemplate.findFirst({ where: { id: templateId, isActive: true } }) : null;
+  if (templateId && !t) r.fail("templateId", "isn't an active standard plan");
   const input = {
     effectiveFrom: r.date("effectiveFrom"),
-    splitBps: r.has("splitPct") ? Math.round(r.percent("splitPct", 0, 100) * 100) : null,
-    annualCap: r.has("annualCap") ? r.amount("annualCap") : null,
-    month: r.has("capYearStartMonth") ? r.percent("capYearStartMonth", 1, 12) : 1,
-    day: r.has("capYearStartDay") ? r.percent("capYearStartDay", 1, 28) : 1,
-    fees: r.objects("fees", ["name", "amount"], { max: 20 }).map((f) => ({ name: f.text("name", 100), amount: formatCents(f.amount("amount")) })),
+    splitBps: r.has("splitPct") ? Math.round(r.percent("splitPct", 0, 100) * 100) : t?.splitBps ?? null,
+    annualCap: r.has("annualCap") ? r.amount("annualCap") : t?.annualCap ? numericToCents(t.annualCap.toFixed(2)) : null,
+    month: r.has("capYearStartMonth") ? r.percent("capYearStartMonth", 1, 12) : t?.capYearStartMonth ?? 1,
+    day: r.has("capYearStartDay") ? r.percent("capYearStartDay", 1, 28) : t?.capYearStartDay ?? 1,
+    fees: r.has("fees") || !t
+      ? r.objects("fees", ["name", "amount"], { max: 20 }).map((f) => ({ name: f.text("name", 100), amount: formatCents(f.amount("amount")) }))
+      : (t.fees as { name: string; amount: string }[]),
     reason: r.text("reason", 1000),
   };
   r.check(Number.isInteger(input.month) && Number.isInteger(input.day), "capYearStartMonth", "month and day must be whole numbers");
@@ -68,10 +77,10 @@ export async function proposePlan(prisma: PrismaClient, actor: Actor, userId: st
   try {
     await prisma.$executeRaw`
       INSERT INTO "CommissionPlanVersion" (id, "userId", "effectiveFrom", "splitBps", "annualCap", "capYearStartMonth", "capYearStartDay",
-                                           fees, reason, "createdById")
+                                           fees, reason, "createdById", "templateId")
       VALUES (gen_random_uuid(), ${userId}::uuid, ${input.effectiveFrom}::date, ${input.splitBps},
               ${input.annualCap === null ? null : formatCents(input.annualCap)}::numeric, ${input.month}, ${input.day},
-              ${JSON.stringify(input.fees)}::jsonb, ${input.reason}, ${actor.id}::uuid)`;
+              ${JSON.stringify(input.fees)}::jsonb, ${input.reason}, ${actor.id}::uuid, ${templateId}::uuid)`;
   } catch (err) {
     rethrow(err, `A plan version for this agent already starts on ${input.effectiveFrom}`);
   }
@@ -93,6 +102,47 @@ export async function approvePlan(prisma: PrismaClient, actor: Actor, versionId:
     rethrow(err);
   }
   return listPlans(prisma, actor, v.userId, today);
+}
+
+// ── Standard plans ───────────────────────────────────────────────────────────
+
+export async function listPlanTemplates(prisma: PrismaClient, actor: Actor) {
+  requireRole(actor, TRUST_VIEWERS, "Viewing the standard plans");
+  const rows = await prisma.commissionPlanTemplate.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }] });
+  return {
+    templates: rows.map((t) => ({ id: t.id, name: t.name, splitPct: t.splitBps / 100, annualCap: t.annualCap?.toFixed(2) ?? null,
+      capYearStart: { month: t.capYearStartMonth, day: t.capYearStartDay }, fees: t.fees, isActive: t.isActive })),
+  };
+}
+
+export async function createPlanTemplate(prisma: PrismaClient, actor: Actor, body: unknown) {
+  requireRole(actor, STAFF, "Adding a standard plan");
+  const r = new Reader(body, ["name", "splitPct", "annualCap", "capYearStartMonth", "capYearStartDay", "fees"]);
+  const input = {
+    name: r.text("name", 100),
+    splitBps: Math.round(r.percent("splitPct", 0, 100) * 100),
+    annualCap: r.has("annualCap") && r.raw("annualCap") !== null && r.raw("annualCap") !== "" ? r.amount("annualCap") : null,
+    month: r.has("capYearStartMonth") ? r.percent("capYearStartMonth", 1, 12) : 1,
+    day: r.has("capYearStartDay") ? r.percent("capYearStartDay", 1, 28) : 1,
+    fees: r.has("fees") ? r.objects("fees", ["name", "amount"], { max: 20 }).map((f) => ({ name: f.text("name", 100), amount: formatCents(f.amount("amount")) })) : [],
+  };
+  r.done();
+  try {
+    await prisma.commissionPlanTemplate.create({ data: { id: randomUUID(), name: input.name, splitBps: input.splitBps,
+      annualCap: input.annualCap === null ? null : formatCents(input.annualCap), capYearStartMonth: input.month, capYearStartDay: input.day,
+      fees: input.fees, createdById: actor.id } });
+  } catch (err) {
+    rethrow(err, `There's already a standard plan called "${input.name}"`);
+  }
+  return listPlanTemplates(prisma, actor);
+}
+
+/** Retiring a standard plan hides it from the list; agents already on it keep their approved versions */
+export async function retirePlanTemplate(prisma: PrismaClient, actor: Actor, id: string) {
+  requireRole(actor, STAFF, "Retiring a standard plan");
+  const n = await prisma.commissionPlanTemplate.updateMany({ where: { id }, data: { isActive: false } });
+  if (n.count === 0) throw new NotFoundError("Standard plan", id);
+  return listPlanTemplates(prisma, actor);
 }
 
 // ── Adjustments ──────────────────────────────────────────────────────────────
@@ -212,6 +262,9 @@ export async function commissionRoutes(app: FastifyInstance, opts: { prisma: Pri
   app.get<P>("/api/agents/:userId/commission-plans", async (req) => listPlans(opts.prisma, await actorOf(req), id(req, "userId"), today()));
   app.post<P>("/api/agents/:userId/commission-plans", async (req, reply) =>
     reply.code(201).send(await proposePlan(opts.prisma, await actorOf(req), id(req, "userId"), req.body, today())));
+  app.get("/api/commission-plan-templates", async (req) => listPlanTemplates(opts.prisma, await actorOf(req)));
+  app.post("/api/commission-plan-templates", async (req, reply) => reply.code(201).send(await createPlanTemplate(opts.prisma, await actorOf(req), req.body)));
+  app.post<P>("/api/commission-plan-templates/:id/retire", async (req) => retirePlanTemplate(opts.prisma, await actorOf(req), id(req)));
   app.post<P>("/api/commission-plans/:id/approve", async (req) => approvePlan(opts.prisma, await actorOf(req), id(req), req.body, today()));
   app.get<P>("/api/deals/:dealId/commission-adjustments", async (req) => listAdjustments(opts.prisma, await actorOf(req), id(req, "dealId")));
   app.post<P>("/api/deals/:dealId/commission-adjustments", async (req, reply) =>
