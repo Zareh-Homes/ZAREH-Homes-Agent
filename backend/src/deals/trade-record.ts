@@ -109,7 +109,13 @@ export async function generateItems(prisma: PrismaClient, dealId: string): Promi
       })),
       ...(deal.side !== "DUAL" && coop ? [{ side: listingSide ? principals[1] : principals[0], brokerage: coop, name: null, email: null, phone: null }] : []),
     ],
-    deposit: { amount: deal.depositAmount.toFixed(2), heldBy: deal.trustDepositHolder },
+    // s.17(1) item 7: the deposit, and a record of its disbursement or withdrawal (from our trust ledger, when we hold it)
+    deposit: {
+      amount: deal.depositAmount.toFixed(2), heldBy: deal.trustDepositHolder,
+      disbursements: (await prisma.trustLedgerEntry.findMany({ where: { transactionId: dealId, direction: -1 }, orderBy: { effectiveDate: "asc" },
+        select: { effectiveDate: true, amount: true, counterparty: true, entryType: true } }))
+        .map((e) => `${e.effectiveDate.toISOString().slice(0, 10)} $${e.amount.toFixed(2)} to ${e.counterparty} (${e.entryType.toLowerCase().replace(/_/g, " ")})`).join("; ") || null,
+    },
     brokerageRemuneration: {
       amount: deal.totalGci.toFixed(2), payer: payers.length ? payers.join(", ") : null, taxExtra: true,
       // Same-brokerage deals: what each side's agreement provides (part of the amount above, not in addition)

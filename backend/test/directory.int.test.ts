@@ -87,7 +87,12 @@ describe("directory and work queues", { skip }, () => {
     assert.equal((await as(u.admin, "POST", "/api/trust/accounts", { name: "x", bankName: "TD", accountLast4: "1234" })).statusCode, 403);
     const bad = await as(u.broker, "POST", "/api/trust/accounts", { name: "Trust", bankName: "TD", accountLast4: "12a4" });
     assert.equal(bad.json().error.code, "VALIDATION_FAILED");
-    const made = await as(u.broker, "POST", "/api/trust/accounts", { name: `Trust ${tag}`, bankName: "TD", accountLast4: "4821" });
+    // One real estate trust account unless the registrar consents in writing to another
+    await as(u.broker, "POST", "/api/trust/accounts", { name: `First trust ${tag}`, bankName: "TD", accountLast4: "4820", registrarConsentReference: "setup" });
+    const second = await as(u.broker, "POST", "/api/trust/accounts", { name: `Trust ${tag}`, bankName: "TD", accountLast4: "4821" });
+    assert.equal(second.json().error.details.issues[0].field, "registrarConsentReference");
+    const made = await as(u.broker, "POST", "/api/trust/accounts", { name: `Trust ${tag}`, bankName: "TD", accountLast4: "4821",
+      registrarConsentReference: "RECO registrar letter 2026-10-02" });
     assert.equal(made.statusCode, 201, made.body);
     const list = (await as(u.compliance, "GET", "/api/trust/accounts")).json().accounts;
     assert.equal(list.find((a: { id: string }) => a.id === made.json().account.id).balance, "0.00");

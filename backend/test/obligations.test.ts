@@ -22,7 +22,7 @@ test("TRESA: a client needs the Information Guide explained before services, and
   assert.deepEqual(ok, []);
 });
 
-test("TRESA: multiple representation needs each client's signed consent; a consent signed after it arose is for review, not an automatic breach", () => {
+test("TRESA: multiple representation needs each client's signed consent; a consent signed after it arose blocks until the broker of record reviews it", () => {
   const dual: TresaFacts = { ...base, side: "DUAL", parties: [seller, buyer], agreements: [agreement("s"), agreement("b")],
     disclosures: [disclosure("INFORMATION_GUIDE", "s", "2026-09-01T10:00:00.000Z"), disclosure("INFORMATION_GUIDE", "b", "2026-09-01T10:00:00.000Z"),
       disclosure("REMUNERATION_DISCLOSURE", "s", "2026-09-01T10:00:00.000Z"), disclosure("REMUNERATION_DISCLOSURE", "b", "2026-09-01T10:00:00.000Z")] };
@@ -30,9 +30,15 @@ test("TRESA: multiple representation needs each client's signed consent; a conse
   const consentAt = (at: string, arose: string) => ["s", "b"].flatMap((p) => [
     disclosure("MULTIPLE_REPRESENTATION_DISCLOSURE", p, at, { acknowledgedAt: at }),
     disclosure("MULTIPLE_REPRESENTATION_CONSENT", p, at, { acknowledgedAt: at, situationAroseOn: arose })]);
-  // Signed a month after the multiple representation arose: the broker of record reviews what happened in between
-  assert.deepEqual(rules(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-10-12T10:00:00.000Z", "2026-09-15")] })),
-    ["MULTIPLE_REPRESENTATION_REVIEW:WARNING", "MULTIPLE_REPRESENTATION_REVIEW:WARNING"]);
+  // Signed a month after the multiple representation arose: blocked until the broker of record reviews what happened in between
+  const late = { ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-10-12T10:00:00.000Z", "2026-09-15")],
+    activity: [{ at: "2026-09-20T15:00:00.000Z", what: "offer received from Other Realty" }, { at: "2026-10-20T15:00:00.000Z", what: "after the consent" }] };
+  const f = evaluateTresa(late);
+  assert.deepEqual(rules(f), ["MULTIPLE_REPRESENTATION_REVIEW:BLOCKING", "MULTIPLE_REPRESENTATION_REVIEW:BLOCKING"]);
+  assert.match(f[0]!.message, /Recorded in between: 2026-09-20 offer received from Other Realty\. The broker of record reviews/);
+  const reviewed = (outcome: string) => evaluateTresa({ ...late, brokerReviews: ["s", "b"].map((partyId) => ({ subject: "MULTIPLE_REPRESENTATION_LATE", partyId, offerId: null, outcome })) });
+  assert.deepEqual(reviewed("NO_STEPS_TAKEN"), []);
+  assert.deepEqual(rules(reviewed("STEPS_TAKEN_CONTRAVENTION")), ["MULTIPLE_REPRESENTATION_CONTRAVENTION:BREACH", "MULTIPLE_REPRESENTATION_CONTRAVENTION:BREACH"]);
   // Signed after the offer date but the day it arose: nothing to review (the offer date alone decides nothing)
   assert.deepEqual(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-10-12T10:00:00.000Z", "2026-10-12")] }), []);
   assert.deepEqual(evaluateTresa({ ...dual, disclosures: [...dual.disclosures, ...consentAt("2026-09-20T10:00:00.000Z", "2026-09-20")] }), []);

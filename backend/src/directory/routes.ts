@@ -180,11 +180,17 @@ export async function listTrustAccounts(prisma: PrismaClient, actor: Actor) {
 
 export async function createTrustAccount(prisma: PrismaClient, actor: Actor, body: unknown) {
   requireRole(actor, ["MANAGING_BROKER"], "Opening a trust account record");
-  const r = new Reader(body, ["name", "bankName", "accountLast4", "kind"]);
+  const r = new Reader(body, ["name", "bankName", "accountLast4", "kind", "registrarConsentReference"]);
   const input = {
     name: r.text("name", 100), bankName: r.text("bankName", 100), accountLast4: r.text("accountLast4", 4, 4),
     kind: r.has("kind") ? r.oneOf("kind", ["REAL_ESTATE_TRUST", "COMMISSION_TRUST"] as const) : ("REAL_ESTATE_TRUST" as const),
+    registrarConsentReference: r.optionalText("registrarConsentReference", 300),
   };
+  // One real estate trust account unless the registrar consents in writing to more (O. Reg. 567/05)
+  if (input.kind === "REAL_ESTATE_TRUST" && !input.registrarConsentReference) {
+    const existing = await prisma.trustAccount.count({ where: { kind: "REAL_ESTATE_TRUST", isActive: true } });
+    r.check(existing === 0, "registrarConsentReference", "a second real estate trust account needs the registrar's written consent: give its reference and date");
+  }
   r.check(/^\d{4}$/.test(input.accountLast4), "accountLast4", "must be the last 4 digits of the account number");
   r.done();
   try {

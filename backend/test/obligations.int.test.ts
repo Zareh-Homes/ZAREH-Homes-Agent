@@ -294,27 +294,42 @@ describe("compliance obligations", { skip }, () => {
     const otherFile = await uploadConsent(elsewhere.id);
     assert.equal((await consent(u.compliance, d.seller, { documentFileId: otherFile })).statusCode, 422); // a file from another deal
     for (const p of [d.seller, d.buyer]) {
-      assert.equal((await disclose(p, ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE"])).statusCode, 201);
+      assert.equal((await disclose(p, ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE", "NO_OBLIGATION_TO_CONSENT", "COPY_GIVEN"])).statusCode, 201);
       assert.equal((await consent(u.compliance, p)).statusCode, 201);
     }
     assert.ok(!rules(await obligations(d.id)).some((r) => r.startsWith("MULTIPLE_REPRESENTATION")));
     assert.equal((await as(u.agent, "POST", `/api/deals/${d.id}/firm`)).statusCode, 200);
 
-    // Signed weeks after it arose: flagged for the broker of record's review, not declared a breach
+    // The written disclosure must also say the client needn't consent (and their options), and that they got a copy
+    assert.equal((await disclose(d.buyer, ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE"])).json().error.code, "DISCLOSURE_INCOMPLETE");
+
+    // Signed weeks after it arose: blocked until the broker of record reviews what was done in between
     const late = await twoAgentDeal();
     await agreement(late.id, late.seller, "BROKERAGE");
     await agreement(late.id, late.buyer, "BROKERAGE", [], u.broker);
     const lateFile = await uploadConsent(late.id);
     for (const p of [late.seller, late.buyer]) {
       await as(u.broker, "POST", `/api/deals/${late.id}/disclosures`, { kind: "MULTIPLE_REPRESENTATION_DISCLOSURE", partyId: p, deliveredAt: "2026-10-15T09:00:00-04:00",
-        method: "Written disclosure", acknowledgedAt: "2026-10-15T09:10:00-04:00", confirms: ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE"] });
+        method: "Written disclosure", acknowledgedAt: "2026-10-15T09:10:00-04:00", confirms: ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE", "NO_OBLIGATION_TO_CONSENT", "COPY_GIVEN"] });
       assert.equal((await as(u.compliance, "POST", `/api/deals/${late.id}/disclosures`, { kind: "MULTIPLE_REPRESENTATION_CONSENT", partyId: p,
         deliveredAt: "2026-10-15T09:00:00-04:00", method: "Signed consent", acknowledgedAt: "2026-10-15T09:15:00-04:00", situationAroseOn: "2026-09-20",
         documentFileId: lateFile })).statusCode, 201);
     }
+    await remunerationDisclosed(late.id, [late.seller, late.buyer], u.broker);
     const review = (await obligations(late.id)).tresa.filter((f: { rule: string }) => f.rule === "MULTIPLE_REPRESENTATION_REVIEW");
-    assert.deepEqual(review.map((f: { severity: string }) => f.severity), ["WARNING", "WARNING"]);
-    assert.match(review[0].message, /arose on 2026-09-20: broker of record to review/);
+    assert.deepEqual(review.map((f: { severity: string }) => f.severity), ["BLOCKING", "BLOCKING"]);
+    assert.match(review[0].message, /after the multiple representation arose on 2026-09-20\./);
+    assert.match(review[0].message, /Recorded in between: .*remuneration disclosure delivered/);
+    assert.equal((await as(u.agent, "POST", `/api/deals/${late.id}/firm`)).json().error.code, "CONSENT_OUTSTANDING");
+    // The broker of record reviews each client's consent: only a managing broker can, with a note
+    const reviewOf = (user: string, partyId: string, outcome: string) => as(user, "POST", `/api/deals/${late.id}/broker-reviews`, {
+      partyId, outcome, note: "Checked the file and spoke with the agent: no showings, offers or advice between Sept 20 and Oct 15" });
+    assert.equal((await reviewOf(u.compliance, late.seller, "NO_STEPS_TAKEN")).statusCode, 403);
+    assert.equal((await reviewOf(u.broker, late.seller, "NO_STEPS_TAKEN")).statusCode, 201);
+    assert.equal((await reviewOf(u.broker, late.buyer, "STEPS_TAKEN_CONTRAVENTION")).statusCode, 201);
+    const after = await obligations(late.id);
+    assert.ok(!rules(after).includes("MULTIPLE_REPRESENTATION_REVIEW"));
+    assert.deepEqual(after.tresa.filter((f: { rule: string }) => f.rule === "MULTIPLE_REPRESENTATION_CONTRAVENTION").map((f: { severity: string }) => f.severity), ["BREACH"]);
   });
 
   test("our buyers' offers on our listing: separate designated representatives need no consent; the seller's own agent does; other buyers and variable commission are disclosed", async () => {

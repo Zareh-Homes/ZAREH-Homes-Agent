@@ -121,7 +121,7 @@ function Upload({ slot, onDone, onCancel }: { slot: SlotView; onDone: () => void
   const [file, setFile] = useState<File | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [ind, setInd] = useState({
-    verificationDate: "", verificationMode: "IN_PERSON", fullLegalName: slot.party?.fullName ?? "", dateOfBirth: "", address: "", occupation: "",
+    verificationDate: "", verificationMode: "IN_PERSON", fullLegalName: slot.party?.fullName ?? "", dateOfBirth: "", address: "", occupation: "", soleProprietorBusiness: "",
     idType: "DRIVERS_LICENCE", idNumber: "", issuingJurisdiction: "Ontario", expiryDate: "",
   });
   const [corp, setCorp] = useState({
@@ -186,6 +186,8 @@ function Upload({ slot, onDone, onCancel }: { slot: SlotView; onDone: () => void
           <TextField label="Date of birth" type="date" required value={ind.dateOfBirth} onChange={(e) => setInd({ ...ind, dateOfBirth: e.target.value })} error={m("dateOfBirth")} />
           <TextField label="Address" required value={ind.address} onChange={(e) => setInd({ ...ind, address: e.target.value })} error={m("address")} />
           <TextField label="Occupation" required value={ind.occupation} onChange={(e) => setInd({ ...ind, occupation: e.target.value })} error={m("occupation")} />
+          <TextField label="If a sole proprietor: nature of the business" value={ind.soleProprietorBusiness}
+            onChange={(e) => setInd({ ...ind, soleProprietorBusiness: e.target.value })} error={m("soleProprietorBusiness")} />
           <SelectField label="ID type" value={ind.idType} onChange={(e) => setInd({ ...ind, idType: e.target.value })} options={ID_TYPES.map((t) => ({ value: t, label: labelOf(t) }))} />
           <TextField label="ID number" required autoComplete="off" value={ind.idNumber} onChange={(e) => setInd({ ...ind, idNumber: e.target.value })} error={m("idNumber")} hint="Stored encrypted" />
           <TextField label="Issued by" required value={ind.issuingJurisdiction} onChange={(e) => setInd({ ...ind, issuingJurisdiction: e.target.value })} error={m("issuingJurisdiction")} />

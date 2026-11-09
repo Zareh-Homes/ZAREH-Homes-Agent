@@ -254,7 +254,7 @@ test("one agent on both sides under brokerage representation: no firm deal until
   for (const p of [seller!, buyer!]) {
     expect((await apiAs(morgan, "POST", `/api/deals/${dealId}/disclosures`, { kind: "MULTIPLE_REPRESENTATION_DISCLOSURE", partyId: p,
       deliveredAt: `${day(-20)}T10:00:00-04:00`, acknowledgedAt: `${day(-20)}T10:30:00-04:00`, method: "Written disclosure, signed",
-      confirms: ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE"] })).status).toBe(201);
+      confirms: ["DUTIES", "SERVICES", "REMUNERATION", "INDEPENDENT_ADVICE", "NO_OBLIGATION_TO_CONSENT", "COPY_GIVEN"] })).status).toBe(201);
   }
   const comp = await as(browser, "compliance");
   // The signed consents, uploaded to the slot that appeared when consent became necessary

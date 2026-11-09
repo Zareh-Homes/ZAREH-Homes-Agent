@@ -21,6 +21,15 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
 - Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
 
+## 0.19.1 (2026-11-09): Compliance review, round 3
+
+- **Migration 025.** A consent to multiple representation signed after the conflict arose now **blocks** (going firm, accepting an offer, the broker's trade record signature) until the broker of record records a review. The finding lists everything recorded on the deal between the conflict and the consent. Review outcomes: nothing was done (cleared), or steps were taken (kept as a contravention). Managing brokers only.
+- The written disclosure of multiple representation also records that it told the client they don't have to consent, and their options if they don't, and that the client was given a copy (RECO Bulletin 3.2).
+- Seller commission terms that could affect acceptance: cited as O. Reg. 567/05 s.23(4) (existence and details to every written offeror before acceptance), with s.23(5) acknowledgement or best efforts.
+- Trade record item 7 shows the deposit's disbursements from our trust ledger.
+- A second real estate trust account needs the registrar's written consent (reference recorded).
+- FINTRAC individual record: nature of the business for a sole proprietor.
+
 ## 0.19.0 (2026-11-09): Agent profiles, standard plans, renewal reminders, import & export
 
 - **Migration 023.** Agent profile for everyone who trades:

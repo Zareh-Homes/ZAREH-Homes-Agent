@@ -58,6 +58,10 @@ export interface TresaFacts {
   offers: OfferFacts[];
   /** The seller's commission changes with who represents the buyer (e.g. less if this brokerage does) */
   sellerRemunerationVaries?: boolean;
+  /** The broker of record's reviews of late consents (migration 025) */
+  brokerReviews?: { subject: string; partyId: string | null; offerId: string | null; outcome: string }[];
+  /** What was recorded on the deal, with when: shown when a consent came after the conflict arose */
+  activity?: { at: string; what: string }[];
   now: string; // ISO timestamp
 }
 
@@ -91,6 +95,29 @@ export function agreementOn(agreements: AgreementFacts[], partyId: string, date:
 }
 
 const overlaps = (a: string[], b: string[]) => a.some((id) => b.includes(id));
+
+/**
+ * A consent signed after the multiple representation arose. Nothing may be done for the affected clients in between
+ * (RECO Bulletin 3.2), so it blocks until the broker of record reviews what was recorded in that window: nothing done,
+ * or a contravention kept on the deal.
+ */
+function lateConsent(f: TresaFacts, consent: DisclosureFacts, target: { partyId?: string; offerId?: string }, who: string, citation: string): Finding[] {
+  if (!consent.situationAroseOn || !consent.acknowledgedAt || consent.acknowledgedAt <= `${consent.situationAroseOn}T23:59:59.999Z`) return [];
+  const review = (f.brokerReviews ?? []).find((r) => r.subject === "MULTIPLE_REPRESENTATION_LATE"
+    && (target.partyId ? r.partyId === target.partyId : r.offerId === target.offerId));
+  if (review?.outcome === "NO_STEPS_TAKEN") return [];
+  if (review?.outcome === "STEPS_TAKEN_CONTRAVENTION") {
+    return [{ rule: "MULTIPLE_REPRESENTATION_CONTRAVENTION", citation, severity: "BREACH", ...target,
+      message: `${who}: the broker of record found steps were taken before the consent was signed; kept on file as a contravention` }];
+  }
+  const between = (f.activity ?? []).filter((a) => a.at >= `${consent.situationAroseOn}T00:00:00.000Z` && a.at < consent.acknowledgedAt!)
+    .sort((a, b) => a.at.localeCompare(b.at));
+  const listed = between.slice(0, 5).map((a) => `${a.at.slice(0, 10)} ${a.what}`).join("; ");
+  return [{ rule: "MULTIPLE_REPRESENTATION_REVIEW", citation: `${citation}; RECO Bulletin 3.2`, severity: "BLOCKING", ...target,
+    message: `${who}: consent signed ${consent.acknowledgedAt.slice(0, 10)}, after the multiple representation arose on ${consent.situationAroseOn}. ` +
+      (between.length ? `Recorded in between: ${listed}${between.length > 5 ? ` and ${between.length - 5} more` : ""}. ` : "Nothing was recorded here in between. ") +
+      "The broker of record reviews whether anything was done for either client before the consent, and records the outcome" }];
+}
 
 export function classifyRepresentation(f: Pick<TresaFacts, "parties" | "agreements"> & { offerDate?: string }): { mode: RepresentationMode; citation: string; explanation: string } {
   const clients = f.parties.filter((p) => p.representation === "OUR_CLIENT");
@@ -188,12 +215,9 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
           message: `Multiple representation (${kind}): give ${p.name} the written disclosure and get their signed written consent before any further step for either client` });
         continue;
       }
-      // Measured from when the multiple representation arose, not the offer date; whether anything was done for either
-      // client in between is the broker of record's call, not the software's
-      if (consent.situationAroseOn && consent.acknowledgedAt! > endOfDay(consent.situationAroseOn)) {
-        out.push({ rule: "MULTIPLE_REPRESENTATION_REVIEW", citation: `${mode.citation}; RECO Bulletin 3.2`, severity: "WARNING", partyId: p.id,
-          message: `${p.name}'s consent was signed ${consent.acknowledgedAt!.slice(0, 10)}, after the multiple representation arose on ${consent.situationAroseOn}: broker of record to review whether anything was done for either client in between` });
-      }
+      // Measured from when the multiple representation arose, not the offer date; blocks until the broker of record
+      // has reviewed what was done in between
+      out.push(...lateConsent(f, consent, { partyId: p.id }, `${p.name}'s consent`, mode.citation));
       if (!disclosed.acknowledgedAt && !disclosed.bestEffortsNote) {
         out.push({ rule: "MULTIPLE_REPRESENTATION_ACKNOWLEDGEMENT", citation: `${mode.citation}; s.22(5)`, severity: "WARNING", partyId: p.id,
           message: `Record ${p.name}'s written acknowledgement of the disclosure, or the best efforts made to get it` });
@@ -285,8 +309,14 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
     // The seller's commission changes with who represents the buyer: every buyer making a written offer is told
     if (f.sellerRemunerationVaries) {
       for (const o of written) {
-        check(o, "VARIABLE_REMUNERATION_DISCLOSURE", "VARIABLE_REMUNERATION", "O. Reg. 567/05 (remuneration that could affect acceptance); RECO Bulletin 3.3",
-          "the seller's commission terms that change depending on who represents the buyer");
+        // The terms' existence and details, as soon as possible after the offer and before any acceptance (s.23(4));
+        // best efforts to get the offeror's written acknowledgement (s.23(5))
+        const done = check(o, "VARIABLE_REMUNERATION_DISCLOSURE", "VARIABLE_REMUNERATION", "O. Reg. 567/05 s.23(4); RECO Bulletin 3.1",
+          "the existence and details of the seller's commission terms that could affect which offer is accepted");
+        if (done && done.every((d) => !d.acknowledgedAt && !d.bestEffortsNote)) {
+          out.push({ rule: "VARIABLE_REMUNERATION_ACKNOWLEDGEMENT", citation: "O. Reg. 567/05 s.23(5)", severity: "WARNING", offerId: o.id,
+            message: `Record ${o.label}'s written acknowledgement of the commission terms disclosure, or the best efforts made to get it` });
+        }
       }
     }
     // Buyers this brokerage represents: multiple representation is decided from who represents whom. Two buyers with
@@ -317,9 +347,8 @@ export function evaluateTresa(f: TresaFacts, opts: { acceptingOfferId?: string }
           message: accepted
             ? `${o.label} involved multiple representation with ${withWhom.join(" and ")} and no signed consent was recorded before acceptance: broker of record to review`
             : `${o.label}: multiple representation with ${withWhom.join(" and ")}. Record the signed written consent of the clients affected before any offer is accepted` });
-      } else if (consent.situationAroseOn && consent.acknowledgedAt && consent.acknowledgedAt > endOfDay(consent.situationAroseOn)) {
-        out.push({ rule: "MULTIPLE_REPRESENTATION_REVIEW", citation: "O. Reg. 567/05 s.22 to s.22.0.2; RECO Bulletin 3.2", severity: "WARNING", offerId: o.id,
-          message: `The consent for ${o.label} was signed ${consent.acknowledgedAt.slice(0, 10)}, after the multiple representation arose on ${consent.situationAroseOn}: broker of record to review` });
+      } else {
+        out.push(...lateConsent(f, consent, { offerId: o.id }, `The consent for ${o.label}`, "O. Reg. 567/05 s.22 to s.22.0.2"));
       }
     }
   }

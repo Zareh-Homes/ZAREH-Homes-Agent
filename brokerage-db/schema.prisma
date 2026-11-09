@@ -214,6 +214,7 @@ model User {
   planTemplatesCreated    CommissionPlanTemplate[]
   emailsAbout             EmailOutbox[]
   registrationReminders   RegistrationReminder[]
+  brokerReviews           BrokerReview[]
   recoveries              AgentRecovery[]              @relation("RecoveryAgent")
   recoveriesCreated       AgentRecovery[]              @relation("RecoveryCreatedBy")
   recoveryRepayments      AgentRecoveryRepayment[]     @relation("RecoveryRepaymentActor")
@@ -302,11 +303,12 @@ model Listing {
 // ─────────────────────────────────────────────
 
 model Transaction {
-  id            String     @id @default(uuid()) @db.Uuid
-  dealNumber    String     @unique // e.g. 2026-0142, used on the trade record sheet
+  brokerReviews BrokerReview[]
+  id            String         @id @default(uuid()) @db.Uuid
+  dealNumber    String         @unique // e.g. 2026-0142, used on the trade record sheet
   side          DealSide
-  status        DealStatus @default(CONDITIONAL)
-  listingId     String?    @db.Uuid // set when it's one of our listings
+  status        DealStatus     @default(CONDITIONAL)
+  listingId     String?        @db.Uuid // set when it's one of our listings
   streetAddress String // copied so buy-side deals need no Listing row
   unit          String?
   city          String
@@ -323,22 +325,22 @@ model Transaction {
   trustDepositHolder DepositHolder
   depositStatus      DepositStatus @default(AWAITING)
 
-  totalGci             Decimal         @db.Decimal(12, 2) // gross commission to our brokerage, pre-split, excl. HST
-  listingSideGci       Decimal?        @db.Decimal(12, 2) // DUAL: listing side's share of totalGci (migration 021)
-  buyerSideGci         Decimal?        @db.Decimal(12, 2) // DUAL: buyer side's share of totalGci
-  buyerSideSellerPays  Decimal?        @db.Decimal(12, 2) // DUAL: part of the buyer side the seller agreed to pay (migration 022)
-  remunerationSource   String? // DUAL: where each payment obligation is written
-  sellerRemunerationVaries Boolean     @default(false) // the seller's commission changes with who represents the buyer
-  hstOnGci             Decimal?        @default(0) @db.Decimal(12, 2) // 13% Ontario HST collected on totalGci; NULL only when hstSource is MISSING
-  hstSource            TaxAmountSource @default(CALCULATED) // migration 007
-  commissionRatePct    Decimal?        @db.Decimal(5, 3)
-  coopBrokerageName    String?
-  coopAgentName        String?
+  totalGci                 Decimal         @db.Decimal(12, 2) // gross commission to our brokerage, pre-split, excl. HST
+  listingSideGci           Decimal?        @db.Decimal(12, 2) // DUAL: listing side's share of totalGci (migration 021)
+  buyerSideGci             Decimal?        @db.Decimal(12, 2) // DUAL: buyer side's share of totalGci
+  buyerSideSellerPays      Decimal?        @db.Decimal(12, 2) // DUAL: part of the buyer side the seller agreed to pay (migration 022)
+  remunerationSource       String? // DUAL: where each payment obligation is written
+  sellerRemunerationVaries Boolean         @default(false) // the seller's commission changes with who represents the buyer
+  hstOnGci                 Decimal?        @default(0) @db.Decimal(12, 2) // 13% Ontario HST collected on totalGci; NULL only when hstSource is MISSING
+  hstSource                TaxAmountSource @default(CALCULATED) // migration 007
+  commissionRatePct        Decimal?        @db.Decimal(5, 3)
+  coopBrokerageName        String?
+  coopAgentName            String?
   // Listing side: the co-operating brokerage's commission (base, excl. HST), paid out of the
   // total the seller owes us. Zero on buyer-side and dual deals.
-  coopCommission       Decimal         @default(0) @db.Decimal(12, 2)
-  outsideReferralPayee String?
-  outsideReferralPct   Decimal?        @db.Decimal(5, 2) // % of base GCI owed to an outside referring brokerage
+  coopCommission           Decimal         @default(0) @db.Decimal(12, 2)
+  outsideReferralPayee     String?
+  outsideReferralPct       Decimal?        @db.Decimal(5, 2) // % of base GCI owed to an outside referring brokerage
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -372,16 +374,16 @@ model Transaction {
 
 // Agent split per deal (supports co-listing, teams, referrals)
 model TransactionAgent {
-  id            String        @id @default(uuid()) @db.Uuid
-  transactionId String        @db.Uuid
-  userId        String        @db.Uuid
-  role          DealAgentRole @default(PRIMARY)
-  splitPct      Decimal       @db.Decimal(5, 2) // agent's split on this deal, e.g. 80 = 80/20
-  gciSharePct   Decimal       @default(100) @db.Decimal(5, 2) // share of the deal's GCI (DUAL: of their side's); sums to 100
+  id            String         @id @default(uuid()) @db.Uuid
+  transactionId String         @db.Uuid
+  userId        String         @db.Uuid
+  role          DealAgentRole  @default(PRIMARY)
+  splitPct      Decimal        @db.Decimal(5, 2) // agent's split on this deal, e.g. 80 = 80/20
+  gciSharePct   Decimal        @default(100) @db.Decimal(5, 2) // share of the deal's GCI (DUAL: of their side's); sums to 100
   side          DealAgentSide? // DUAL deals: the side this agent represents (migration 021)
-  grossShare    Decimal       @db.Decimal(12, 2)
-  brokerageFee  Decimal       @default(0) @db.Decimal(12, 2)
-  netPayout     Decimal       @db.Decimal(12, 2)
+  grossShare    Decimal        @db.Decimal(12, 2)
+  brokerageFee  Decimal        @default(0) @db.Decimal(12, 2)
+  netPayout     Decimal        @db.Decimal(12, 2)
   paidAt        DateTime?
 
   transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
@@ -393,6 +395,7 @@ model TransactionAgent {
 
 // Buyers, sellers, lawyers – also drives FINTRAC ID records
 model TransactionParty {
+  brokerReviews       BrokerReview[]
   id                  String          @id @default(uuid()) @db.Uuid
   transactionId       String          @db.Uuid
   role                PartyRole
@@ -418,13 +421,14 @@ model TransactionParty {
 // ─────────────────────────────────────────────
 
 model TrustAccount {
-  id           String           @id @default(uuid()) @db.Uuid
-  name         String // e.g. "Real Estate Trust – TD"
-  bankName     String
-  accountLast4 String
-  isActive     Boolean          @default(true)
-  createdAt    DateTime         @default(now())
-  kind         TrustAccountKind @default(REAL_ESTATE_TRUST) // migration 009
+  id                        String           @id @default(uuid()) @db.Uuid
+  name                      String // e.g. "Real Estate Trust – TD"
+  bankName                  String
+  accountLast4              String
+  isActive                  Boolean          @default(true)
+  createdAt                 DateTime         @default(now())
+  kind                      TrustAccountKind @default(REAL_ESTATE_TRUST) // migration 009
+  registrarConsentReference String? // migration 025: the registrar's written consent to a second real estate trust account
 
   entries            TrustLedgerEntry[]
   reconciliations    TrustReconciliation[]
@@ -1356,10 +1360,10 @@ model CommissionPlanVersion {
   exceptionReason      String?
   templateId           String?   @db.Uuid // migration 023: the standard plan it started from
 
-  user       User  @relation("PlanVersionAgent", fields: [userId], references: [id])
+  user       User                    @relation("PlanVersionAgent", fields: [userId], references: [id])
   template   CommissionPlanTemplate? @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  createdBy  User? @relation("PlanVersionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy User? @relation("PlanVersionApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  createdBy  User?                   @relation("PlanVersionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?                   @relation("PlanVersionApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
 
   @@unique([userId, effectiveFrom])
 }
@@ -1544,25 +1548,26 @@ enum OfferStatus {
 
 // Every written offer received on a listing (migration 015); unaccepted ones kept a year from receipt.
 model Offer {
-  id                     String   @id @default(uuid()) @db.Uuid
-  listingDealId          String   @db.Uuid
-  receivedAt             DateTime @db.Timestamptz(6)
+  brokerReviews          BrokerReview[]
+  id                     String         @id @default(uuid()) @db.Uuid
+  listingDealId          String         @db.Uuid
+  receivedAt             DateTime       @db.Timestamptz(6)
   written                Boolean
   offerorBrokerage       String?
-  offerorSelfRepresented Boolean  @default(false)
-  price                  Decimal? @db.Decimal(14, 2)
-  documentFileId         String?  @db.Uuid
-  recordedById           String   @db.Uuid
-  createdAt              DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  offerorSelfRepresented Boolean        @default(false)
+  price                  Decimal?       @db.Decimal(14, 2)
+  documentFileId         String?        @db.Uuid
+  recordedById           String         @db.Uuid
+  createdAt              DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
 
-  listingDeal      Transaction       @relation(fields: [listingDealId], references: [id])
-  documentFile     DocumentFile?     @relation("OfferDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
-  recordedBy       User              @relation("OfferRecordedBy", fields: [recordedById], references: [id])
-  events           OfferEvent[]
-  fromOurBrokerage Boolean           @default(false) // migration 016: a buyer our brokerage also represents
+  listingDeal         Transaction       @relation(fields: [listingDealId], references: [id])
+  documentFile        DocumentFile?     @relation("OfferDocument", fields: [documentFileId], references: [id], onDelete: Restrict)
+  recordedBy          User              @relation("OfferRecordedBy", fields: [recordedById], references: [id])
+  events              OfferEvent[]
+  fromOurBrokerage    Boolean           @default(false) // migration 016: a buyer our brokerage also represents
   buyerRepresentation String? // migration 022: BROKERAGE or DESIGNATED, for a buyer of ours
-  buyerAgentIds    String[]          @default([]) @db.Uuid
-  disclosures      TresaDisclosure[]
+  buyerAgentIds       String[]          @default([]) @db.Uuid
+  disclosures         TresaDisclosure[]
 
   @@index([listingDealId])
 }
@@ -1634,25 +1639,25 @@ enum DisclosureKind {
 
 // TRESA / O. Reg. 567/05 disclosures to a party or an offeror (migration 016). Append-only.
 model TresaDisclosure {
-  id              String         @id @default(uuid()) @db.Uuid
-  transactionId   String         @db.Uuid
-  kind            DisclosureKind
-  partyId         String?        @db.Uuid
-  offerId         String?        @db.Uuid
-  deliveredAt     DateTime       @db.Timestamptz(6)
-  method          String
-  explainedAt     DateTime?      @db.Timestamptz(6)
-  acknowledgedAt  DateTime?      @db.Timestamptz(6)
-  bestEffortsNote String?
-  formVersion     String?
-  numberDisclosed Int?
-  content         String?
-  directionId     String?        @db.Uuid
-  documentFileId  String?        @db.Uuid
-  recordedById    String         @db.Uuid
-  createdAt       DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  situationAroseOn DateTime?     @db.Date // migration 022: when the multiple representation arose
-  confirms        String[]       @default([]) // what the written disclosure explained
+  id               String         @id @default(uuid()) @db.Uuid
+  transactionId    String         @db.Uuid
+  kind             DisclosureKind
+  partyId          String?        @db.Uuid
+  offerId          String?        @db.Uuid
+  deliveredAt      DateTime       @db.Timestamptz(6)
+  method           String
+  explainedAt      DateTime?      @db.Timestamptz(6)
+  acknowledgedAt   DateTime?      @db.Timestamptz(6)
+  bestEffortsNote  String?
+  formVersion      String?
+  numberDisclosed  Int?
+  content          String?
+  directionId      String?        @db.Uuid
+  documentFileId   String?        @db.Uuid
+  recordedById     String         @db.Uuid
+  createdAt        DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  situationAroseOn DateTime?      @db.Date // migration 022: when the multiple representation arose
+  confirms         String[]       @default([]) // what the written disclosure explained
 
   transaction  Transaction           @relation(fields: [transactionId], references: [id])
   party        TransactionParty?     @relation(fields: [partyId], references: [id], onDelete: Restrict)
@@ -1971,4 +1976,24 @@ model RateLimitHit {
 
   @@id([keyHash, windowStart])
   @@index([windowStart])
+}
+
+// The broker of record's review of a late consent to multiple representation (migration 025). Append-only.
+model BrokerReview {
+  id            String   @id @db.Uuid
+  transactionId String   @db.Uuid
+  subject       String
+  partyId       String?  @db.Uuid
+  offerId       String?  @db.Uuid
+  outcome       String
+  note          String
+  reviewedById  String   @db.Uuid
+  reviewedAt    DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  transaction Transaction       @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  party       TransactionParty? @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  offer       Offer?            @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  reviewedBy  User              @relation(fields: [reviewedById], references: [id], onDelete: Restrict)
+
+  @@index([transactionId])
 }

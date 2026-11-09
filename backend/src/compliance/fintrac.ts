@@ -47,6 +47,7 @@ export interface FintracIndividualRecord {
   dateOfBirth: string;
   address: string;
   occupation: string;
+  soleProprietorBusiness?: string;
   idType: (typeof ID_TYPES)[number];
   idNumber: string;
   issuingJurisdiction: string;
@@ -105,7 +106,7 @@ function readThirdParty(r: Reader): { thirdPartyDetermination: boolean; thirdPar
 export function validateFintracIndividual(raw: unknown, today: string, prefix = "metadata"): FintracIndividualRecord {
   const r = new Reader(raw, [
     "verificationDate", "verificationMode", "fullLegalName", "dateOfBirth", "address", "occupation",
-    "idType", "idNumber", "issuingJurisdiction", "expiryDate", "thirdPartyDetermination", "thirdParty",
+    "idType", "idNumber", "issuingJurisdiction", "expiryDate", "thirdPartyDetermination", "thirdParty", "soleProprietorBusiness",
   ], prefix);
 
   const record: FintracIndividualRecord = {
@@ -116,6 +117,8 @@ export function validateFintracIndividual(raw: unknown, today: string, prefix = 
     dateOfBirth: r.pastDate("dateOfBirth", today),
     address: r.text("address", 300),
     occupation: r.text("occupation", 200),
+    // A sole proprietor: the nature of their principal business (FINTRAC, from October 2025)
+    ...(r.has("soleProprietorBusiness") && r.raw("soleProprietorBusiness") ? { soleProprietorBusiness: r.text("soleProprietorBusiness", 200) } : {}),
     idType: r.oneOf("idType", ID_TYPES),
     idNumber: r.text("idNumber", 30),
     issuingJurisdiction: r.text("issuingJurisdiction", 100),

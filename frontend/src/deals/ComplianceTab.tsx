@@ -12,7 +12,7 @@ import { dateText, isLease, labelOf } from "../ui/format.ts";
 import { hasRole, useSession } from "../app/session.tsx";
 import type { Deal, TabProps } from "./DealWorkspace.tsx";
 
-interface Finding { rule: string; citation: string; severity: "BLOCKING" | "BREACH" | "WARNING"; message: string; partyId?: string; dueBy?: string }
+interface Finding { rule: string; citation: string; severity: "BLOCKING" | "BREACH" | "WARNING"; message: string; partyId?: string; offerId?: string; dueBy?: string }
 interface Obligations {
   parties: { id: string; role: string; name: string; representation: string }[];
   representation: { mode: string; citation: string; explanation: string };
@@ -40,7 +40,7 @@ export function ComplianceTab({ deal }: TabProps) {
             {rep.explanation} <span className="text-ink-3">({rep.citation})</span>
           </Notice>
         )}
-        <Findings title="TRESA" findings={o.tresa} />
+        <Findings title="TRESA" findings={o.tresa} dealId={deal.id} onDone={ob.reload} />
         {isLease(deal.side)
           ? <Section title="FINTRAC"><p className="text-sm text-ink-2">FINTRAC's real estate obligations cover purchases and sales, so there's nothing to record for a lease.</p></Section>
           : <Findings title="FINTRAC" findings={o.fintrac} />}
@@ -64,7 +64,9 @@ export function ComplianceTab({ deal }: TabProps) {
   );
 }
 
-function Findings({ title, findings }: { title: string; findings: Finding[] }) {
+function Findings({ title, findings, dealId, onDone }: { title: string; findings: Finding[]; dealId?: string; onDone?: () => void }) {
+  const { user } = useSession();
+  const broker = hasRole(user, ["MANAGING_BROKER"]);
   return (
     <Section title={title} description={findings.length ? `${findings.length} item${findings.length === 1 ? "" : "s"} to deal with. Blocking items stop the broker of record signing the trade record.` : undefined}>
       {findings.length === 0 ? <Empty>Nothing outstanding.</Empty> : (
@@ -74,6 +76,10 @@ function Findings({ title, findings }: { title: string; findings: Finding[] }) {
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-ink">{f.message}</p>
                 <p className="text-xs text-ink-3">{f.citation}{f.dueBy ? ` · due ${dateText(f.dueBy)}` : ""}</p>
+                {broker && dealId && f.rule === "MULTIPLE_REPRESENTATION_REVIEW" && (
+                  <div className="mt-2"><InlineForm label="Record your review">{(close) =>
+                    <BrokerReview dealId={dealId} finding={f} onDone={() => { close(); onDone?.(); }} onCancel={close} />}</InlineForm></div>
+                )}
               </div>
               <StatusBadge tone={SEVERITY[f.severity]}>{labelOf(f.severity)}</StatusBadge>
             </li>
@@ -81,6 +87,27 @@ function Findings({ title, findings }: { title: string; findings: Finding[] }) {
         </ul>
       )}
     </Section>
+  );
+}
+
+/** The broker of record's review of a consent signed after the multiple representation arose */
+function BrokerReview({ dealId, finding, onDone, onCancel }: { dealId: string; finding: Finding; onDone: () => void; onCancel: () => void }) {
+  const act = useAction();
+  const [f, setF] = useState({ outcome: "", note: "" });
+  return (
+    <form className="space-y-3" onSubmit={async (e) => {
+      e.preventDefault();
+      const ok = await act.run(() => api("POST", `/api/deals/${dealId}/broker-reviews`, {
+        ...(finding.partyId ? { partyId: finding.partyId } : { offerId: finding.offerId }), outcome: f.outcome, note: f.note }));
+      if (ok) onDone();
+    }}>
+      {act.error && <Notice kind="error">{act.error}</Notice>}
+      <SelectField label="What you found" required placeholder="Choose…" value={f.outcome} onChange={(e) => setF({ ...f, outcome: e.target.value })} error={act.fields.outcome}
+        options={[{ value: "NO_STEPS_TAKEN", label: "Nothing was done for either client before the consent" },
+          { value: "STEPS_TAKEN_CONTRAVENTION", label: "Steps were taken: keep it on file as a contravention" }]} />
+      <TextArea label="How you checked" required rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} error={act.fields.note} />
+      <div className="flex gap-2"><Button type="submit" variant="primary" busy={act.busy}>Record review</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
+    </form>
   );
 }
 
@@ -125,6 +152,8 @@ const KIND_LABEL: Record<string, string> = {
 const EXPLAINS: [string, string][] = [
   ["DUTIES", "How our duties to each client change"], ["SERVICES", "How the services change"],
   ["REMUNERATION", "How the remuneration changes"], ["INDEPENDENT_ADVICE", "Advised to get independent professional advice"],
+  ["NO_OBLIGATION_TO_CONSENT", "They don't have to consent, and what their options are if they don't"],
+  ["COPY_GIVEN", "The client was given a copy"],
 ];
 
 function Disclosure({ dealId, parties, listing, onDone, onCancel }: { dealId: string; parties: Obligations["parties"]; listing: boolean; onDone: () => void; onCancel: () => void }) {
@@ -186,7 +215,7 @@ function Disclosure({ dealId, parties, listing, onDone, onCancel }: { dealId: st
       {consent && (
         <>
           <TextField label="When the multiple representation arose" type="date" required value={f.situationAroseOn}
-            hint="When both clients were in this same trade (e.g. our buyer became interested in our listing)"
+            hint="When both clients were in this same trade (e.g. our buyer became interested in our listing). If signing an agreement created it, that's the agreement date: consent comes before signing."
             onChange={(e) => setF({ ...f, situationAroseOn: e.target.value })} error={act.fields.situationAroseOn} />
           {signed
             ? <p className="text-sm text-ink-2">Signed copy: {signed.fileName} (version {signed.version}, uploaded {dateText(signed.uploadedAt)})</p>

@@ -584,11 +584,13 @@ function OperatingAccounts() {
 
 function NewAccount({ kind, onDone, onCancel }: { kind: "trust" | "operating"; onDone: () => void; onCancel: () => void }) {
   const act = useAction();
-  const [f, setF] = useState({ name: "", bankName: "", accountLast4: "", kind: "REAL_ESTATE_TRUST" });
+  const [f, setF] = useState({ name: "", bankName: "", accountLast4: "", kind: "REAL_ESTATE_TRUST", registrarConsentReference: "" });
   return (
     <form className="grid gap-3 sm:grid-cols-2" onSubmit={async (e) => {
       e.preventDefault();
-      const body = kind === "trust" ? f : { name: f.name, bankName: f.bankName, accountLast4: f.accountLast4 };
+      const body = kind === "trust"
+        ? { name: f.name, bankName: f.bankName, accountLast4: f.accountLast4, kind: f.kind, ...(f.registrarConsentReference.trim() ? { registrarConsentReference: f.registrarConsentReference.trim() } : {}) }
+        : { name: f.name, bankName: f.bankName, accountLast4: f.accountLast4 };
       if (await act.run(() => api("POST", kind === "trust" ? "/api/trust/accounts" : "/api/operating-accounts", body))) onDone();
     }}>
       {act.error && <div className="sm:col-span-2"><Notice kind="error">{act.error}</Notice></div>}
@@ -597,6 +599,11 @@ function NewAccount({ kind, onDone, onCancel }: { kind: "trust" | "operating"; o
       <TextField label="Last 4 digits" required inputMode="numeric" maxLength={4} value={f.accountLast4} onChange={(e) => setF({ ...f, accountLast4: e.target.value })} error={act.fields.accountLast4} />
       {kind === "trust" && <SelectField label="Kind" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}
         options={[{ value: "REAL_ESTATE_TRUST", label: "Real estate trust" }, { value: "COMMISSION_TRUST", label: "Commission trust" }]} />}
+      {kind === "trust" && f.kind === "REAL_ESTATE_TRUST" && (
+        <div className="sm:col-span-2"><TextField label="Registrar's written consent" value={f.registrarConsentReference} error={act.fields.registrarConsentReference}
+          hint="Only for a second real estate trust account: the registrar's consent letter, with its date. The bank account must be designated a Real Estate Trust Account."
+          onChange={(e) => setF({ ...f, registrarConsentReference: e.target.value })} /></div>
+      )}
       <div className="flex gap-2 sm:col-span-2"><Button type="submit" variant="primary" busy={act.busy}>Add account</Button><Button variant="ghost" onClick={onCancel}>Cancel</Button></div>
     </form>
   );
