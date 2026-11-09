@@ -81,3 +81,35 @@ test("renewal reminders: the 14-day reminder for Jamie, with the penalties, wait
   await broker.goto("/oversight/broker");
   await expect(broker.getByText("RECO registrations needing attention")).toBeVisible();
 });
+
+test("import & export: download the deals spreadsheet; import agents from a spreadsheet, previewed first", async ({ browser }) => {
+  const admin = await as(browser, "admin");
+  await admin.goto("/admin/data");
+  const download = admin.waitForEvent("download");
+  await admin.getByRole("link", { name: "Download deals" }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^zareh-deals-\d{4}-\d{2}-\d{2}\.csv$/);
+  const text = await (await file.createReadStream()).toArray().then((c) => Buffer.concat(c as Buffer[]).toString("utf8"));
+  expect(text).toContain("1 Escarpment Cres");
+
+  const csv = [
+    "First Name,Last Name,Email,Role,Start Date,RECO Expiry Date,Address,Date of Birth,Billing Method",
+    `Priya,Nair,priya.nair@e2e.test,AGENT,2026-11-01,2028-11-01,"14 Main St W, Grimsby ON",1993-09-09,DEDUCT_FROM_COMMISSION`,
+    `Tom,Lee,tom.lee@e2e.test,AGENT,2026-11-01,,"3 Elm St, Stoney Creek",1989-01-01,`,
+  ].join("\n");
+  await admin.getByLabel("Import agents: CSV file").setInputFiles({ name: "agents.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
+  const box = admin.getByRole("region", { name: "Import agents" });
+  await box.getByRole("button", { name: "Check the file" }).click();
+  await expect(box.getByText("Preview: nothing saved yet")).toBeVisible();
+  await expect(box.getByText("recoExpiryDate is required for an agent's profile")).toBeVisible();
+  await shot(admin, "agent-05-import-preview");
+  await box.getByRole("button", { name: "Import 1 row(s)" }).click();
+  await expect(box.getByText("Imported", { exact: true })).toBeVisible();
+  await admin.goto("/admin");
+  const priya = admin.locator("li", { hasText: "Priya Nair" });
+  await expect(priya.getByText("Invitation not accepted")).toBeVisible();
+  // Test person only: suspended again so the demo brokerage keeps its own people
+  await priya.getByRole("button", { name: "Suspend" }).click();
+  await priya.getByRole("group", { name: "Suspend" }).getByRole("button", { name: "Suspend" }).click();
+  await expect(admin.locator("li", { hasText: "Priya Nair" })).toHaveCount(0);
+});

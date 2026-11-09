@@ -13,6 +13,8 @@ import { pipelineRoutes } from "./pipeline/routes.ts";
 import { directoryRoutes } from "./directory/routes.ts";
 import { profileRoutes } from "./people/profile.ts";
 import { reminderRoutes } from "./people/reminders.ts";
+import { exportRoutes } from "./portability/export.ts";
+import { importRoutes } from "./portability/import.ts";
 import type { EmailSender } from "./notify/email.ts";
 import { bankRoutes } from "./bank/routes.ts";
 import { privacyRoutes } from "./security/privacy.ts";
@@ -92,6 +94,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     fieldCipher,
     today: opts.today,
   });
+  app.register(exportRoutes, { prisma: opts.prisma, resolveUserId, fieldCipher, today: opts.today });
+  app.register(importRoutes, { deps: { prisma: opts.prisma, store: opts.fileStore, hub, fieldCipher }, resolveUserId, today: opts.today });
   app.register(closingRoutes, {
     prisma: opts.prisma,
     brokerage: opts.brokerage,

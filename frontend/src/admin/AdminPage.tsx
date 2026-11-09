@@ -24,7 +24,7 @@ interface User {
 }
 
 export function AdminPage({ tab }: { tab: string }) {
-  const current = ["people", "governance", "plans", "emails", "calendar"].includes(tab) ? tab : "people";
+  const current = ["people", "governance", "plans", "emails", "data", "calendar"].includes(tab) ? tab : "people";
   return (
     <Page>
       <PageHeader title="Admin" />
@@ -33,12 +33,14 @@ export function AdminPage({ tab }: { tab: string }) {
         { key: "governance", label: "Broker of record & accounts", href: "/admin/governance" },
         { key: "plans", label: "Commission plans", href: "/admin/plans" },
         { key: "emails", label: "Emails & reminders", href: "/admin/emails" },
+        { key: "data", label: "Import & export", href: "/admin/data" },
         { key: "calendar", label: "Business calendar", href: "/admin/calendar" },
       ]} />
       {current === "people" && <People />}
       {current === "governance" && <Governance />}
       {current === "plans" && <Plans />}
       {current === "emails" && <Emails />}
+      {current === "data" && <ImportExport />}
       {current === "calendar" && <Calendar />}
     </Page>
   );
@@ -275,6 +277,96 @@ function Emails() {
         )}
       </Section>
     </div>
+  );
+}
+
+// ── Import & export ──────────────────────────────────────────────────────────
+
+const EXPORTS: [string, string, string][] = [
+  ["agents", "Agents", "Everyone who trades: contact, RECO, profile dates, plan in force"],
+  ["deals", "Deals", "Every deal with its terms, commission, agents, buyers and sellers"],
+  ["parties", "People on deals", "Buyers, sellers, lawyers and other brokerages, one row each"],
+  ["trust-ledger", "Trust ledger", "Every trust entry, with receipt numbers and reversals"],
+  ["cdas", "CDAs", "Every commission direction issued, voided ones included"],
+  ["payouts", "Agent payouts", "Each agent's payout per CDA and whether it's paid"],
+  ["commission-receipts", "Commission received", "Commission payments received and where they went"],
+  ["documents", "Documents", "Every required document per deal and its review status"],
+];
+interface ImportResult { dryRun: boolean; counts: { create: number; update: number; skip: number; error: number }; rows: { row: number; label: string; action: string; detail: string }[] }
+
+function ImportExport() {
+  const { user } = useSession();
+  const admin = hasRole(user, ["ADMIN"]);
+  const [personal, setPersonal] = useState(false);
+  return (
+    <div className="space-y-5">
+      <Section title="Export" description="Downloads open in Excel or Google Sheets. Every export is recorded in the audit log.">
+        <ul className="divide-y divide-line text-sm">
+          {EXPORTS.map(([key, label, about]) => (
+            <li key={key} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <span><span className="font-medium text-ink">{label}</span><span className="block text-ink-2">{about}</span></span>
+              <a className="rounded-lg border border-line bg-card px-3 py-1.5 text-sm font-medium text-ink shadow-xs hover:bg-sunken"
+                href={`/api/exports/${key}.csv${key === "agents" && personal ? "?includePersonal=true" : ""}`} download>Download {label === "CDAs" ? label : label.toLowerCase()}</a>
+            </li>
+          ))}
+          <li className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <span><span className="font-medium text-ink">Full backup</span>
+              <span className="block text-ink-2">Every record in one file. Personal details stay encrypted; passwords and sign-in links are left out.</span></span>
+            <a className="rounded-lg border border-line bg-card px-3 py-1.5 text-sm font-medium text-ink shadow-xs hover:bg-sunken" href="/api/exports/full.json" download>Download full backup</a>
+          </li>
+        </ul>
+        <div className="mt-3"><Checkbox label="Include home address, date of birth and banking in the agents download" checked={personal} onChange={(e) => setPersonal(e.target.checked)} /></div>
+      </Section>
+      {admin ? (
+        <>
+          <ImportBox kind="agents" title="Import agents" columns="First Name, Last Name, Email, Phone, Role, RECO Registration No, Start Date, RECO Expiry Date, Address, Date of Birth, Standard Plan, Billing Method (and the other agent export columns)" />
+          <ImportBox kind="deals" title="Import open deals" columns="side, status (CONDITIONAL or FIRM), street address, city, sale price, offer date, close date, deposit amount, deposit holder, total gci, agent email, agent split pct, sellers, buyers (names separated by ;), seller lawyer, buyer lawyer. Closed deals and trust history come over with the Lone Wolf cutover" />
+        </>
+      ) : <Notice kind="info">Imports are done by an admin.</Notice>}
+    </div>
+  );
+}
+
+function ImportBox({ kind, title, columns }: { kind: "agents" | "deals"; title: string; columns: string }) {
+  const act = useAction();
+  const [csv, setCsv] = useState<{ name: string; text: string } | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const run = async (dryRun: boolean) => {
+    if (!csv) return;
+    const r = await act.run(() => api<ImportResult>("POST", `/api/imports/${kind}`, { csv: csv.text, dryRun }));
+    if (r) setResult(r);
+  };
+  const ready = result?.dryRun && result.counts.create + result.counts.update > 0;
+  return (
+    <Section title={title} description={`A spreadsheet saved as CSV, one row each. Columns: ${columns}. You see what will happen first; nothing is saved until you import.`}>
+      {act.error && <div className="mb-3"><Notice kind="error">{act.error}</Notice></div>}
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="text-sm text-ink">CSV file
+          <input type="file" accept=".csv,text/csv" className="mt-1 block text-sm" aria-label={`${title}: CSV file`}
+            onChange={async (e) => { const f = e.target.files?.[0]; setResult(null); setCsv(f ? { name: f.name, text: await f.text() } : null); }} />
+        </label>
+        <Button disabled={!csv} busy={act.busy} onClick={() => void run(true)}>Check the file</Button>
+        {ready && <Button variant="primary" busy={act.busy} onClick={() => void run(false)}>Import {result!.counts.create + result!.counts.update} row(s)</Button>}
+      </div>
+      {result && (
+        <div className="mt-4 space-y-2">
+          <Notice kind={result.dryRun ? "info" : "success"} title={result.dryRun ? "Preview: nothing saved yet" : "Imported"}>
+            {result.counts.create} to add, {result.counts.update} to update, {result.counts.skip} already here, {result.counts.error} with problems{result.counts.error ? " (fix them in the file and check it again; the rest can be imported now)" : ""}.
+          </Notice>
+          <Table head={["Row", "Record", "Result", "Details"]}>
+            {result.rows.map((r) => (
+              <tr key={r.row} className="align-top">
+                <td className="px-3 py-2">{r.row}</td>
+                <td className="px-3 py-2">{r.label}</td>
+                <td className="px-3 py-2"><StatusBadge tone={r.action === "ERROR" ? "critical" : r.action === "SKIP" ? "neutral" : "good"}>
+                  {{ CREATE: result.dryRun ? "Will add" : "Added", UPDATE: result.dryRun ? "Will update" : "Updated", SKIP: "Already here", ERROR: "Problem" }[r.action] ?? r.action}</StatusBadge></td>
+                <td className="px-3 py-2 text-ink-2">{r.detail}</td>
+              </tr>
+            ))}
+          </Table>
+        </div>
+      )}
+    </Section>
   );
 }
 

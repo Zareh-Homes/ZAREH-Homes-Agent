@@ -32,7 +32,10 @@ Versions are the database migration level. The app checks for it at `/readyz`.
   - Emails wait in Admin → Emails & reminders until `SMTP_URL` and `EMAIL_FROM` are set.
 - New deals refuse an agent whose registration had expired by the offer date.
 - Security patches: fastify 5.12.8, fast-uri, vite 7.3.7, vitest 4.1.12 (all audits clean). New dependency: nodemailer 10.2.1.
-- Tests: backend 202 → 206, browser 41 → 44.
+- **Import & export** (Admin → Import & export):
+  - Spreadsheet downloads: agents, deals, people on deals, trust ledger, CDAs, agent payouts, commission received, documents. Plus a full backup file of every record (personal details stay encrypted; passwords and sign-in links left out). Every export is in the audit log; agents' home address, date of birth and banking only when ticked.
+  - Imports of agents and open deals from a spreadsheet: checked first (what will be added, updated, skipped, and each row's problem), then imported; re-running adds nothing twice. Same column names as the exports. Closed deals and trust history stay with the Lone Wolf cutover tool.
+- Tests: backend 202 → 210, browser 41 → 45.
 
 ## 0.18.5 (2026-10-20): Review of same-brokerage deals
 
