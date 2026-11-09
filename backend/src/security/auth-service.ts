@@ -21,6 +21,7 @@ import { ConflictError, DomainError, ForbiddenError, NotFoundError, Unauthentica
 import { Reader } from "../lib/reader.ts";
 import { audit } from "./audit.ts";
 import type { SecurityConfig } from "./config.ts";
+import { breachProblem } from "./breached.ts";
 import {
   base32Decode, base32Encode, DUMMY_PASSWORD_HASH, hashPassword, newRecoveryCodes, newToken, otpauthUri, passwordProblem,
   sha256, verifyPassword, verifyTotp,
@@ -286,7 +287,7 @@ export class AuthService {
       await this.recordFailure(ctx.userId, user.credential?.failedAttempts ?? 0);
       throw new AuthError("INVALID_CREDENTIALS", "Current password is incorrect");
     }
-    const problem = passwordProblem(next, user.email);
+    const problem = passwordProblem(next, user.email) ?? await this.breached(next, user.id, info);
     if (problem) throw new ValidationError([{ field: "newPassword", message: problem }]);
     await this.prisma.$transaction([
       this.prisma.userCredential.update({ where: { userId: ctx.userId }, data: { passwordHash: await hashPassword(next), passwordChangedAt: this.now() } }),
@@ -295,6 +296,13 @@ export class AuthService {
     ]);
     await audit(this.prisma, { userId: ctx.userId, sessionId: ctx.sessionId, entity: "UserCredential", entityId: ctx.userId,
       action: "PASSWORD_CHANGED", outcome: "SUCCESS", ...info });
+  }
+
+  /** Breached-password screening; a service outage is recorded in the audit log */
+  private breached(password: string, userId: string, info: RequestInfo) {
+    return breachProblem(this.config.breachChecker, this.config.breachCheck, password, () => {
+      void audit(this.prisma, { userId, entity: "UserCredential", entityId: userId, action: "BREACH_CHECK_UNAVAILABLE", outcome: "ERROR", ...info });
+    });
   }
 
   // ── Account administration (admin only) ────────────────────────────────────
@@ -342,7 +350,7 @@ export class AuthService {
     if (!row || row.purpose !== purpose || row.usedAt || row.expiresAt <= this.now() || !row.user.isActive) {
       throw new AuthError("TOKEN_INVALID", "This link is invalid or has expired. Ask an admin for a new one.", 400);
     }
-    const problem = passwordProblem(password, row.user.email);
+    const problem = passwordProblem(password, row.user.email) ?? await this.breached(password, row.userId, info);
     if (problem) throw new ValidationError([{ field: "password", message: problem }]);
     const passwordHash = await hashPassword(password);
     await this.prisma.$transaction([

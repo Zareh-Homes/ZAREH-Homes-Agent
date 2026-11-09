@@ -12,7 +12,7 @@ import { loadActor, requireRole, type ResolveUserId } from "../auth.ts";
 import { Reader } from "../lib/reader.ts";
 
 /** The last migration this release expects. Bump it with each new file in brokerage-db/migrations. */
-export const EXPECTED_MIGRATION = "023_agent_profiles_reminders.sql";
+export const EXPECTED_MIGRATION = "024_shared_login_limits.sql";
 
 export async function healthRoutes(app: FastifyInstance, opts: { prisma: PrismaClient; resolveUserId: ResolveUserId }) {
   app.get("/healthz", async () => ({ status: "ok" }));

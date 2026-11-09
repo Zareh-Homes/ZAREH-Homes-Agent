@@ -28,8 +28,8 @@ Three separate gates. Pass each one before starting the next.
 - [ ] UAT A–L run by the broker of record, admin and one agent with real (redacted) documents
 - [ ] Lone Wolf dry run on real exports; every rejected row resolved
 - [ ] Independent penetration test of staging
-- [ ] Breached-password screening at invite, reset and password change (backlog item 1)
-- [ ] Sign-in rate limits shared across instances, or the deployment fixed at one app instance (backlog item 2)
+- [x] Breached-password screening at invite, reset and password change (Pwned Passwords range API; production network must allow api.pwnedpasswords.com)
+- [x] Sign-in rate limits shared across instances (counted in PostgreSQL, migration 024)
 - [ ] Staff trained; manual fallback (`business-continuity.md`) printed
 
 ## 3. Real financial production (replaces Lone Wolf)

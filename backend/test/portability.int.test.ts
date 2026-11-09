@@ -114,7 +114,9 @@ describe("import and export", { skip }, () => {
     const deals = table((await as(u.admin, "GET", "/api/exports/deals.csv")).body);
     assert.ok(deals.some((d) => d.streetAddress === `${tag} Lakeshore Rd` && /Imp AGENT \(PRIMARY, split 70\.00%/.test(d.agents!)));
     // Round trip: the agents export goes straight back in as updates
-    const back = (await as(u.admin, "POST", "/api/imports/agents", { csv: (await as(u.admin, "GET", "/api/exports/agents.csv?includePersonal=true")).body })).json();
+    const exported = (await as(u.admin, "GET", "/api/exports/agents.csv?includePersonal=true")).body.split("\r\n");
+    const mine = [exported[0], ...exported.filter((l) => l.includes(`nadia.${tag}@`))].join("\r\n"); // this run's row only
+    const back = (await as(u.admin, "POST", "/api/imports/agents", { csv: mine })).json();
     const nadiaBack = back.rows.find((r: { label: string }) => r.label === "Nadia Haddad");
     assert.equal(nadiaBack.action, "UPDATE", nadiaBack.detail);
 

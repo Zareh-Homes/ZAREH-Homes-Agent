@@ -113,3 +113,20 @@ test("import & export: download the deals spreadsheet; import agents from a spre
   await priya.getByRole("group", { name: "Suspend" }).getByRole("button", { name: "Suspend" }).click();
   await expect(admin.locator("li", { hasText: "Priya Nair" })).toHaveCount(0);
 });
+
+test("document preview: a reviewer sees the file in place, without downloading it", async ({ browser }) => {
+  const { dualId } = (await import("../lib/state.ts")).run();
+  const comp = await as(browser, "compliance");
+  const blocked: string[] = [];
+  comp.on("console", (m) => { if (/Content Security Policy|Refused to (frame|load)/i.test(m.text())) blocked.push(m.text()); });
+  await comp.goto(`/deals/${dualId}/documents`);
+  const slot = comp.getByTestId("slot-FINTRAC_INDIVIDUAL").first();
+  await slot.getByRole("button", { name: "Show file" }).click();
+  const frame = slot.locator("iframe[title^='Preview of']");
+  await expect(frame).toBeVisible();
+  await expect.poll(() => frame.getAttribute("src")).toMatch(/^blob:/);
+  await shot(comp, "agent-06-document-preview");
+  await slot.getByRole("button", { name: "Hide file" }).click();
+  await expect(frame).toHaveCount(0);
+  expect(blocked).toEqual([]); // the page's security policy allows the preview (checked behind nginx in CI's staging run)
+});

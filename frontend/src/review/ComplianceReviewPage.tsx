@@ -5,6 +5,7 @@
  * acknowledgement number recorded here.
  */
 
+import { FilePreview } from "../ui/FilePreview.tsx";
 import { useState } from "react";
 import { api } from "../app/api.ts";
 import { useAction, useApi } from "../app/useApi.ts";
@@ -55,8 +56,9 @@ function ReviewQueue() {
                   <span className="block text-ink-2"><Link href={`/deals/${i.dealId}/documents`} className="underline">Deal {i.dealNumber}</Link> · {i.address} · closes {dateText(i.closeDate)}</span>
                   <span className="block text-xs text-ink-3">Uploaded {dateTimeText(i.uploadedAt)}{i.uploadedBy ? ` by ${i.uploadedBy}` : ""}</span>
                 </span>
-                {i.fileId && <a href={`/api/documents/files/${i.fileId}/content`} target="_blank" rel="noopener noreferrer" className="text-sm underline">View file</a>}
+                {i.fileId && <a href={`/api/documents/files/${i.fileId}/content`} target="_blank" rel="noopener noreferrer" className="text-sm underline">Download</a>}
               </div>
+              {i.fileId && <FilePreview fileId={i.fileId} fileName={i.document} />}
               {i.fileId && (
                 <div className="mt-2">
                   <InlineForm label="Review">{(close) => <ReviewForm slotId={i.slotId} fileId={i.fileId!} onDone={() => { close(); res.reload(); }} onCancel={close} />}</InlineForm>

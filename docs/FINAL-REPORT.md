@@ -17,11 +17,12 @@ As of 2026-10-19. Branch: `claude/realestate-brokerage-schema-sfn0i9`.
   two-factor) blocked signing in again and using invitation or reset links ("Set up two-factor sign-in to continue").
   Regression test in `auth.int.test.ts`. Trade record items no longer show stored codes (`COOP_BROKERAGE`) or double
   numbers.
-- **Backlog (not built, in this order):**
-  1. Breached-password screening at invite, reset and password change: **required before production**.
-  2. Sign-in rate limits shared across app instances (today in memory, correct only with one instance): **required
-     before running more than one instance**. The staging plan runs one.
-  3. Inline document preview in the review queue (documents download today).
+- **Backlog, built 2026-11-09 (0.19.0):**
+  1. Breached-password screening at invite, reset and password change (Pwned Passwords k-anonymity range API;
+     `BREACHED_PASSWORD_CHECK`, on by default in production and can't be switched off there).
+  2. Sign-in rate limits shared across app instances (PostgreSQL, migration 024). The overall per-address API
+     ceiling is still counted per server.
+  3. Documents shown in place ("Show file") on the deal's documents and in the review queue.
 - **Unchanged:** an independent penetration test of staging is required before any real data. No claim is made that
   this authentication is stronger than an established library without that assessment.
 

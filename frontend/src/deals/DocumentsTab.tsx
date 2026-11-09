@@ -4,6 +4,7 @@
  * verification details with the file; the server validates them.
  */
 
+import { FilePreview } from "../ui/FilePreview.tsx";
 import { useState, type FormEvent } from "react";
 import { api } from "../app/api.ts";
 import { useAction, useApi } from "../app/useApi.ts";
@@ -55,6 +56,7 @@ export function DocumentsTab({ deal }: TabProps) {
                         <a className="underline" href={`/api/documents/files/${slot.latestFile.id}/content`} target="_blank" rel="noreferrer">Open</a>
                       </p>
                     )}
+                    {slot.latestFile && <FilePreview fileId={slot.latestFile.id} fileName={slot.latestFile.fileName} />}
                     {slot.latestFile?.metadataSummary && <FintracSummary summary={slot.latestFile.metadataSummary} />}
                     {slot.status === "NEEDS_REVISION" && slot.reviewComment && <p className="mt-1 text-sm text-serious">Sent back: {slot.reviewComment}</p>}
                   </div>

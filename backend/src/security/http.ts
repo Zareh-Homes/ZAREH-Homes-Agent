@@ -3,8 +3,9 @@
  *
  *   • Security headers on every response (nosniff, no framing, no referrer,
  *     strict CSP for API responses, HSTS when cookies are Secure, no-store).
- *   • Rate limits: sign-in endpoints per IP and per email; the whole API per
- *     caller. In-process; behind more than one server, use a shared store.
+ *   • Rate limits: sign-in endpoints per IP and per email, counted in the
+ *     database so every server shares them (migration 024); the whole API per
+ *     caller, counted in each server (a ceiling against floods, not a control).
  *   • Audit: every state-changing request, and every read of identification,
  *     banking or trust records, is written to the AuditLog with its outcome.
  *
@@ -13,6 +14,7 @@
  * they complete it.
  */
 
+import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { DomainError } from "../errors.ts";
@@ -67,6 +69,30 @@ export class FixedWindowLimiter {
   }
 }
 
+/** Fixed one-minute windows counted in PostgreSQL, so every app server sees the same count */
+export class SharedLimiter {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  /** true if allowed */
+  async hit(key: string, limit: number, windowMs: number, now = Date.now()): Promise<boolean> {
+    const windowStart = new Date(Math.floor(now / windowMs) * windowMs);
+    const keyHash = createHash("sha256").update(key).digest("hex");
+    const [row] = await this.prisma.$queryRaw<{ count: number }[]>`
+      INSERT INTO "RateLimitHit" ("keyHash", "windowStart") VALUES (${keyHash}, ${windowStart})
+      ON CONFLICT ("keyHash", "windowStart") DO UPDATE SET count = "RateLimitHit".count + 1
+      RETURNING count`;
+    // Old windows go as new ones arrive (now and then, so it costs nothing on most requests)
+    if (Math.random() < 0.02) {
+      await this.prisma.$executeRaw`DELETE FROM "RateLimitHit" WHERE "windowStart" < ${new Date(now - 10 * windowMs)}`;
+    }
+    return row!.count <= limit;
+  }
+}
+
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** Reached before a session exists (or to finish MFA), so no CSRF token or MFA yet */
 const PRE_SESSION = ["/api/auth/login", "/api/auth/invitations/accept", "/api/auth/password-resets/complete"];
@@ -84,6 +110,7 @@ export interface HttpSecurityOptions {
 
 export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOptions) {
   const limiter = new FixedWindowLimiter();
+  const shared = new SharedLimiter(opts.prisma);
   const limits = { loginPerMinutePerIp: 20, loginPerMinutePerEmail: 5, apiPerMinute: 600, ...opts.limits };
   app.decorateRequest("auth", null);
 
@@ -92,7 +119,7 @@ export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOpt
     if (!limiter.hit(`api:${request.ip}`, limits.apiPerMinute, 60_000)) {
       return reply.code(429).send({ error: { code: "RATE_LIMITED", message: "Too many requests. Slow down and try again shortly." } });
     }
-    if (path === "/api/auth/login" && !limiter.hit(`login-ip:${request.ip}`, limits.loginPerMinutePerIp, 60_000)) {
+    if (path === "/api/auth/login" && !(await shared.hit(`login-ip:${request.ip}`, limits.loginPerMinutePerIp, 60_000))) {
       return reply.code(429).send({ error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Wait a minute and try again." } });
     }
     if (!opts.auth) return;
@@ -173,11 +200,11 @@ export function registerHttpSecurity(app: FastifyInstance, opts: HttpSecurityOpt
     return payload;
   });
 
-  if (opts.auth) registerAuthRoutes(app, opts.auth, opts, limiter, limits);
+  if (opts.auth) registerAuthRoutes(app, opts.auth, opts, shared, limits);
 }
 
 function registerAuthRoutes(
-  app: FastifyInstance, auth: AuthService, opts: HttpSecurityOptions, limiter: FixedWindowLimiter,
+  app: FastifyInstance, auth: AuthService, opts: HttpSecurityOptions, limiter: SharedLimiter,
   limits: Required<NonNullable<HttpSecurityOptions["limits"]>>,
 ) {
   const maxAge = auth.config.sessionAbsoluteHours * 3600;
@@ -190,7 +217,7 @@ function registerAuthRoutes(
 
   app.post("/api/auth/login", async (request, reply) => {
     const email = String((request.body as { email?: unknown } | null)?.email ?? "").toLowerCase();
-    if (email && !limiter.hit(`login-email:${email}`, limits.loginPerMinutePerEmail, 60_000)) {
+    if (email && !(await limiter.hit(`login-email:${email}`, limits.loginPerMinutePerEmail, 60_000))) {
       return reply.code(429).send({ error: { code: "RATE_LIMITED", message: "Too many sign-in attempts for this account. Wait a minute." } });
     }
     const result = await auth.login(request.body, requestInfo(request));

@@ -79,7 +79,7 @@ server {
 server { listen 8080; return 301 https://$host:8443$request_uri; }
 CONF
 docker run -d --name zh-tls --network "$net" -p 8443:8443 -p 8081:8080 -v "$certs:/certs:ro" \
-  -v "$certs/tls.conf:/etc/nginx/conf.d/default.conf:ro" nginx:1.30.5-alpine > /dev/null
+  -v "$certs/tls.conf:/etc/nginx/conf.d/default.conf:ro" nginx:1.30.6-alpine > /dev/null
 for _ in $(seq 60); do curl -kfsS https://localhost:8443/readyz > /dev/null 2>&1 && break; sleep 1; done
 curl -kfsS https://localhost:8443/readyz > /dev/null || fail "/readyz over https: $(curl -ksS https://localhost:8443/readyz)"
 [[ $(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8081/) == 301 ]] || fail "plain http isn't redirected to https"

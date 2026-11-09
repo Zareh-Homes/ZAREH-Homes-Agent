@@ -56,7 +56,7 @@ Status key: **Done (tested)** = built and covered by an automated test. **Done (
 | `npm audit`, frontend (dev included) | Done: 0 findings | vitest 4.1.11 (tinypool, critical), vite 7.3.6, Tailwind 4.3.3 (Tailwind 3 depends on `braces`, which has no fixed release). The 16 demo screens were pixel-identical before and after. CI audits the full tree. |
 | Python migration tool | Done: 0 findings | `pip-audit` in CI; pytest 8.3.4 → 9.1.1 (PYSEC-2026-1845) |
 | Secret scanning | Done (CI) | gitleaks on every push |
-| Container images | Done (CI) | Built on every push and run against a TLS-only PostgreSQL with the restricted login (`ops/image-smoke.sh`). Trivy scan: fixable high or critical fails the build. Base images node 22.23.3 and nginx 1.30.5, with OS packages upgraded at build. |
+| Container images | Done (CI) | Built on every push and run against a TLS-only PostgreSQL with the restricted login (`ops/image-smoke.sh`). Trivy scan: fixable high or critical fails the build. Base images node 22.23.3 and nginx 1.30.6, with OS packages upgraded at build. |
 | Prisma 7 | Planned, separate change | Not required to clear any current advisory. See `docs/deployment.md` "Planned upgrades". |
 
 ## External (none done)

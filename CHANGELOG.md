@@ -21,7 +21,7 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
 - Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
 
-## 0.19.0 (2026-11-09): Agent profiles, standard plans, renewal reminders
+## 0.19.0 (2026-11-09): Agent profiles, standard plans, renewal reminders, import & export
 
 - **Migration 023.** Agent profile for everyone who trades:
   - Required: start date, RECO registration expiry, home address, date of birth.
@@ -36,7 +36,11 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - **Import & export** (Admin → Import & export):
   - Spreadsheet downloads: agents, deals, people on deals, trust ledger, CDAs, agent payouts, commission received, documents. Plus a full backup file of every record (personal details stay encrypted; passwords and sign-in links left out). Every export is in the audit log; agents' home address, date of birth and banking only when ticked.
   - Imports of agents and open deals from a spreadsheet: checked first (what will be added, updated, skipped, and each row's problem), then imported; re-running adds nothing twice. Same column names as the exports. Closed deals and trust history stay with the Lone Wolf cutover tool.
-- Tests: backend 202 → 210, browser 41 → 45.
+- **Before production (backlog done):**
+  - Passwords that appear in known data breaches are refused at invitation, reset and change (Pwned Passwords range API, k-anonymity: only 5 characters of the hash leave the server).
+  - **Migration 024.** Sign-in limits per address and per account are counted in the database, so every server shares them.
+  - Documents open in place ("Show file") on the deal's documents and in the review queue.
+- Tests: backend 202 → 214, browser 41 → 46.
 
 ## 0.18.5 (2026-10-20): Review of same-brokerage deals
 

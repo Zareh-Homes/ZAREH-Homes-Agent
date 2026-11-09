@@ -1962,3 +1962,13 @@ model RegistrationReminder {
 
   @@id([userId, expiryDate, kind])
 }
+
+// Sign-in attempts per one-minute window, shared by every app server (migration 024). Keys are SHA-256 hashes.
+model RateLimitHit {
+  keyHash     String
+  windowStart DateTime @db.Timestamptz(6)
+  count       Int      @default(1)
+
+  @@id([keyHash, windowStart])
+  @@index([windowStart])
+}

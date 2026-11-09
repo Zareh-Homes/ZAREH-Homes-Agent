@@ -209,7 +209,19 @@ describe("authentication and sessions", { skip }, () => {
     assert.equal(reset.statusCode, 200, reset.body);
     const anon = new Browser();
     const next = "A brand new passphrase 77";
+    // A password seen in a data breach is refused (the checker is the Pwned Passwords range API in production)
+    const breached = "Summer vacation in Muskoka 2019";
+    Object.assign(config, { breachCheck: "on", breachChecker: { timesSeen: async (p: string) => (p === breached ? 4211 : 0) } });
+    const refused = await anon.call("POST", "/api/auth/password-resets/complete", { token: reset.json().resetToken, password: breached });
+    assert.equal(refused.statusCode, 400);
+    assert.match(refused.body, /appeared in a known data breach/);
+    // Service down: "on" lets it through and logs the miss; "required" refuses
+    Object.assign(config, { breachCheck: "required", breachChecker: { timesSeen: async () => null } });
+    assert.match((await anon.call("POST", "/api/auth/password-resets/complete", { token: reset.json().resetToken, password: next })).body, /try again in a minute/);
+    Object.assign(config, { breachCheck: "on" });
     assert.equal((await anon.call("POST", "/api/auth/password-resets/complete", { token: reset.json().resetToken, password: next })).statusCode, 200);
+    assert.ok(await prisma.auditLog.findFirst({ where: { action: "BREACH_CHECK_UNAVAILABLE", entityId: id } }));
+    Object.assign(config, { breachCheck: "off" });
     assert.equal((await anon.call("POST", "/api/auth/password-resets/complete", { token: reset.json().resetToken, password: next })).statusCode, 400);
     assert.equal((await new Browser().login(email, next)).statusCode, 200);
   });
@@ -267,9 +279,11 @@ describe("sign-in rate limits", { skip }, () => {
 
   test("more than 5 attempts a minute for one email are refused before checking the password", async () => {
     const email = `nobody-${randomUUID()}@zareh.test`;
+    // Its own address: the per-address count is shared with every other sign-in in this minute (migration 024)
+    const remoteAddress = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
     const codes: number[] = [];
     for (let i = 0; i < 7; i++) {
-      codes.push((await app.inject({ method: "POST", url: "/api/auth/login", payload: { email, password: "whatever it is" } })).statusCode);
+      codes.push((await app.inject({ method: "POST", url: "/api/auth/login", remoteAddress, payload: { email, password: "whatever it is" } })).statusCode);
     }
     assert.deepEqual(codes, [401, 401, 401, 401, 401, 429, 429]);
   });

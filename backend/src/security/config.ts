@@ -7,6 +7,7 @@
 import type { UserRole } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { FieldCipher } from "./crypto.ts";
+import { NO_BREACH_CHECK, pwnedPasswords, type BreachChecker, type BreachCheckMode } from "./breached.ts";
 
 export interface SecurityConfig {
   mode: "session" | "dev-header";
@@ -20,6 +21,9 @@ export interface SecurityConfig {
   fieldCipher: FieldCipher;
   /** Requests per minute from one address before 429. Sign-in limits are fixed and separate. */
   apiRequestsPerMinute: number;
+  /** Breached-password screening when a password is set (see breached.ts) */
+  breachCheck: BreachCheckMode;
+  breachChecker: BreachChecker;
 }
 
 export const PRIVILEGED_ROLES: readonly UserRole[] = ["ADMIN", "MANAGING_BROKER", "COMPLIANCE_ADMIN"];
@@ -71,6 +75,10 @@ export function loadSecurityConfig(env: NodeJS.ProcessEnv = process.env): Securi
     problems.push("API_REQUESTS_PER_MINUTE must be a whole number from 60 to 100000");
   }
 
+  const breachCheck = (env.BREACHED_PASSWORD_CHECK ?? (production ? "on" : "off")) as BreachCheckMode;
+  if (!["on", "required", "off"].includes(breachCheck)) problems.push("BREACHED_PASSWORD_CHECK must be on, required or off");
+  else if (production && breachCheck === "off") problems.push("BREACHED_PASSWORD_CHECK can't be off in production");
+
   if (problems.length) throw new InsecureConfigurationError(problems);
   return {
     mode: devHeader ? "dev-header" : "session",
@@ -84,5 +92,7 @@ export function loadSecurityConfig(env: NodeJS.ProcessEnv = process.env): Securi
     // Outside production a missing key gets a throwaway one: encrypted data won't survive a restart
     fieldCipher: fieldCipher ?? new FieldCipher(randomBytes(32)),
     apiRequestsPerMinute,
+    breachCheck,
+    breachChecker: breachCheck === "off" ? NO_BREACH_CHECK : pwnedPasswords(),
   };
 }
