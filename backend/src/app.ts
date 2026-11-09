@@ -22,6 +22,7 @@ import { unclaimedRoutes } from "./bank/unclaimed.ts";
 import { fundsRoutes } from "./accounting/funds.ts";
 import { commissionRoutes } from "./commission/service.ts";
 import { lifecycleRoutes } from "./deals/lifecycle.ts";
+import { dealCheckRoutes } from "./deals/check.ts";
 import { tradeRecordRoutes } from "./deals/trade-record.ts";
 import { obligationRoutes } from "./obligations/service.ts";
 import { recoRoutes } from "./reco/filing.ts";
@@ -112,6 +113,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.register(unclaimedRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(commissionRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(lifecycleRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
+  app.register(dealCheckRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(tradeRecordRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });
   app.register(obligationRoutes, { prisma: opts.prisma, resolveUserId, fieldCipher, today: opts.today });
   app.register(recoRoutes, { prisma: opts.prisma, resolveUserId, today: opts.today });

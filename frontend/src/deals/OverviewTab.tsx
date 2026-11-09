@@ -6,6 +6,7 @@ import { Button, Empty, Facts, Loading, Notice, Section, SelectField, StatusBadg
 import { ConfirmButton, InlineForm } from "../ui/Disclosure.tsx";
 import { dateText, dateTimeText, isLease, labelOf, moneyText } from "../ui/format.ts";
 import type { TabProps } from "./DealWorkspace.tsx";
+import { DealCheck } from "./DealCheck.tsx";
 
 interface Lifecycle {
   dealId: string; status: string; side: string;
@@ -30,12 +31,14 @@ export function OverviewTab({ deal, reloadDeal }: TabProps) {
   const act = useAction();
   const lease = isLease(deal.side);
   const canCommission = hasRole(user, ["MANAGING_BROKER", "ADMIN"]);
-  const after = () => { life.reload(); reloadDeal(); };
+  const [checked, setChecked] = useState(0);
+  const after = () => { life.reload(); reloadDeal(); setChecked((n) => n + 1); };
   const open = deal.status === "CONDITIONAL" || deal.status === "FIRM";
 
   return (
     <div className="grid gap-5 xl:grid-cols-3">
       <div className="space-y-5 xl:col-span-2">
+        {open && <DealCheck key={checked} dealId={deal.id} />}
         {life.data && life.data.nextSteps.length > 0 && (
           <Notice kind="info" title="Next steps"><ul className="list-disc pl-5">{life.data.nextSteps.map((s) => <li key={s}>{s}</li>)}</ul></Notice>
         )}

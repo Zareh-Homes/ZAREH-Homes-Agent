@@ -15,19 +15,51 @@ import { InlineForm } from "../ui/Disclosure.tsx";
 import { dateText, dateTimeText, labelOf, todayIso } from "../ui/format.ts";
 
 export function ComplianceReviewPage({ tab }: { tab: string }) {
-  const current = ["documents", "fintrac", "program"].includes(tab) ? tab : "documents";
+  const current = ["documents", "deals", "fintrac", "program"].includes(tab) ? tab : "documents";
   return (
     <Page>
       <PageHeader title="Compliance review" />
       <TabLinks label="Compliance sections" current={current} tabs={[
         { key: "documents", label: "Documents to review", href: "/compliance" },
+        { key: "deals", label: "Deal check", href: "/compliance/deals" },
         { key: "fintrac", label: "FINTRAC reports", href: "/compliance/fintrac" },
         { key: "program", label: "FINTRAC program", href: "/compliance/program" },
       ]} />
       {current === "documents" && <ReviewQueue />}
+      {current === "deals" && <DealCheckQueue />}
       {current === "fintrac" && <FintracReports />}
       {current === "program" && <FintracProgram />}
     </Page>
+  );
+}
+
+// ── Deal check: every open deal the system found something on ─────────────────
+
+interface CheckRow { dealId: string; dealNumber: string; address: string; closeDate: string; agent: string | null; mustFix: number; check: number; top: string[] }
+
+function DealCheckQueue() {
+  const res = useApi<{ deals: CheckRow[] }>("/api/deal-checks");
+  if (res.status === "error" && !res.data) return <Notice kind="error">{res.message}</Notice>;
+  if (!res.data) return <Loading label="Checking open deals" />;
+  const rows = res.data.deals;
+  return (
+    <Section title={`Deals with something to fix (${rows.length})`} description="The system checks every open deal: dates, conditions and waivers, amendments, deposit, people, documents, TRESA and FINTRAC. Most problems first.">
+      {rows.length === 0 ? <Empty>Every open deal checks out.</Empty> : (
+        <Table head={["Deal", "Agent", "Closes", "Found", "Top items"]}>
+          {rows.map((r) => (
+            <tr key={r.dealId}>
+              <td className="px-3 py-2"><Link href={`/deals/${r.dealId}`} className="underline">Deal {r.dealNumber}</Link><span className="block text-ink-3">{r.address}</span></td>
+              <td className="px-3 py-2">{r.agent ?? "—"}</td>
+              <td className="px-3 py-2">{dateText(r.closeDate)}</td>
+              <td className="px-3 py-2">
+                {r.mustFix > 0 && <StatusBadge tone="critical">{r.mustFix} to fix</StatusBadge>} {r.check > 0 && <StatusBadge tone="warning">{r.check} to check</StatusBadge>}
+              </td>
+              <td className="px-3 py-2 text-ink-2"><ul className="list-disc pl-4">{(r.top.length ? r.top : ["Only items to check"]).map((t) => <li key={t}>{t}</li>)}</ul></td>
+            </tr>
+          ))}
+        </Table>
+      )}
+    </Section>
   );
 }
 

@@ -21,6 +21,21 @@ Versions are the database migration level. The app checks for it at `/readyz`.
 - Dashboard: "Trust ledger balance (what we owe clients)", with the part not yet confirmed by a bank file.
 - Available funds: a warning when the attested obligations figure is below this year's net HST on CDAs. It doesn't block approval.
 
+## 0.19.2 (2026-11-09): Deal check
+
+- Every open deal is checked automatically each time it's opened. The deal's Overview lists what to fix and what to check, grouped, each with the fix and a link to the right tab:
+  - Dates: closing before the offer; conditions due outside offer-to-closing; deposit due before the offer or after closing; closing on a weekend, statutory holiday or the Civic Holiday; closing date passed but not closed.
+  - Conditions and waivers: overdue with nothing recorded; waived or fulfilled after the deadline; no signed document attached; due after closing; "conditional" with no conditions.
+  - Amendments and terminations without the signed form.
+  - Deposit (when we hold it): due and not in trust; a different amount from the agreement; received late.
+  - Commission: none recorded; over 7% of the price; a co-op amount with no brokerage named.
+  - People: missing seller/buyer (landlord/tenant), seller's lawyer, listing brokerage; lawyer with no contact; client status not recorded.
+  - Agents: profile not filled in; RECO registration expiring on or before closing; no approved plan for the closing date; a representation agreement expiring before closing.
+  - Documents missing or sent back; every blocking or late TRESA and FINTRAC item.
+- Compliance review → Deal check: every open deal with something to fix, most problems first, for the deal secretary.
+- `GET /api/deals/:dealId/check` (people on the deal and staff), `GET /api/deal-checks` (admin, managing broker, compliance). Read-only: nothing on the deal changes.
+- Backend 214 → 223 tests; browser 46 → 47.
+
 ## 0.19.1 (2026-11-09): Compliance review, round 3
 
 - **Migration 025.** A consent to multiple representation signed after the conflict arose now **blocks** (going firm, accepting an offer, the broker's trade record signature) until the broker of record records a review. The finding lists everything recorded on the deal between the conflict and the consent. Review outcomes: nothing was done (cleared), or steps were taken (kept as a contravention). Managing brokers only.
