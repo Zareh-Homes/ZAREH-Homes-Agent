@@ -119,6 +119,32 @@ def night_bg():
     return Image.fromarray(a.astype(np.uint8))
 
 
+GREEN = (104, 190, 80)
+
+
+def draw_mark(img, y_center, alpha):
+    """Clean stand-in for the Zareh Homes mark: green house between two lines,
+    serif wordmark, tagline. Swap for the real logo file when available."""
+    if alpha <= 0:
+        return img
+    over = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+    a = int(255 * alpha)
+    cx, hy = W // 2, int(y_center - 120)       # house baseline
+    hw, wall, roof = 70, 62, 62
+    d.polygon([(cx - hw - 16, hy - wall), (cx, hy - wall - roof), (cx + hw + 16, hy - wall)], fill=GREEN + (a,))
+    d.rectangle((cx - hw, hy - wall, cx + hw, hy), fill=GREEN + (a,))
+    d.rectangle((cx + 38, hy - wall - roof + 6, cx + 54, hy - wall - 20), fill=GREEN + (a,))
+    ly = hy - 6
+    d.rectangle((70, ly - 3, cx - hw - 50, ly + 3), fill=GREEN + (a,))
+    d.rectangle((cx + hw + 50, ly - 3, W - 70, ly + 3), fill=GREEN + (a,))
+    glow = over.filter(ImageFilter.GaussianBlur(14))
+    img = Image.alpha_composite(img.convert("RGBA"), glow)
+    img = Image.alpha_composite(img, over).convert("RGB")
+    img = draw_text(img, "ZAREH HOMES", y_center + 10, 96, SERIF, alpha, 1.0)
+    return draw_text(img, "Your home. Your decision.", y_center + 100, 40, SERIF_I, alpha, 1.0)
+
+
 def finish(frame, t, i, fade):
     a = np.asarray(frame).astype(np.float32)
     snow = np.asarray(snow_layer(t)).astype(np.float32)[..., None] / 255.0
@@ -162,9 +188,9 @@ def main(photo_dir, out):
     # end card
     for k in range(int(END_S * FPS)):
         t = k / FPS
-        f = draw_text(bg, "Merry Christmas", H * 0.42, 100, SERIF_I, ease_alpha(t - 0.2, END_S, 0.9, 99))
-        f = draw_text(f, "ZAREH HOMES", H * 0.52, 72, SERIF_B, ease_alpha(t - 1.0, END_S, 0.9, 99), 1.0)
-        f = draw_text(f, "Daniel Zareh", H * 0.575, 42, SERIF, ease_alpha(t - 1.6, END_S, 0.9, 99), 1.0)
+        f = draw_text(bg, "Merry Christmas", H * 0.36, 100, SERIF_I, ease_alpha(t - 0.2, END_S, 0.9, 99))
+        f = draw_mark(f, H * 0.55, ease_alpha(t - 1.0, END_S, 0.9, 99))
+        f = draw_text(f, "Daniel Zareh", H * 0.66, 42, SERIF, ease_alpha(t - 1.6, END_S, 0.9, 99), 1.0)
         fade = min(1.0, t / FADE, (END_S - t) / 0.8 + 0.0) if t > END_S - 0.8 else min(1.0, t / FADE)
         ff.stdin.write(finish(f, n / FPS, n, fade).tobytes()); n += 1
 
